@@ -3,6 +3,7 @@
 namespace FSharp.Compiler.UnitTests
 
 open System
+open System.Diagnostics
 open System.IO
 open System.Text
 open System.Diagnostics
@@ -146,7 +147,7 @@ let main argv = 0"""
 #else
             OtherOptions =
                 let assemblies = getNetCoreAppReferences |> Array.map (fun x -> sprintf "-r:%s" x)
-                Array.append [|"--preferreduilang:en-US"; "--targetprofile:netcore"; "--noframework"|] assemblies
+                Array.append [|"--preferreduilang:en-US"; "--targetprofile:netcore"; "--noframework";"--warn:5"|] assemblies
 #endif
             ReferencedProjects = [||]
             IsIncompleteTypeCheckEnvironment = false

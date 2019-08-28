@@ -54,12 +54,8 @@ let CheckThrowsFormatException       f = CheckThrowsExn<FormatException>        
 let VerifySeqsEqual (seq1 : seq<'T>) (seq2 : seq<'T>) =
     CollectionAssert.AreEqual(seq1, seq2)
 
-let sleep(n : int32) =        
-#if FX_NO_THREAD
-    async { do! Async.Sleep(n) } |> Async.RunSynchronously
-#else
+let sleep(n : int32) =
     System.Threading.Thread.Sleep(n)
-#endif
 
 module SurfaceArea =
     open System.Reflection
