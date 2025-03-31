@@ -1,0 +1,42 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <RootNamespace>FSharp.Compiler.ExpressionEvaluator</RootNamespace>
+    <AssemblyName>FSharp.Compiler.ExpressionEvaluator</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <DefineConstants>$(DefineConstants);TRACE</DefineConstants>
+    <DebugType>full</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>false</Optimize>
+    <Tailcalls>true</Tailcalls>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Common\SharedTypes.fs" />
+    <Compile Include="Common\DiagnosticFormatter.fs" />
+    <Compile Include="ExpressionCompiler\CompilationContext.fs" />
+    <Compile Include="ExpressionCompiler\EvaluationContext.fs" />
+    <Compile Include="ExpressionCompiler\FSharpExpressionCompiler.fs" />
+    <Compile Include="Formatter\FSharpFormatter.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\FSharp.Compiler.Service.fsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VisualStudio.Debugger.Engine" Version="17.0.1110801" />
+    <PackageReference Include="Microsoft.VisualStudio.Debugger.Metadata" Version="17.0.1110801" />
+    <PackageReference Include="Microsoft.VisualStudio.Debugger.InteropA" Version="17.0.1110801" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Configuration\FSharpExpressionCompiler.vsdconfigxml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

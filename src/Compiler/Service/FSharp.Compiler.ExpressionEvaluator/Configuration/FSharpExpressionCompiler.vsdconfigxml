@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ConcordExtension>
+  <Extension>
+    <Name>F# Expression Evaluator</Name>
+    <Id>FSharp.Compiler.ExpressionEvaluator</Id>
+    <Version>1.0</Version>
+    <Publisher>F# Team</Publisher>
+    <Description>F# Expression Evaluator for Visual Studio Debugger</Description>
+  </Extension>
+  <Components>
+    <Component>
+      <Name>F# Expression Compiler</Name>
+      <Id>FSharp.Compiler.ExpressionEvaluator.Compiler</Id>
+      <Type>ClrExpressionCompiler</Type>
+      <Implementation>FSharp.Compiler.ExpressionEvaluator.FSharpExpressionCompiler</Implementation>
+      <Assembly>FSharp.Compiler.ExpressionEvaluator</Assembly>
+      <Language>F#</Language>
+    </Component>
+    <Component>
+      <Name>F# Formatter</Name>
+      <Id>FSharp.Compiler.ExpressionEvaluator.Formatter</Id>
+      <Type>ClrFormatter</Type>
+      <Implementation>FSharp.Compiler.ExpressionEvaluator.FSharpFormatter</Implementation>
+      <Assembly>FSharp.Compiler.ExpressionEvaluator</Assembly>
+      <Language>F#</Language>
+    </Component>
+  </Components>
+</ConcordExtension> 
