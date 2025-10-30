@@ -12057,12 +12057,22 @@ let GetEmptyIlxGenEnv (g: TcGlobals) ccu =
     }
 
 [<NoEquality; NoComparison>]
+/// <summary>Captures the subset of <see cref="IlxGenEnv"/> that must be replayed to regenerate identical IL during hot reload.</summary>
 type IlxGenEnvSnapshot =
     { Tyenv: TypeReprEnv
       SigToImplRemapInfo: (Remap * SignatureHidingInfo) list
       Imports: ILDebugImports option
       ValsInScope: ValMap<InterruptibleLazy<ValStorage>>
       WitnessesInScope: TraitWitnessInfoHashMap<ValStorage>
+      SuppressWitnesses: bool
+      InnerVals: (ValRef * (BranchCallItem * Mark)) list
+      LetBoundVars: ValRef list
+      LiveLocals: IntMap<unit>
+      WithinSeh: bool
+      IsInLoop: bool
+      InitLocals: bool
+      DelayCodeGen: bool
+      ExitSequel: sequel
       DelayedFileGenReverse: list<(unit -> unit)[]> }
 
 let snapshotIlxGenEnv eenv : IlxGenEnvSnapshot =
@@ -12071,6 +12081,15 @@ let snapshotIlxGenEnv eenv : IlxGenEnvSnapshot =
       Imports = eenv.imports
       ValsInScope = eenv.valsInScope
       WitnessesInScope = eenv.witnessesInScope
+      SuppressWitnesses = eenv.suppressWitnesses
+      InnerVals = eenv.innerVals
+      LetBoundVars = eenv.letBoundVars
+      LiveLocals = eenv.liveLocals
+      WithinSeh = eenv.withinSEH
+      IsInLoop = eenv.isInLoop
+      InitLocals = eenv.initLocals
+      DelayCodeGen = eenv.delayCodeGen
+      ExitSequel = eenv.exitSequel
       DelayedFileGenReverse = eenv.delayedFileGenReverse }
 
 let restoreIlxGenEnv snapshot eenv : IlxGenEnv =
@@ -12080,6 +12099,15 @@ let restoreIlxGenEnv snapshot eenv : IlxGenEnv =
         imports = snapshot.Imports
         valsInScope = snapshot.ValsInScope
         witnessesInScope = snapshot.WitnessesInScope
+        suppressWitnesses = snapshot.SuppressWitnesses
+        innerVals = snapshot.InnerVals
+        letBoundVars = snapshot.LetBoundVars
+        liveLocals = snapshot.LiveLocals
+        withinSEH = snapshot.WithinSeh
+        isInLoop = snapshot.IsInLoop
+        initLocals = snapshot.InitLocals
+        delayCodeGen = snapshot.DelayCodeGen
+        exitSequel = snapshot.ExitSequel
         delayedFileGenReverse = snapshot.DelayedFileGenReverse }
 
 type IlxGenResults =

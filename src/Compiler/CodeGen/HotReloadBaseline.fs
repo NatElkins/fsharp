@@ -126,8 +126,12 @@ let rec private collectType
     tdef.NestedTypes.AsList()
     |> List.fold (collectType tokenMappings scope (enclosing @ [ tdef ])) maps
 
-/// <summary>Create an <see cref="FSharpEmitBaseline"/> from the emitted IL module and token maps.</summary>
-let create (ilModule: ILModuleDef) (tokenMappings: ILTokenMappings) (metadataSnapshot: MetadataSnapshot) =
+let private createCore
+    (ilModule: ILModuleDef)
+    (tokenMappings: ILTokenMappings)
+    (metadataSnapshot: MetadataSnapshot)
+    (ilxGenEnvironment: IlxGenEnvSnapshot option)
+    =
     let scope = ILScopeRef.Local
 
     let maps =
@@ -141,4 +145,17 @@ let create (ilModule: ILModuleDef) (tokenMappings: ILTokenMappings) (metadataSna
       FieldTokens = maps.FieldTokens
       PropertyTokens = maps.PropertyTokens
       EventTokens = maps.EventTokens
-      IlxGenEnvironment = None }
+      IlxGenEnvironment = ilxGenEnvironment }
+
+/// <summary>Create an <see cref="FSharpEmitBaseline"/> without capturing the ILX environment snapshot.</summary>
+let create (ilModule: ILModuleDef) (tokenMappings: ILTokenMappings) (metadataSnapshot: MetadataSnapshot) =
+    createCore ilModule tokenMappings metadataSnapshot None
+
+/// <summary>Create an <see cref="FSharpEmitBaseline"/> that carries the captured ILX environment snapshot.</summary>
+let createWithEnvironment
+    (ilModule: ILModuleDef)
+    (tokenMappings: ILTokenMappings)
+    (metadataSnapshot: MetadataSnapshot)
+    (ilxGenEnvironment: IlxGenEnvSnapshot)
+    =
+    createCore ilModule tokenMappings metadataSnapshot (Some ilxGenEnvironment)

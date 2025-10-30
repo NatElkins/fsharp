@@ -46,4 +46,16 @@ type FSharpEmitBaseline =
       IlxGenEnvironment: IlxGenEnvSnapshot option }
 
 /// <summary>Create a baseline record for the supplied IL module and token mappings.</summary>
-val create: ilModule: ILModuleDef -> tokenMappings: ILTokenMappings -> metadataSnapshot: MetadataSnapshot -> FSharpEmitBaseline
+val create:
+    ilModule: ILModuleDef ->
+    tokenMappings: ILTokenMappings ->
+    metadataSnapshot: MetadataSnapshot ->
+        FSharpEmitBaseline
+
+/// <summary>Create a baseline record that also persists the supplied ILX environment snapshot.</summary>
+val createWithEnvironment:
+    ilModule: ILModuleDef ->
+    tokenMappings: ILTokenMappings ->
+    metadataSnapshot: MetadataSnapshot ->
+    ilxGenEnvironment: IlxGenEnvSnapshot ->
+        FSharpEmitBaseline

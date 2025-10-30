@@ -142,7 +142,7 @@ module BaselineTests =
             (mkILExportedTypes [])
             "v4.0.30319"
 
-    let private emitBaseline () =
+    let private sampleBaselineArtifacts () =
         let ilModule = createSampleModule ()
 
         let metadataSnapshot : MetadataSnapshot =
@@ -181,6 +181,10 @@ module BaselineTests =
               PropertyTokenMap = (fun (_enc, tdef) prop -> propertyTokenMap[tdef.Name][prop.Name])
               EventTokenMap = (fun (_enc, tdef) ev -> eventTokenMap[tdef.Name][ev.Name]) }
 
+        ilModule, tokenMappings, metadataSnapshot
+
+    let private emitBaseline () =
+        let ilModule, tokenMappings, metadataSnapshot = sampleBaselineArtifacts ()
         create ilModule tokenMappings metadataSnapshot
 
     [<Fact>]
