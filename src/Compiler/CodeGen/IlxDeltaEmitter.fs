@@ -2,6 +2,7 @@ module internal FSharp.Compiler.IlxDeltaEmitter
 
 open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.HotReloadBaseline
+open FSharp.Compiler.AbstractIL.ILDelta
 
 /// Represents the emitted artifacts for a hot reload delta.
 type IlxDelta =
@@ -47,7 +48,11 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         request.UpdatedMethods
         |> List.choose (fun methodKey -> request.Baseline.MethodTokens |> Map.tryFind methodKey)
 
+    let encLog, encMap = buildEncTables updatedTypeTokens updatedMethodTokens
+
     { emptyDelta with
         UpdatedTypeTokens = updatedTypeTokens
         UpdatedMethodTokens = updatedMethodTokens
+        EncLog = encLog
+        EncMap = encMap
     }

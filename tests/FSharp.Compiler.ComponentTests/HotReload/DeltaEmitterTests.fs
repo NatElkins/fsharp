@@ -8,6 +8,7 @@ open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open System.Diagnostics
 open System.IO
+open System.Reflection.Metadata.Ecma335
 open Xunit.Sdk
 
 module DeltaEmitterTests =
@@ -119,8 +120,21 @@ module DeltaEmitterTests =
         Assert.Empty(delta.Metadata)
         Assert.Empty(delta.IL)
         Assert.True(delta.Pdb.IsNone)
-        Assert.Empty(delta.EncLog)
-        Assert.Empty(delta.EncMap)
+        let expectedEncLog =
+            [|
+                (TableIndex.TypeDef, 0x00000001, EditAndContinueOperation.Default)
+                (TableIndex.MethodDef, 0x00000001, EditAndContinueOperation.Default)
+            |]
+
+        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, delta.EncLog)
+
+        let expectedEncMap =
+            [|
+                (TableIndex.TypeDef, 0x00000001)
+                (TableIndex.MethodDef, 0x00000001)
+            |]
+
+        Assert.Equal<(TableIndex * int)[]>(expectedEncMap, delta.EncMap)
 
     [<Fact>]
     let ``emitDelta ignores unknown symbols`` () =
@@ -145,6 +159,8 @@ module DeltaEmitterTests =
 
         Assert.Empty(delta.UpdatedTypeTokens)
         Assert.Empty(delta.UpdatedMethodTokens)
+        Assert.Empty(delta.EncLog)
+        Assert.Empty(delta.EncMap)
 
     [<Fact>]
     let ``metadata validator tool is available`` () =
