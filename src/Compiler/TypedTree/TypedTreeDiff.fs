@@ -210,8 +210,6 @@ let rec private exprDigest (denv: DisplayEnv) (expr: Expr) =
         hashCombine 14 (stableHash traitInfo.MemberLogicalName)
     | Expr.StaticOptimization (_, onExpr, elseExpr, _) ->
         hashCombine (hashCombine 15 (recurse onExpr)) (recurse elseExpr)
-    | _ ->
-        stableHash (expr.ToString())
 
 and private bindingDigest denv (TBind (var, body, _)) =
     let sigHash = tyToString denv var.Type |> stableHash
