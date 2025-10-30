@@ -2,6 +2,7 @@ module internal FSharp.Compiler.HotReloadBaseline
 
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
+open FSharp.Compiler.IlxGen
 
 /// <summary>Stable identifier for a method definition used when correlating baseline tokens.</summary>
 type MethodDefinitionKey =
@@ -41,7 +42,8 @@ type FSharpEmitBaseline =
       MethodTokens: Map<MethodDefinitionKey, int>
       FieldTokens: Map<FieldDefinitionKey, int>
       PropertyTokens: Map<PropertyDefinitionKey, int>
-      EventTokens: Map<EventDefinitionKey, int> }
+      EventTokens: Map<EventDefinitionKey, int>
+      IlxGenEnvironment: IlxGenEnvSnapshot option }
 
 type private BaselineMaps =
     { TypeTokens: Map<string, int>
@@ -138,4 +140,5 @@ let create (ilModule: ILModuleDef) (tokenMappings: ILTokenMappings) (metadataSna
       MethodTokens = maps.MethodTokens
       FieldTokens = maps.FieldTokens
       PropertyTokens = maps.PropertyTokens
-      EventTokens = maps.EventTokens }
+      EventTokens = maps.EventTokens
+      IlxGenEnvironment = None }

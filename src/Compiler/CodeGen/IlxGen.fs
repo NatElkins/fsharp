@@ -12056,6 +12056,32 @@ let GetEmptyIlxGenEnv (g: TcGlobals) ccu =
         initClassFieldSpec = None
     }
 
+[<NoEquality; NoComparison>]
+type IlxGenEnvSnapshot =
+    { Tyenv: TypeReprEnv
+      SigToImplRemapInfo: (Remap * SignatureHidingInfo) list
+      Imports: ILDebugImports option
+      ValsInScope: ValMap<InterruptibleLazy<ValStorage>>
+      WitnessesInScope: TraitWitnessInfoHashMap<ValStorage>
+      DelayedFileGenReverse: list<(unit -> unit)[]> }
+
+let snapshotIlxGenEnv eenv : IlxGenEnvSnapshot =
+    { Tyenv = eenv.tyenv
+      SigToImplRemapInfo = eenv.sigToImplRemapInfo
+      Imports = eenv.imports
+      ValsInScope = eenv.valsInScope
+      WitnessesInScope = eenv.witnessesInScope
+      DelayedFileGenReverse = eenv.delayedFileGenReverse }
+
+let restoreIlxGenEnv snapshot eenv : IlxGenEnv =
+    { eenv with
+        tyenv = snapshot.Tyenv
+        sigToImplRemapInfo = snapshot.SigToImplRemapInfo
+        imports = snapshot.Imports
+        valsInScope = snapshot.ValsInScope
+        witnessesInScope = snapshot.WitnessesInScope
+        delayedFileGenReverse = snapshot.DelayedFileGenReverse }
+
 type IlxGenResults =
     {
         ilTypeDefs: ILTypeDef list
@@ -12064,6 +12090,7 @@ type IlxGenResults =
         topAssemblyAttrs: Attribs
         permissionSets: ILSecurityDecl list
         quotationResourceInfo: (ILTypeRef list * byte[]) list
+        ilxGenEnvSnapshot: IlxGenEnvSnapshot
     }
 
 let private GenerateResourcesForQuotations reflectedDefinitions cenv =
@@ -12156,6 +12183,7 @@ let GenerateCode (cenv, anonTypeTable, eenv, CheckedAssemblyAfterOptimization im
         topAssemblyAttrs = topAssemblyAttrs
         permissionSets = permissionSets
         quotationResourceInfo = quotationResourceInfo
+        ilxGenEnvSnapshot = snapshotIlxGenEnv eenv
     }
 
 //-------------------------------------------------------------------------
