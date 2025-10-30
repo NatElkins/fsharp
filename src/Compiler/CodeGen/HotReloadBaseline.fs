@@ -3,6 +3,7 @@ module internal FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 
+/// <summary>Stable identifier for a method definition used when correlating baseline tokens.</summary>
 type MethodDefinitionKey =
     { DeclaringType: string
       Name: string
@@ -10,22 +11,29 @@ type MethodDefinitionKey =
       ParameterTypes: ILType list
       ReturnType: ILType }
 
+/// <summary>Stable identifier for a field definition in the baseline assembly.</summary>
 type FieldDefinitionKey =
     { DeclaringType: string
       Name: string
       FieldType: ILType }
 
+/// <summary>Stable identifier for a property definition (including indexer parameter shapes).</summary>
 type PropertyDefinitionKey =
     { DeclaringType: string
       Name: string
       PropertyType: ILType
       IndexParameterTypes: ILType list }
 
+/// <summary>Stable identifier for an event definition in the baseline assembly.</summary>
 type EventDefinitionKey =
     { DeclaringType: string
       Name: string
       EventType: ILType option }
 
+/// <summary>
+/// Represents the captured state of a baseline emission, mirroring Roslyn's EmitBaseline. It stores metadata
+/// snapshots along with stable token maps so delta emission can reuse pre-existing metadata handles.
+/// </summary>
 type FSharpEmitBaseline =
     { Metadata: MetadataSnapshot
       TokenMappings: ILTokenMappings
@@ -49,6 +57,9 @@ let private emptyMaps =
       PropertyTokens = Map.empty
       EventTokens = Map.empty }
 
+/// <summary>
+/// Populate the baseline token maps by walking type definitions and their nested members.
+/// </summary>
 let rec private collectType
     (tokenMappings: ILTokenMappings)
     (scope: ILScopeRef)
@@ -113,6 +124,7 @@ let rec private collectType
     tdef.NestedTypes.AsList()
     |> List.fold (collectType tokenMappings scope (enclosing @ [ tdef ])) maps
 
+/// <summary>Create an <see cref="FSharpEmitBaseline"/> from the emitted IL module and token maps.</summary>
 let create (ilModule: ILModuleDef) (tokenMappings: ILTokenMappings) (metadataSnapshot: MetadataSnapshot) =
     let scope = ILScopeRef.Local
 

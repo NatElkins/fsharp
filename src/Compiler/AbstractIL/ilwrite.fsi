@@ -28,6 +28,9 @@ type options =
       referenceAssemblySignatureHash: int option
       pathMap: PathMap }
 
+/// <summary>
+/// Captures the various metadata token mapping functions produced by the IL writer.
+/// </summary>
 [<NoEquality; NoComparison>]
 type ILTokenMappings =
     { TypeDefTokenMap: ILTypeDef list * ILTypeDef -> int32
@@ -36,6 +39,10 @@ type ILTokenMappings =
       PropertyTokenMap: ILTypeDef list * ILTypeDef -> ILPropertyDef -> int32
       EventTokenMap: ILTypeDef list * ILTypeDef -> ILEventDef -> int32 }
 
+/// <summary>
+/// Records the uncompressed heap sizes produced during metadata emission so that later delta passes
+/// can reason about stream growth.
+/// </summary>
 [<NoEquality; NoComparison>]
 type MetadataHeapSizes =
     { StringHeapSize: int
@@ -43,6 +50,9 @@ type MetadataHeapSizes =
       BlobHeapSize: int
       GuidHeapSize: int }
 
+/// <summary>
+/// Snapshot of the emitted metadata state that is required to seed hot reload baseline calculations.
+/// </summary>
 [<NoEquality; NoComparison>]
 type MetadataSnapshot =
     { HeapSizes: MetadataHeapSizes

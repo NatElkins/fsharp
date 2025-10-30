@@ -645,6 +645,7 @@ type ILTokenMappings =
       EventTokenMap: ILTypeDef list * ILTypeDef -> ILEventDef -> int32 }
 
 [<NoEquality; NoComparison>]
+/// <summary>Represents the length of each metadata heap emitted for the current module.</summary>
 type MetadataHeapSizes =
     { StringHeapSize: int
       UserStringHeapSize: int
@@ -652,6 +653,7 @@ type MetadataHeapSizes =
       GuidHeapSize: int }
 
 [<NoEquality; NoComparison>]
+/// <summary>Snapshot of the metadata state (heap sizes, table row counts, GUID stream offset) used for hot reload baselines.</summary>
 type MetadataSnapshot =
     { HeapSizes: MetadataHeapSizes
       TableRowCounts: int[]
@@ -3859,6 +3861,10 @@ type options =
      referenceAssemblySignatureHash : int option
      pathMap: PathMap }
 
+/// <summary>
+/// Core IL writer that emits the PE image and invokes <paramref name="metadataSnapshotSink" />
+/// with the captured metadata snapshot once the metadata streams have been finalized.
+/// </summary>
 let writeBinaryAuxWithSnapshotSink (stream: Stream, options: options, modul, normalizeAssemblyRefs) (metadataSnapshotSink: MetadataSnapshot -> unit) =
 
     // Store the public key from the signer into the manifest. This means it will be written
@@ -4617,6 +4623,7 @@ let writeBinaryInMemoryWithArtifacts (options: options, modul, normalizeAssembly
 
     let stream = new MemoryStream()
     let options = { options with referenceAssemblyOnly = false; referenceAssemblyAttribOpt = None; referenceAssemblySignatureHash = None }
+    // Capture exactly one metadata snapshot for the emitted module so callers can persist baseline information.
     let metadataSnapshotRef = ref None
     let capture snapshot = metadataSnapshotRef := Some snapshot
     let pdbData, pdbInfoOpt, debugDirectoryChunk, debugDataChunk, debugChecksumPdbChunk, debugEmbeddedPdbChunk, debugDeterministicPdbChunk, textV2P, mappings =
