@@ -11,11 +11,7 @@ type HotReloadNameMap() =
     let ordinals = ConcurrentDictionary<string, int>()
 
     let computeName basicName index =
-        let suffix =
-            if index = 0 then
-                "hotreload"
-            else
-                $"hotreload-{index}"
+        let suffix = if index = 0 then "hotreload" else $"hotreload-{index}"
 
         CompilerGeneratedNameSuffix basicName suffix
 
@@ -47,5 +43,5 @@ type HotReloadNameMap() =
 /// <summary>Retrieves a stable compiler-generated name or falls back to the provided generator.</summary>
 let nextName mapOpt basicName generate =
     match mapOpt with
-    | Some (map: HotReloadNameMap) -> map.GetOrAddName basicName
-    | None -> generate()
+    | Some(map: HotReloadNameMap) -> map.GetOrAddName basicName
+    | None -> generate ()

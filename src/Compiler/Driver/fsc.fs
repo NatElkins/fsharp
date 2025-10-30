@@ -30,6 +30,8 @@ open FSharp.Compiler.AbstractIL
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryReader
 open FSharp.Compiler.AccessibilityLogic
+open FSharp.Compiler.HotReloadBaseline
+open FSharp.Compiler.HotReloadState
 open FSharp.Compiler.CheckDeclarations
 open FSharp.Compiler.CompilerConfig
 open FSharp.Compiler.CompilerDiagnostics
@@ -1030,6 +1032,7 @@ let main4
         outfile,
         pdbfile,
         ilxMainModule,
+        codegenResults.ilxGenEnvSnapshot,
         signingInfo,
         exiter,
         ilSourceDocs,
@@ -1048,6 +1051,7 @@ let main5
           outfile,
           pdbfile,
           ilxMainModule,
+          ilxGenEnvSnapshot,
           signingInfo,
           exiter: Exiter,
           ilSourceDocs,
@@ -1074,6 +1078,7 @@ let main5
         tcGlobals,
         diagnosticsLogger,
         ilxMainModule,
+        ilxGenEnvSnapshot,
         outfile,
         pdbfile,
         signingInfo,
@@ -1092,6 +1097,7 @@ let main6
           tcGlobals: TcGlobals,
           diagnosticsLogger: DiagnosticsLogger,
           ilxMainModule,
+          ilxGenEnvSnapshot,
           outfile,
           pdbfile,
           signingInfo,
@@ -1122,6 +1128,8 @@ let main6
 
     match dynamicAssemblyCreator with
     | None ->
+        HotReloadState.clearBaseline ()
+
         try
             match tcConfig.emitMetadataAssembly with
             | MetadataAssemblyGeneration.None -> ()
@@ -1168,7 +1176,7 @@ let main6
             | MetadataAssemblyGeneration.ReferenceOnly -> ()
             | _ ->
                 try
-                    ILBinaryWriter.WriteILBinaryFile(
+                    let ilWriteOptions: ILBinaryWriter.options =
                         {
                             ilg = tcGlobals.ilg
                             outfile = outfile
@@ -1188,16 +1196,29 @@ let main6
                             referenceAssemblyAttribOpt = None
                             referenceAssemblySignatureHash = None
                             pathMap = tcConfig.pathMap
-                        },
-                        ilxMainModule,
-                        normalizeAssemblyRefs
-                    )
+                        }
+
+                    ILBinaryWriter.WriteILBinaryFile(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
+
+                    if tcConfig.hotReloadCapture then
+                        let _, _, tokenMappings, metadataSnapshot =
+                            ILBinaryWriter.WriteILBinaryInMemoryWithArtifacts(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
+
+                        let baseline =
+                            if obj.ReferenceEquals(ilxGenEnvSnapshot, null) then
+                                HotReloadBaseline.create ilxMainModule tokenMappings metadataSnapshot
+                            else
+                                HotReloadBaseline.createWithEnvironment ilxMainModule tokenMappings metadataSnapshot ilxGenEnvSnapshot
+
+                        HotReloadState.setBaseline baseline
                 with Failure msg ->
                     error (Error(FSComp.SR.fscProblemWritingBinary (outfile, msg), rangeCmdArgs))
         with e ->
             errorRecoveryNoRange e
             exiter.Exit 1
-    | Some da -> da (tcConfig, tcGlobals, outfile, ilxMainModule)
+    | Some da ->
+        HotReloadState.clearBaseline ()
+        da (tcConfig, tcGlobals, outfile, ilxMainModule)
 
     AbortOnError(diagnosticsLogger, exiter)
 

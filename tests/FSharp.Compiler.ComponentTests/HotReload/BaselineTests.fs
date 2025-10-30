@@ -1,5 +1,6 @@
 namespace FSharp.Compiler.ComponentTests.HotReload
 
+open System
 open System.Collections.Generic
 open System.Reflection
 
@@ -8,6 +9,10 @@ open Xunit
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.HotReloadBaseline
+open FSharp.Compiler.IlxGen
+open FSharp.Reflection
+open FSharp.Test
+open FSharp.Test.Compiler
 open Internal.Utilities
 
 module BaselineTests =
@@ -187,6 +192,25 @@ module BaselineTests =
         let ilModule, tokenMappings, metadataSnapshot = sampleBaselineArtifacts ()
         create ilModule tokenMappings metadataSnapshot
 
+    let private createDummySnapshot () =
+        let snapshotType = typeof<IlxGenEnvSnapshot>
+        let fields =
+            FSharpType.GetRecordFields(
+                snapshotType,
+                BindingFlags.NonPublic
+                ||| BindingFlags.Public
+            )
+
+        let values =
+            fields
+            |> Array.map (fun field ->
+                if field.PropertyType.IsValueType then
+                    Activator.CreateInstance(field.PropertyType)
+                else
+                    null)
+
+        FSharpValue.MakeRecord(snapshotType, values, true) :?> IlxGenEnvSnapshot
+
     [<Fact>]
     let ``baseline tokens are stable across emissions`` () =
         let first = emitBaseline ()
@@ -245,3 +269,34 @@ module BaselineTests =
         Assert.True(heaps.BlobHeapSize >= 0)
         Assert.Equal(64, baseline.Metadata.TableRowCounts.Length)
         Assert.True(baseline.Metadata.GuidHeapStart >= 0)
+
+    [<Fact>]
+    let ``createWithEnvironment retains snapshot reference`` () =
+        let ilModule, tokenMappings, metadataSnapshot = sampleBaselineArtifacts ()
+        let snapshot = createDummySnapshot ()
+
+        let baseline = createWithEnvironment ilModule tokenMappings metadataSnapshot snapshot
+
+        Assert.True(baseline.IlxGenEnvironment.IsSome)
+        Assert.True(obj.ReferenceEquals(snapshot, baseline.IlxGenEnvironment.Value))
+
+    [<Fact>]
+    let ``compile with hot reload flag captures baseline`` () =
+        global.FSharp.Compiler.HotReloadState.clearBaseline()
+
+        FSharp """
+module Sample
+
+let mutable state = 1
+"""
+        |> withOptions [ "--langversion:preview"; "--enable:hotreloaddeltas" ]
+        |> compile
+        |> shouldSucceed
+        |> ignore
+
+        match global.FSharp.Compiler.HotReloadState.tryGetBaseline() with
+        | ValueSome baseline ->
+            Assert.True(baseline.IlxGenEnvironment.IsSome)
+            global.FSharp.Compiler.HotReloadState.clearBaseline()
+        | ValueNone ->
+            Assert.True(false, "Expected hot reload baseline to be captured.")

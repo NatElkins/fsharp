@@ -1282,6 +1282,17 @@ let advancedFlagsBoth tcConfigB =
             Some(FSComp.SR.optsSimpleresolution ())
         )
 
+        CompilerOption(
+            "enable",
+            tagString,
+            OptionString(fun arg ->
+                match arg.ToLowerInvariant() with
+                | "hotreloaddeltas" -> tcConfigB.hotReloadCapture <- true
+                | _ -> error (Error(FSComp.SR.optsUnknownArgumentToTheTestSwitch arg, rangeCmdArgs))),
+            None,
+            Some "Enable experimental compiler features."
+        )
+
         CompilerOption("targetprofile", tagString, OptionString(SetTargetProfile tcConfigB), None, Some(FSComp.SR.optsTargetProfile ()))
     ]
 

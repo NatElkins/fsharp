@@ -48,7 +48,10 @@ open FSharp.Compiler.TypeRelations
 
 let private hotReloadIlxName (g: TcGlobals) basicName m =
     let state = g.CompilerGlobalState.Value
-    let generator () = state.IlxGenNiceNameGenerator.FreshCompilerGeneratedName(basicName, m)
+
+    let generator () =
+        state.IlxGenNiceNameGenerator.FreshCompilerGeneratedName(basicName, m)
+
     HotReloadNameMap.nextName state.HotReloadNameMap basicName generator
 
 let getEmptyStackGuard () = StackGuard("IlxAssemblyGenerator")
@@ -876,11 +879,7 @@ let GenFieldSpecForStaticField (isInteractive, g: TcGlobals, ilContainerTy, vspe
     elif g.realsig then
         assert (g.CompilerGlobalState |> Option.isSome)
 
-        mkILFieldSpecInTy (
-            ilContainerTy,
-            CompilerGeneratedName(hotReloadIlxName g nm m),
-            ilTy
-        )
+        mkILFieldSpecInTy (ilContainerTy, CompilerGeneratedName(hotReloadIlxName g nm m), ilTy)
     else
         let fieldName =
             // Ensure that we have an g.CompilerGlobalState
@@ -4771,13 +4770,7 @@ and GenTry cenv cgbuf eenv scopeMarks (e1, m, resultTy, spTry) =
             assert (cenv.g.CompilerGlobalState |> Option.isSome)
 
             let whereToSave, _realloc, eenvinner =
-                AllocLocal
-                    cenv
-                    cgbuf
-                    eenvinner
-                    true
-                    (hotReloadIlxName cenv.g "tryres" m, ilResultTy, false)
-                    (startTryMark, endTryMark)
+                AllocLocal cenv cgbuf eenvinner true (hotReloadIlxName cenv.g "tryres" m, ilResultTy, false) (startTryMark, endTryMark)
 
             Some(whereToSave, ilResultTy), eenvinner
 
@@ -5043,8 +5036,7 @@ and GenIntegerForLoop cenv cgbuf eenv (spFor, spTo, v, e1, dir, e2, loopBody, m)
             // Ensure that we have an g.CompilerGlobalState
             assert (g.CompilerGlobalState |> Option.isSome)
 
-            let vName =
-                hotReloadIlxName g "endLoop" m
+            let vName = hotReloadIlxName g "endLoop" m
 
             let v, _realloc, eenvinner =
                 AllocLocal cenv cgbuf eenvinner true (vName, g.ilg.typ_Int32, false) (start, finish)
@@ -5652,13 +5644,7 @@ and GenDefaultValue cenv cgbuf eenv (ty, m) =
                     // Ensure that we have an g.CompilerGlobalState
                     assert (g.CompilerGlobalState |> Option.isSome)
 
-                    AllocLocal
-                        cenv
-                        cgbuf
-                        eenv
-                        true
-                        (hotReloadIlxName g "default" m, ilTy, false)
-                        scopeMarks
+                    AllocLocal cenv cgbuf eenv true (hotReloadIlxName g "default" m, ilTy, false) scopeMarks
                 // We can normally rely on .NET IL zero-initialization of the temporaries
                 // we create to get zero values for struct types.
                 //
@@ -6316,25 +6302,11 @@ and GenStructStateMachine cenv cgbuf eenvouter (res: LoweredStateMachine) sequel
 
         // The local for the state machine
         let locIdx, realloc, _ =
-            AllocLocal
-                cenv
-                cgbuf
-                eenvouter
-                true
-                (hotReloadIlxName g "machine" m, ilCloTy, false)
-                scopeMarks
+            AllocLocal cenv cgbuf eenvouter true (hotReloadIlxName g "machine" m, ilCloTy, false) scopeMarks
 
         // The local for the state machine address
         let locIdx2, _realloc2, _ =
-            AllocLocal
-                cenv
-                cgbuf
-                eenvouter
-                true
-                (hotReloadIlxName g afterCodeThisVar.DisplayName m,
-                 ilMachineAddrTy,
-                 false)
-                scopeMarks
+            AllocLocal cenv cgbuf eenvouter true (hotReloadIlxName g afterCodeThisVar.DisplayName m, ilMachineAddrTy, false) scopeMarks
 
         let eenvouter =
             eenvouter
@@ -10013,13 +9985,7 @@ and EmitSaveStack cenv cgbuf eenv m scopeMarks =
                 // Ensure that we have an g.CompilerGlobalState
                 assert (cenv.g.CompilerGlobalState |> Option.isSome)
 
-                AllocLocal
-                    cenv
-                    cgbuf
-                    eenv
-                    true
-                    (hotReloadIlxName cenv.g "spill" m, ty, false)
-                    scopeMarks
+                AllocLocal cenv cgbuf eenv true (hotReloadIlxName cenv.g "spill" m, ty, false) scopeMarks
 
             idx, eenv)
 
@@ -12059,38 +12025,42 @@ let GetEmptyIlxGenEnv (g: TcGlobals) ccu =
 [<NoEquality; NoComparison>]
 /// <summary>Captures the subset of <see cref="IlxGenEnv"/> that must be replayed to regenerate identical IL during hot reload.</summary>
 type IlxGenEnvSnapshot =
-    { Tyenv: TypeReprEnv
-      SigToImplRemapInfo: (Remap * SignatureHidingInfo) list
-      Imports: ILDebugImports option
-      ValsInScope: ValMap<InterruptibleLazy<ValStorage>>
-      WitnessesInScope: TraitWitnessInfoHashMap<ValStorage>
-      SuppressWitnesses: bool
-      InnerVals: (ValRef * (BranchCallItem * Mark)) list
-      LetBoundVars: ValRef list
-      LiveLocals: IntMap<unit>
-      WithinSeh: bool
-      IsInLoop: bool
-      InitLocals: bool
-      DelayCodeGen: bool
-      ExitSequel: sequel
-      DelayedFileGenReverse: list<(unit -> unit)[]> }
+    {
+        Tyenv: TypeReprEnv
+        SigToImplRemapInfo: (Remap * SignatureHidingInfo) list
+        Imports: ILDebugImports option
+        ValsInScope: ValMap<InterruptibleLazy<ValStorage>>
+        WitnessesInScope: TraitWitnessInfoHashMap<ValStorage>
+        SuppressWitnesses: bool
+        InnerVals: (ValRef * (BranchCallItem * Mark)) list
+        LetBoundVars: ValRef list
+        LiveLocals: IntMap<unit>
+        WithinSeh: bool
+        IsInLoop: bool
+        InitLocals: bool
+        DelayCodeGen: bool
+        ExitSequel: sequel
+        DelayedFileGenReverse: list<(unit -> unit)[]>
+    }
 
 let snapshotIlxGenEnv eenv : IlxGenEnvSnapshot =
-    { Tyenv = eenv.tyenv
-      SigToImplRemapInfo = eenv.sigToImplRemapInfo
-      Imports = eenv.imports
-      ValsInScope = eenv.valsInScope
-      WitnessesInScope = eenv.witnessesInScope
-      SuppressWitnesses = eenv.suppressWitnesses
-      InnerVals = eenv.innerVals
-      LetBoundVars = eenv.letBoundVars
-      LiveLocals = eenv.liveLocals
-      WithinSeh = eenv.withinSEH
-      IsInLoop = eenv.isInLoop
-      InitLocals = eenv.initLocals
-      DelayCodeGen = eenv.delayCodeGen
-      ExitSequel = eenv.exitSequel
-      DelayedFileGenReverse = eenv.delayedFileGenReverse }
+    {
+        Tyenv = eenv.tyenv
+        SigToImplRemapInfo = eenv.sigToImplRemapInfo
+        Imports = eenv.imports
+        ValsInScope = eenv.valsInScope
+        WitnessesInScope = eenv.witnessesInScope
+        SuppressWitnesses = eenv.suppressWitnesses
+        InnerVals = eenv.innerVals
+        LetBoundVars = eenv.letBoundVars
+        LiveLocals = eenv.liveLocals
+        WithinSeh = eenv.withinSEH
+        IsInLoop = eenv.isInLoop
+        InitLocals = eenv.initLocals
+        DelayCodeGen = eenv.delayCodeGen
+        ExitSequel = eenv.exitSequel
+        DelayedFileGenReverse = eenv.delayedFileGenReverse
+    }
 
 let restoreIlxGenEnv snapshot eenv : IlxGenEnv =
     { eenv with
@@ -12108,7 +12078,8 @@ let restoreIlxGenEnv snapshot eenv : IlxGenEnv =
         initLocals = snapshot.InitLocals
         delayCodeGen = snapshot.DelayCodeGen
         exitSequel = snapshot.ExitSequel
-        delayedFileGenReverse = snapshot.DelayedFileGenReverse }
+        delayedFileGenReverse = snapshot.DelayedFileGenReverse
+    }
 
 type IlxGenResults =
     {

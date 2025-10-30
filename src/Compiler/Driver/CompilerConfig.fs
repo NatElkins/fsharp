@@ -605,6 +605,8 @@ type TcConfigBuilder =
         /// If true - every expression in quotations will be augmented with full debug info (fileName, location in file)
         mutable emitDebugInfoInQuotations: bool
 
+        mutable hotReloadCapture: bool
+
         mutable strictIndentation: bool option
 
         mutable exename: string option
@@ -825,6 +827,7 @@ type TcConfigBuilder =
             noDebugAttributes = false
             useReflectionFreeCodeGen = false
             emitDebugInfoInQuotations = false
+            hotReloadCapture = false
             exename = None
             shadowCopyReferences = false
             useSdkRefs = true
@@ -1395,6 +1398,8 @@ type TcConfig private (data: TcConfigBuilder, validate: bool) =
     member _.isInteractive = data.isInteractive
     member _.isInvalidationSupported = data.isInvalidationSupported
     member _.emitDebugInfoInQuotations = data.emitDebugInfoInQuotations
+
+    member _.hotReloadCapture = data.hotReloadCapture
     member _.copyFSharpCore = data.copyFSharpCore
     member _.shadowCopyReferences = data.shadowCopyReferences
     member _.useSdkRefs = data.useSdkRefs

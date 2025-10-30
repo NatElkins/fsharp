@@ -474,6 +474,7 @@ type TcConfigBuilder =
         isInvalidationSupported: bool
 
         mutable emitDebugInfoInQuotations: bool
+        mutable hotReloadCapture: bool
 
         mutable strictIndentation: bool option
 
@@ -850,6 +851,7 @@ type TcConfig =
     member legacyReferenceResolver: LegacyReferenceResolver
 
     member emitDebugInfoInQuotations: bool
+    member hotReloadCapture: bool
 
     member langVersion: LanguageVersion
 
