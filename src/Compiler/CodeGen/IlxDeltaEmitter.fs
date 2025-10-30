@@ -16,7 +16,12 @@ type IlxDelta =
     }
 
 /// Request payload used when producing a delta. This will accumulate more fields as the emitter is implemented.
-type IlxDeltaRequest = { Baseline: FSharpEmitBaseline }
+type IlxDeltaRequest =
+    {
+        Baseline: FSharpEmitBaseline
+        UpdatedTypes: string list
+        UpdatedMethods: MethodDefinitionKey list
+    }
 
 /// Helper that produces an empty delta payload.
 let private emptyDelta: IlxDelta =
@@ -30,6 +35,19 @@ let private emptyDelta: IlxDelta =
         UpdatedMethodTokens = []
     }
 
-/// Emits the delta artifacts for a request. The current implementation returns an empty payload and acts as a placeholder
-/// for the full metadata/IL delta emission pipeline.
-let emitDelta (_request: IlxDeltaRequest) : IlxDelta = emptyDelta
+/// Emits the delta artifacts for a request. The current implementation populates token projections
+/// while leaving the raw metadata/IL/PDB payload empty; future work will replace the placeholders
+/// with fully emitted heaps.
+let emitDelta (request: IlxDeltaRequest) : IlxDelta =
+    let updatedTypeTokens =
+        request.UpdatedTypes
+        |> List.choose (fun typeName -> request.Baseline.TypeTokens |> Map.tryFind typeName)
+
+    let updatedMethodTokens =
+        request.UpdatedMethods
+        |> List.choose (fun methodKey -> request.Baseline.MethodTokens |> Map.tryFind methodKey)
+
+    { emptyDelta with
+        UpdatedTypeTokens = updatedTypeTokens
+        UpdatedMethodTokens = updatedMethodTokens
+    }
