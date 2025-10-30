@@ -28,9 +28,37 @@ type options =
       referenceAssemblySignatureHash: int option
       pathMap: PathMap }
 
+[<NoEquality; NoComparison>]
+type ILTokenMappings =
+    { TypeDefTokenMap: ILTypeDef list * ILTypeDef -> int32
+      FieldDefTokenMap: ILTypeDef list * ILTypeDef -> ILFieldDef -> int32
+      MethodDefTokenMap: ILTypeDef list * ILTypeDef -> ILMethodDef -> int32
+      PropertyTokenMap: ILTypeDef list * ILTypeDef -> ILPropertyDef -> int32
+      EventTokenMap: ILTypeDef list * ILTypeDef -> ILEventDef -> int32 }
+
+[<NoEquality; NoComparison>]
+type MetadataHeapSizes =
+    { StringHeapSize: int
+      UserStringHeapSize: int
+      BlobHeapSize: int
+      GuidHeapSize: int }
+
+[<NoEquality; NoComparison>]
+type MetadataSnapshot =
+    { HeapSizes: MetadataHeapSizes
+      TableRowCounts: int[]
+      GuidHeapStart: int }
+
 /// Write a binary to the file system.
 val WriteILBinaryFile: options: options * inputModule: ILModuleDef * (ILAssemblyRef -> ILAssemblyRef) -> unit
 
 /// Write a binary to an array of bytes suitable for dynamic loading.
 val WriteILBinaryInMemory:
     options: options * inputModule: ILModuleDef * (ILAssemblyRef -> ILAssemblyRef) -> byte[] * byte[] option
+
+/// Write a binary to an array of bytes and capture token and metadata artifacts.
+val WriteILBinaryInMemoryWithArtifacts:
+    options: options *
+    inputModule: ILModuleDef *
+    (ILAssemblyRef -> ILAssemblyRef) ->
+        byte[] * byte[] option * ILTokenMappings * MetadataSnapshot

@@ -644,6 +644,19 @@ type ILTokenMappings =
       PropertyTokenMap: ILTypeDef list * ILTypeDef -> ILPropertyDef -> int32
       EventTokenMap: ILTypeDef list * ILTypeDef -> ILEventDef -> int32 }
 
+[<NoEquality; NoComparison>]
+type MetadataHeapSizes =
+    { StringHeapSize: int
+      UserStringHeapSize: int
+      BlobHeapSize: int
+      GuidHeapSize: int }
+
+[<NoEquality; NoComparison>]
+type MetadataSnapshot =
+    { HeapSizes: MetadataHeapSizes
+      TableRowCounts: int[]
+      GuidHeapStart: int }
+
 let recordRequiredDataFixup (requiredDataFixups: ('T * 'U) list ref) (buf: ByteBuffer) pos lab =
     requiredDataFixups.Value <- (pos, lab) :: requiredDataFixups.Value
     // Write a special value in that we check later when applying the fixup
@@ -3315,6 +3328,12 @@ let writeILMetadataAndCode (
     let blobsStreamUnpaddedSize = count (fun (blob: byte[]) -> let n = blob.Length in n + ByteBuffer.Z32Size n) blobs + 1
     let blobsStreamPaddedSize = align 4 blobsStreamUnpaddedSize
 
+    let heapSizes =
+        { StringHeapSize = stringsStreamUnpaddedSize
+          UserStringHeapSize = userStringsStreamUnpaddedSize
+          BlobHeapSize = blobsStreamUnpaddedSize
+          GuidHeapSize = guidsStreamUnpaddedSize }
+
     let guidsBig = guidsStreamPaddedSize >= 0x10000
     let stringsBig = stringsStreamPaddedSize >= 0x10000
     let blobsBig = blobsStreamPaddedSize >= 0x10000
@@ -3647,7 +3666,15 @@ let writeILMetadataAndCode (
               applyFixup32 code locInCode token
     reportTime "Fixup Metadata"
 
-    entryPointToken, code, codePadding, metadata, data, resources, requiredDataFixups.Value, pdbData, mappings, guidStart
+    let tableRowCounts =
+        tables |> Seq.map (fun t -> t.Count) |> Seq.toArray
+
+    let metadataSnapshot =
+        { HeapSizes = heapSizes
+          TableRowCounts = tableRowCounts
+          GuidHeapStart = guidStart }
+
+    entryPointToken, code, codePadding, metadata, data, resources, requiredDataFixups.Value, pdbData, mappings, metadataSnapshot
 
 //---------------------------------------------------------------------
 // PHYSICAL METADATA+BLOBS --> PHYSICAL PE FORMAT
@@ -3832,7 +3859,7 @@ type options =
      referenceAssemblySignatureHash : int option
      pathMap: PathMap }
 
-let writeBinaryAux (stream: Stream, options: options, modul, normalizeAssemblyRefs) =
+let writeBinaryAuxWithSnapshotSink (stream: Stream, options: options, modul, normalizeAssemblyRefs) (metadataSnapshotSink: MetadataSnapshot -> unit) =
 
     // Store the public key from the signer into the manifest. This means it will be written
     // to the binary and also acts as an indicator to leave space for delay sign
@@ -3945,7 +3972,7 @@ let writeBinaryAux (stream: Stream, options: options, modul, normalizeAssemblyRe
                     | Some v -> v
                     | None -> failwith "Expected mscorlib to have a version number"
 
-          let entryPointToken, code, codePadding, metadata, data, resources, requiredDataFixups, pdbData, mappings, guidStart =
+          let entryPointToken, code, codePadding, metadata, data, resources, requiredDataFixups, pdbData, mappings, metadataSnapshot =
               writeILMetadataAndCode (
                   options.pdbfile.IsSome,
                   desiredMetadataVersion,
@@ -3961,6 +3988,8 @@ let writeBinaryAux (stream: Stream, options: options, modul, normalizeAssemblyRe
               )
 
           reportTime "Generated IL and metadata"
+          metadataSnapshotSink metadataSnapshot
+
           let _codeChunk, next = chunk code.Length next
           let _codePaddingChunk, next = chunk codePadding.Length next
 
@@ -4172,6 +4201,7 @@ let writeBinaryAux (stream: Stream, options: options, modul, normalizeAssemblyRe
           let pdbData =
             // Hash code, data and metadata
             if options.deterministic then
+              let guidStart = metadataSnapshot.GuidHeapStart
               // Confirm we have found the correct data and aren't corrupting the metadata
               if metadata[ guidStart..guidStart+3] <> [| 4uy; 3uy; 2uy; 1uy |] then failwith "Failed to find MVID"
               if metadata[ guidStart+12..guidStart+15] <> [| 4uy; 3uy; 2uy; 1uy |] then failwith "Failed to find MVID"
@@ -4535,6 +4565,9 @@ let writeBinaryAux (stream: Stream, options: options, modul, normalizeAssemblyRe
     reportTime "Writing Image"
     pdbData, pdbInfoOpt, debugDirectoryChunk, debugDataChunk, debugChecksumPdbChunk, debugEmbeddedPdbChunk, debugDeterministicPdbChunk, textV2P, mappings
 
+let writeBinaryAux (stream: Stream, options: options, modul, normalizeAssemblyRefs) =
+    writeBinaryAuxWithSnapshotSink (stream, options, modul, normalizeAssemblyRefs) (fun _ -> ())
+
 let writeBinaryFiles (options: options, modul, normalizeAssemblyRefs) =
 
     let stream =
@@ -4580,12 +4613,19 @@ let writeBinaryFiles (options: options, modul, normalizeAssemblyRefs) =
 
     mappings
 
-let writeBinaryInMemory (options: options, modul, normalizeAssemblyRefs) =
+let writeBinaryInMemoryWithArtifacts (options: options, modul, normalizeAssemblyRefs) =
 
     let stream = new MemoryStream()
     let options = { options with referenceAssemblyOnly = false; referenceAssemblyAttribOpt = None; referenceAssemblySignatureHash = None }
-    let pdbData, pdbInfoOpt, debugDirectoryChunk, debugDataChunk, debugChecksumPdbChunk, debugEmbeddedPdbChunk, debugDeterministicPdbChunk, textV2P, _mappings =
-        writeBinaryAux(stream, options, modul, normalizeAssemblyRefs)
+    let metadataSnapshotRef = ref None
+    let capture snapshot = metadataSnapshotRef := Some snapshot
+    let pdbData, pdbInfoOpt, debugDirectoryChunk, debugDataChunk, debugChecksumPdbChunk, debugEmbeddedPdbChunk, debugDeterministicPdbChunk, textV2P, mappings =
+        writeBinaryAuxWithSnapshotSink (stream, options, modul, normalizeAssemblyRefs) capture
+
+    let metadataSnapshot =
+        match !metadataSnapshotRef with
+        | Some snapshot -> snapshot
+        | None -> failwith "Metadata snapshot not captured"
 
     let reopenOutput () =
         stream.Seek(0, SeekOrigin.Begin) |> ignore
@@ -4611,12 +4651,15 @@ let writeBinaryInMemory (options: options, modul, normalizeAssemblyRefs) =
 
     stream.Close()
 
-    stream.ToArray(), pdbBytes
-
+    stream.ToArray(), pdbBytes, mappings, metadataSnapshot
 
 let WriteILBinaryFile (options: options, inputModule, normalizeAssemblyRefs) =
     writeBinaryFiles (options, inputModule, normalizeAssemblyRefs)
     |> ignore
 
+let WriteILBinaryInMemoryWithArtifacts (options: options, inputModule: ILModuleDef, normalizeAssemblyRefs) =
+    writeBinaryInMemoryWithArtifacts (options, inputModule, normalizeAssemblyRefs)
+
 let WriteILBinaryInMemory (options: options, inputModule: ILModuleDef, normalizeAssemblyRefs) =
-    writeBinaryInMemory (options, inputModule, normalizeAssemblyRefs)
+    let assemblyBytes, pdbBytes, _, _ = writeBinaryInMemoryWithArtifacts (options, inputModule, normalizeAssemblyRefs)
+    assemblyBytes, pdbBytes
