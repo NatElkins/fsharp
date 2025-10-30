@@ -25,6 +25,7 @@ open FSharp.Compiler.AbstractIL.ILX
 open FSharp.Compiler.AbstractIL.ILX.Types
 open FSharp.Compiler.AttributeChecking
 open FSharp.Compiler.CompilerGlobalState
+open FSharp.Compiler.HotReloadNameMap
 open FSharp.Compiler.DiagnosticsLogger
 open FSharp.Compiler.Features
 open FSharp.Compiler.Infos
@@ -44,6 +45,11 @@ open FSharp.Compiler.TypedTreeOps
 open FSharp.Compiler.TypedTreeOps.DebugPrint
 open FSharp.Compiler.TypeHierarchy
 open FSharp.Compiler.TypeRelations
+
+let private hotReloadIlxName (g: TcGlobals) basicName m =
+    let state = g.CompilerGlobalState.Value
+    let generator () = state.IlxGenNiceNameGenerator.FreshCompilerGeneratedName(basicName, m)
+    HotReloadNameMap.nextName state.HotReloadNameMap basicName generator
 
 let getEmptyStackGuard () = StackGuard("IlxAssemblyGenerator")
 
@@ -872,14 +878,14 @@ let GenFieldSpecForStaticField (isInteractive, g: TcGlobals, ilContainerTy, vspe
 
         mkILFieldSpecInTy (
             ilContainerTy,
-            CompilerGeneratedName(g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.FreshCompilerGeneratedName(nm, m)),
+            CompilerGeneratedName(hotReloadIlxName g nm m),
             ilTy
         )
     else
         let fieldName =
             // Ensure that we have an g.CompilerGlobalState
             assert (g.CompilerGlobalState |> Option.isSome)
-            g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.FreshCompilerGeneratedName(nm, m)
+            hotReloadIlxName g nm m
 
         let ilFieldContainerTy = mkILTyForCompLoc (CompLocForInitClass cloc)
         mkILFieldSpecInTy (ilFieldContainerTy, fieldName, ilTy)
@@ -4770,7 +4776,7 @@ and GenTry cenv cgbuf eenv scopeMarks (e1, m, resultTy, spTry) =
                     cgbuf
                     eenvinner
                     true
-                    (cenv.g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.FreshCompilerGeneratedName("tryres", m), ilResultTy, false)
+                    (hotReloadIlxName cenv.g "tryres" m, ilResultTy, false)
                     (startTryMark, endTryMark)
 
             Some(whereToSave, ilResultTy), eenvinner
@@ -5038,7 +5044,7 @@ and GenIntegerForLoop cenv cgbuf eenv (spFor, spTo, v, e1, dir, e2, loopBody, m)
             assert (g.CompilerGlobalState |> Option.isSome)
 
             let vName =
-                g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.FreshCompilerGeneratedName("endLoop", m)
+                hotReloadIlxName g "endLoop" m
 
             let v, _realloc, eenvinner =
                 AllocLocal cenv cgbuf eenvinner true (vName, g.ilg.typ_Int32, false) (start, finish)
@@ -5651,7 +5657,7 @@ and GenDefaultValue cenv cgbuf eenv (ty, m) =
                         cgbuf
                         eenv
                         true
-                        (g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.FreshCompilerGeneratedName("default", m), ilTy, false)
+                        (hotReloadIlxName g "default" m, ilTy, false)
                         scopeMarks
                 // We can normally rely on .NET IL zero-initialization of the temporaries
                 // we create to get zero values for struct types.
@@ -6315,7 +6321,7 @@ and GenStructStateMachine cenv cgbuf eenvouter (res: LoweredStateMachine) sequel
                 cgbuf
                 eenvouter
                 true
-                (g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.FreshCompilerGeneratedName("machine", m), ilCloTy, false)
+                (hotReloadIlxName g "machine" m, ilCloTy, false)
                 scopeMarks
 
         // The local for the state machine address
@@ -6325,7 +6331,7 @@ and GenStructStateMachine cenv cgbuf eenvouter (res: LoweredStateMachine) sequel
                 cgbuf
                 eenvouter
                 true
-                (g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.FreshCompilerGeneratedName(afterCodeThisVar.DisplayName, m),
+                (hotReloadIlxName g afterCodeThisVar.DisplayName m,
                  ilMachineAddrTy,
                  false)
                 scopeMarks
@@ -10012,7 +10018,7 @@ and EmitSaveStack cenv cgbuf eenv m scopeMarks =
                     cgbuf
                     eenv
                     true
-                    (cenv.g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.FreshCompilerGeneratedName("spill", m), ty, false)
+                    (hotReloadIlxName cenv.g "spill" m, ty, false)
                     scopeMarks
 
             idx, eenv)

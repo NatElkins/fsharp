@@ -325,6 +325,8 @@
     <Compile Include="TypedTree\TypeProviders.fs" />
     <Compile Include="TypedTree\QuotationPickler.fsi" />
     <Compile Include="TypedTree\QuotationPickler.fs" />
+    <Compile Include="TypedTree\HotReloadNameMap.fsi" />
+    <Compile Include="TypedTree\HotReloadNameMap.fs" />
     <Compile Include="TypedTree\CompilerGlobalState.fsi" />
     <Compile Include="TypedTree\CompilerGlobalState.fs" />
     <Compile Include="TypedTree\TypedTree.fsi" />

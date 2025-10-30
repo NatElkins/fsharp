@@ -9,6 +9,7 @@ open System.Collections.Concurrent
 open System.Threading
 open FSharp.Compiler.Syntax.PrettyNaming
 open FSharp.Compiler.Text
+open FSharp.Compiler.HotReloadNameMap
 
 /// Generates compiler-generated names. Each name generated also includes the StartLine number of the range passed in
 /// at the point of first generation.
@@ -62,11 +63,17 @@ type internal CompilerGlobalState () =
     /// A name generator used by IlxGen for static fields, some generated arguments and other things.
     let ilxgenGlobalNng = NiceNameGenerator ()
 
+    let mutable hotReloadNameMap: HotReloadNameMap option = None
+
     member _.NiceNameGenerator = globalNng
 
     member _.StableNameGenerator = globalStableNameGenerator
 
     member _.IlxGenNiceNameGenerator = ilxgenGlobalNng
+
+    member _.HotReloadNameMap
+        with get () = hotReloadNameMap
+        and set value = hotReloadNameMap <- value
 
 /// Unique name generator for stamps attached to lambdas and object expressions
 type Unique = int64

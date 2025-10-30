@@ -43,6 +43,9 @@ type internal CompilerGlobalState =
     /// A global generator of stable compiler generated names
     member StableNameGenerator: StableNiceNameGenerator
 
+    /// Optional hot reload name map that stabilizes compiler generated names
+    member HotReloadNameMap: FSharp.Compiler.HotReloadNameMap.HotReloadNameMap option with get, set
+
 type Unique = int64
 
 /// Concurrency-safe
