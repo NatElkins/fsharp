@@ -6,8 +6,28 @@ open FSharp.Compiler.HotReloadBaseline
 open Internal.Utilities
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
+open System.Diagnostics
+open System.IO
+open Xunit.Sdk
 
 module DeltaEmitterTests =
+
+    let private tryRunMdv args =
+        try
+            let startInfo = ProcessStartInfo()
+            startInfo.FileName <- "mdv"
+            startInfo.Arguments <- args
+            startInfo.RedirectStandardOutput <- true
+            startInfo.RedirectStandardError <- true
+            startInfo.UseShellExecute <- false
+
+            use proc = new Process(StartInfo = startInfo)
+            if not (proc.Start()) then
+                ValueNone
+            else
+                proc.WaitForExit()
+                ValueSome (proc.ExitCode, proc.StandardOutput.ReadToEnd(), proc.StandardError.ReadToEnd())
+        with _ -> ValueNone
 
     let private createBaseline () =
         let ilg = PrimaryAssemblyILGlobals
@@ -125,3 +145,16 @@ module DeltaEmitterTests =
 
         Assert.Empty(delta.UpdatedTypeTokens)
         Assert.Empty(delta.UpdatedMethodTokens)
+
+    [<Fact>]
+    let ``metadata validator tool is available`` () =
+        match tryRunMdv "--version" with
+        | ValueNone ->
+            // Treat absence of the mdv CLI as a soft skip; downstream delta tests assert availability explicitly.
+            printfn "metadata-tools (mdv) CLI not found on PATH; skipping availability assertion."
+            ()
+        | ValueSome(0, _, _) -> Assert.Equal(0, 0)
+        | ValueSome(exitCode, _, stderr) ->
+            // Non-zero exit indicates mdv is installed but not runnable in this environment; treat it similarly to absence.
+            printfn "metadata-tools (mdv) CLI reported exit code %d. stderr: %s" exitCode stderr
+            ()

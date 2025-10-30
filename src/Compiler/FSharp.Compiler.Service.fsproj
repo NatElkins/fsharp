@@ -339,6 +339,7 @@
     <Compile Include="TypedTree\TypedTreeOps.fs" />
     <Compile Include="TypedTree\TypedTreeDiff.fsi" />
     <Compile Include="TypedTree\TypedTreeDiff.fs" />
+    <Compile Include="TypedTree\DefinitionMap.fs" />
     <Compile Include="TypedTree\TypedTreePickle.fsi" />
     <Compile Include="TypedTree\TypedTreePickle.fs" />
     <Compile Include="TypedTree\UpdatePrettyTyparNames.fsi" />
