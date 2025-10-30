@@ -7,7 +7,6 @@ open Xunit
 
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
-open FSharp.Compiler.AbstractIL.ILPdbWriter
 open FSharp.Compiler.HotReloadBaseline
 open Internal.Utilities
 
@@ -145,30 +144,42 @@ module BaselineTests =
 
     let private emitBaseline () =
         let ilModule = createSampleModule ()
-        let ilg = PrimaryAssemblyILGlobals
 
-        let options: options =
-            { ilg = ilg
-              outfile = "Sample.dll"
-              pdbfile = None
-              portablePDB = false
-              embeddedPDB = false
-              embedAllSource = false
-              embedSourceList = []
-              allGivenSources = []
-              sourceLink = ""
-              checksumAlgorithm = HashAlgorithm.Sha256
-              signer = None
-              emitTailcalls = false
-              deterministic = true
-              dumpDebugInfo = false
-              referenceAssemblyOnly = false
-              referenceAssemblyAttribOpt = None
-              referenceAssemblySignatureHash = None
-              pathMap = PathMap.empty }
+        let metadataSnapshot : MetadataSnapshot =
+            { HeapSizes =
+                { StringHeapSize = 128
+                  UserStringHeapSize = 64
+                  BlobHeapSize = 256
+                  GuidHeapSize = 16 }
+              TableRowCounts = Array.create 64 0
+              GuidHeapStart = 0 }
 
-        let _, _, tokenMappings, metadataSnapshot =
-            WriteILBinaryInMemoryWithArtifacts (options, ilModule, id)
+        let typeTokenMap = dict [ "Sample.Container", 0x02000001 ]
+
+        let methodTokenMap =
+            dict [
+                "Sample.Container",
+                dict [
+                    "GetValue", 0x06000001
+                    "get_Data", 0x06000002
+                    "set_Data", 0x06000003
+                    "add_OnChanged", 0x06000004
+                    "remove_OnChanged", 0x06000005
+                ]
+            ]
+
+        let fieldTokenMap = dict [ "Sample.Container", dict [ "valueBackingField", 0x04000001 ] ]
+
+        let propertyTokenMap = dict [ "Sample.Container", dict [ "Data", 0x17000001 ] ]
+
+        let eventTokenMap = dict [ "Sample.Container", dict [ "OnChanged", 0x14000001 ] ]
+
+        let tokenMappings : ILTokenMappings =
+            { TypeDefTokenMap = (fun (_enc, tdef) -> typeTokenMap[tdef.Name])
+              FieldDefTokenMap = (fun (_enc, tdef) field -> fieldTokenMap[tdef.Name][field.Name])
+              MethodDefTokenMap = (fun (_enc, tdef) mdef -> methodTokenMap[tdef.Name][mdef.Name])
+              PropertyTokenMap = (fun (_enc, tdef) prop -> propertyTokenMap[tdef.Name][prop.Name])
+              EventTokenMap = (fun (_enc, tdef) ev -> eventTokenMap[tdef.Name][ev.Name]) }
 
         create ilModule tokenMappings metadataSnapshot
 
