@@ -16,7 +16,8 @@ type SymbolId =
     { Path: string list
       LogicalName: string
       Stamp: Stamp
-      Kind: SymbolKind }
+      Kind: SymbolKind
+      IsSynthesized: bool }
 
     member QualifiedName: string
 
@@ -42,7 +43,8 @@ type SemanticEdit =
     { Symbol: SymbolId
       Kind: SemanticEditKind
       BaselineHash: int option
-      UpdatedHash: int option }
+      UpdatedHash: int option
+      IsSynthesized: bool }
 
 type RudeEdit =
     { Symbol: SymbolId option

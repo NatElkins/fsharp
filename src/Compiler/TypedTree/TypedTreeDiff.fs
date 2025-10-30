@@ -23,7 +23,8 @@ type SymbolId =
     { Path: string list
       LogicalName: string
       Stamp: Stamp
-      Kind: SymbolKind }
+      Kind: SymbolKind
+      IsSynthesized: bool }
 
     member x.QualifiedName =
         match x.Path with
@@ -50,7 +51,8 @@ type SemanticEdit =
     { Symbol: SymbolId
       Kind: SemanticEditKind
       BaselineHash: int option
-      UpdatedHash: int option }
+      UpdatedHash: int option
+      IsSynthesized: bool }
 
 type RudeEdit =
     { Symbol: SymbolId option
@@ -219,18 +221,21 @@ type private BindingSnapshot =
     { Symbol: SymbolId
       InlineInfo: ValInline
       SignatureText: string
-      BodyHash: int }
+      BodyHash: int
+      IsSynthesized: bool }
 
 type private EntitySnapshot =
     { Symbol: SymbolId
       RepresentationHash: int
-      RepresentationText: string }
+      RepresentationText: string
+      IsSynthesized: bool }
 
-let private symbolId path logicalName stamp kind =
+let private symbolId path logicalName stamp kind isSynthesized =
     { Path = path
       LogicalName = logicalName
       Stamp = stamp
-      Kind = kind }
+      Kind = kind
+      IsSynthesized = isSynthesized }
 
 let private bindingKey (snapshot: BindingSnapshot) = snapshot.Symbol.QualifiedName + "|" + snapshot.SignatureText
 
@@ -266,12 +271,13 @@ and private snapshotModuleContents denv path (map, entities) contents =
 and private snapshotBinding denv path (TBind (var, expr, _)) =
     let signature = tyToString denv var.Type
     let bodyHash = exprDigest denv expr
-    let symbol = symbolId path var.LogicalName var.Stamp SymbolKind.Value
+    let symbol = symbolId path var.LogicalName var.Stamp SymbolKind.Value var.IsCompilerGenerated
 
     { Symbol = symbol
       InlineInfo = var.InlineInfo
       SignatureText = signature
-      BodyHash = bodyHash }: BindingSnapshot
+      BodyHash = bodyHash
+      IsSynthesized = var.IsCompilerGenerated }: BindingSnapshot
 
 and private snapshotTycon denv path (tycon: Tycon) =
     let reprText =
@@ -329,9 +335,10 @@ and private snapshotTycon denv path (tycon: Tycon) =
 
         sb.ToString()
 
-    { Symbol = symbolId path tycon.LogicalName tycon.Stamp SymbolKind.Entity
+    { Symbol = symbolId path tycon.LogicalName tycon.Stamp SymbolKind.Entity false
       RepresentationHash = stableHash reprText
-      RepresentationText = reprText }: EntitySnapshot
+      RepresentationText = reprText
+      IsSynthesized = false }: EntitySnapshot
 
 let private collectSnapshots denv (CheckedImplFile (qualifiedNameOfFile = qual; contents = contents)) =
     let initialPath = [ qual.Text ]
@@ -343,12 +350,14 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
     let edits = ResizeArray()
     let rude = ResizeArray()
 
-    let handleEdit symbol kind baselineHash updatedHash =
+    let handleEdit (snapshot: BindingSnapshot) kind baselineHash updatedHash =
+        let symbol = snapshot.Symbol
         edits.Add(
             { Symbol = symbol
               Kind = kind
               BaselineHash = baselineHash
-              UpdatedHash = updatedHash }
+              UpdatedHash = updatedHash
+              IsSynthesized = snapshot.IsSynthesized }
         )
 
     for KeyValue(key, baselineBinding) in baseline do
@@ -368,7 +377,7 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
                       Message = "Inline annotation changed." }
                 )
             elif baselineBinding.BodyHash <> updatedBinding.BodyHash then
-                handleEdit baselineBinding.Symbol SemanticEditKind.MethodBody (Some baselineBinding.BodyHash) (Some updatedBinding.BodyHash)
+                handleEdit baselineBinding SemanticEditKind.MethodBody (Some baselineBinding.BodyHash) (Some updatedBinding.BodyHash)
         | None ->
             rude.Add(
                 { Symbol = Some baselineBinding.Symbol

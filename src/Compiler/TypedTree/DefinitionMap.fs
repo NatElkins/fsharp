@@ -15,7 +15,8 @@ type SymbolChange =
     { Symbol: SymbolId
       EditKind: SymbolEditKind
       BaselineHash: int option
-      UpdatedHash: int option }
+      UpdatedHash: int option
+      IsSynthesized: bool }
 
 [<RequireQualifiedAccess>]
 /// Aggregates semantic edits and rude edits for the current compilation unit.
@@ -39,7 +40,8 @@ module FSharpDefinitionMap =
                 { Symbol = edit.Symbol
                   EditKind = editKind
                   BaselineHash = edit.BaselineHash
-                  UpdatedHash = edit.UpdatedHash })
+                  UpdatedHash = edit.UpdatedHash
+                  IsSynthesized = edit.IsSynthesized })
 
         { Changes = changes; RudeEdits = diff.RudeEdits }
 
@@ -63,6 +65,34 @@ module FSharpDefinitionMap =
     let deleted (map: FSharpDefinitionMap) : SymbolId list =
         map.Changes
         |> List.choose (fun (change: SymbolChange) ->
+            match change.EditKind with
+            | SymbolEditKind.Deleted -> Some change.Symbol
+            | _ -> None)
+
+    /// Retrieves changes that correspond to compiler-synthesized members.
+    let synthesized (map: FSharpDefinitionMap) : SymbolChange list =
+        map.Changes |> List.filter (fun change -> change.IsSynthesized)
+
+    /// Retrieves synthesized symbols classified as added.
+    let synthesizedAdded (map: FSharpDefinitionMap) : SymbolId list =
+        synthesized map
+        |> List.choose (fun change ->
+            match change.EditKind with
+            | SymbolEditKind.Added -> Some change.Symbol
+            | _ -> None)
+
+    /// Retrieves synthesized symbols classified as updated.
+    let synthesizedUpdated (map: FSharpDefinitionMap) : (SymbolId * SemanticEditKind) list =
+        synthesized map
+        |> List.choose (fun change ->
+            match change.EditKind with
+            | SymbolEditKind.Updated kind -> Some(change.Symbol, kind)
+            | _ -> None)
+
+    /// Retrieves synthesized symbols classified as deleted.
+    let synthesizedDeleted (map: FSharpDefinitionMap) : SymbolId list =
+        synthesized map
+        |> List.choose (fun change ->
             match change.EditKind with
             | SymbolEditKind.Deleted -> Some change.Symbol
             | _ -> None)
