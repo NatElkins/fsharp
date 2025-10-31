@@ -436,7 +436,9 @@
     <Compile Include="CodeGen\FSharpDeltaMetadataWriter.fs" />
     <Compile Include="CodeGen\IlxDeltaEmitter.fs" />
     <Compile Include="HotReload\HotReloadState.fs" />
+    <Compile Include="HotReload\HotReloadContracts.fs" />
     <Compile Include="HotReload\EditAndContinueLanguageService.fs" />
+    <Compile Include="HotReload\Adapters.fs" />
     <Compile Include="Driver\FxResolver.fsi" />
     <Compile Include="Driver\FxResolver.fs" />
     <Compile Include="DependencyManager/AssemblyResolveHandler.fsi">

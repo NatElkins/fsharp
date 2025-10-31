@@ -4,6 +4,7 @@ open System
 open System.Collections.Immutable
 open Xunit
 open FSharp.Compiler.IlxDeltaEmitter
+open FSharp.Compiler.HotReload
 open FSharp.Compiler.HotReloadBaseline
 open Internal.Utilities
 open FSharp.Compiler.AbstractIL.IL
@@ -332,6 +333,29 @@ module DeltaEmitterTests =
         let delta2 = emitDelta requestGen2
         Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
         Assert.NotEqual(Guid.Empty, delta2.GenerationId)
+
+        service.EndSession()
+
+    [<Fact>]
+    let ``EditAndContinueLanguageService emits delta`` () =
+        let service = FSharpEditAndContinueLanguageService.Instance
+        service.EndSession()
+        let _, baseline = createBaseline ()
+        service.StartSession baseline
+
+        let request : DeltaEmissionRequest =
+            { IlModule = createModule 101
+              UpdatedTypes = [ "Sample.Type" ]
+              UpdatedMethods = [ methodKey baseline "GetValue" ]
+              SymbolChanges = None }
+
+        match service.EmitDelta request with
+        | Ok result ->
+            Assert.Equal(baseline.ModuleId, result.Delta.BaseGenerationId)
+            Assert.NotEqual(Guid.Empty, result.Delta.GenerationId)
+            service.CommitPendingUpdate(result.Delta.GenerationId)
+        | Error error ->
+            Assert.True(false, sprintf "EmitDelta failed: %A" error)
 
         service.EndSession()
 
