@@ -433,6 +433,7 @@
     <Compile Include="CodeGen\HotReloadBaseline.fs" />
     <Compile Include="CodeGen\FSharpSymbolChanges.fs" />
     <Compile Include="CodeGen\IlxDeltaEmitter.fs" />
+    <Compile Include="CodeGen\IlxDeltaStreams.fs" />
     <Compile Include="HotReload\HotReloadState.fs" />
     <Compile Include="Driver\FxResolver.fsi" />
     <Compile Include="Driver\FxResolver.fs" />

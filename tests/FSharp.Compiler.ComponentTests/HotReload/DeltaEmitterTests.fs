@@ -1,11 +1,13 @@
 namespace FSharp.Compiler.ComponentTests.HotReload
 
+open System
 open Xunit
 open FSharp.Compiler.IlxDeltaEmitter
 open FSharp.Compiler.HotReloadBaseline
 open Internal.Utilities
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
+open FSharp.Compiler.IlxDeltaStreams
 open System.Diagnostics
 open System.IO
 open System.Reflection.Metadata.Ecma335
@@ -179,3 +181,25 @@ module DeltaEmitterTests =
             // Non-zero exit indicates mdv is installed but not runnable in this environment; treat it similarly to absence.
             printfn "metadata-tools (mdv) CLI reported exit code %d. stderr: %s" exitCode stderr
             ()
+
+    [<Fact>]
+    let ``IlDeltaStreamBuilder emits aligned method bodies`` () =
+        let builder = IlDeltaStreamBuilder()
+        let localSignatureToken = 0x11000001
+        let code = [| 0x06uy; 0x2Auy |]
+
+        builder.AddMethodBody(0x06000001, localSignatureToken, code)
+        builder.AddEncLogEntry(TableIndex.MethodDef, 1, EditAndContinueOperation.Default)
+        builder.AddEncMapEntry(TableIndex.MethodDef, 1)
+
+        let moduleName = "SampleModule"
+        let streams = builder.Build(moduleName, Guid.NewGuid(), Guid.NewGuid(), None)
+
+        Assert.True(streams.Metadata.Length > 0, "Metadata stream should not be empty.")
+        Assert.True(streams.IL.Length >= code.Length, "IL stream should include the encoded method body.")
+        Assert.Equal(0, streams.IL.Length % 4)
+        let bodyInfo = Assert.Single(streams.MethodBodies)
+        Assert.Equal(0x06000001, bodyInfo.MethodToken)
+        Assert.Equal(code.Length, bodyInfo.CodeLength)
+        Assert.Equal(localSignatureToken, bodyInfo.LocalSignatureToken)
+        Assert.Equal(0, bodyInfo.CodeOffset % 4)

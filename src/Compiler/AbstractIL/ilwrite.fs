@@ -2463,6 +2463,24 @@ let GenILMethodBody mname cenv env (il: ILMethodBody) =
 
         localToken, (requiredStringFixups', methbuf.AsMemory().ToArray()), seqpoints, scopes
 
+type EncodedMethodBody =
+    { LocalSignatureToken: int
+      RequiredStringFixupsOffset: int
+      RequiredStringFixups: (int * int) list
+      Code: byte[]
+      SequencePoints: PdbDebugPoint[]
+      RootScope: PdbMethodScope option }
+
+let EncodeMethodBody cenv env mname ilmbody =
+    let localToken, ((offset, fixups), codeBytes), seqpoints, scope = GenILMethodBody mname cenv env ilmbody
+
+    { LocalSignatureToken = localToken
+      RequiredStringFixupsOffset = offset
+      RequiredStringFixups = fixups
+      Code = codeBytes
+      SequencePoints = seqpoints
+      RootScope = if cenv.generatePdb then Some scope else None }
+
 // --------------------------------------------------------------------
 // ILFieldDef --> FieldDef Row
 // --------------------------------------------------------------------
@@ -2658,31 +2676,31 @@ let GenMethodDefAsRow cenv env midx (mdef: ILMethodDef) =
             else
                 ilmbodyLazy.Value
           let addr = cenv.nextCodeAddr
-          let localToken, code, seqpoints, rootScope = GenILMethodBody mdef.Name cenv env ilmbody
+          let encodedBody = EncodeMethodBody cenv env mdef.Name ilmbody
 
           // Now record the PDB record for this method - we write this out later.
           if cenv.generatePdb then
             cenv.pdbinfo.Add
-              { MethToken=getUncodedToken TableNames.Method midx
-                MethName=mdef.Name
-                LocalSignatureToken=localToken
-                Params= [| |] (* REVIEW *)
-                RootScope = Some rootScope
+              { MethToken = getUncodedToken TableNames.Method midx
+                MethName = mdef.Name
+                LocalSignatureToken = encodedBody.LocalSignatureToken
+                Params = [| |] (* REVIEW *)
+                RootScope = encodedBody.RootScope
                 DebugRange =
                   match ilmbody.DebugRange with
                   | Some m when cenv.generatePdb ->
                       // table indexes are 1-based, document array indexes are 0-based
                       let doc = (cenv.documents.FindOrAddSharedEntry m.Document) - 1
 
-                      Some ({ Document=doc
-                              Line=m.Line
-                              Column=m.Column },
-                            { Document=doc
-                              Line=m.EndLine
-                              Column=m.EndColumn })
+                      Some ({ Document = doc
+                              Line = m.Line
+                              Column = m.Column },
+                            { Document = doc
+                              Line = m.EndLine
+                              Column = m.EndColumn })
                   | _ -> None
-                DebugPoints=seqpoints }
-          cenv.AddCode code
+                DebugPoints = encodedBody.SequencePoints }
+          cenv.AddCode ((encodedBody.RequiredStringFixupsOffset, encodedBody.RequiredStringFixups), encodedBody.Code)
           addr
       | MethodBody.Abstract
       | MethodBody.PInvoke _ ->

@@ -1,5 +1,6 @@
 module internal FSharp.Compiler.IlxDeltaEmitter
 
+open System
 open System.Collections.Generic
 open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.IL
