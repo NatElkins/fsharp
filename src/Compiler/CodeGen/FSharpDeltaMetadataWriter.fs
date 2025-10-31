@@ -20,7 +20,13 @@ type MetadataDelta =
         EncMap: (TableIndex * int) array
     }
 
-let emit (metadataReader: MetadataReader) (encId: Guid) (encBaseId: Guid) (updates: MethodMetadataUpdate list) : MetadataDelta =
+let emit
+    (metadataReader: MetadataReader)
+    (encId: Guid)
+    (encBaseId: Guid)
+    (moduleId: Guid)
+    (updates: MethodMetadataUpdate list)
+    : MetadataDelta =
     if List.isEmpty updates then
         { Metadata = Array.empty
           EncLog = Array.empty
@@ -31,8 +37,7 @@ let emit (metadataReader: MetadataReader) (encId: Guid) (encBaseId: Guid) (updat
         let moduleDef = metadataReader.GetModuleDefinition()
         let moduleName = metadataReader.GetString moduleDef.Name
         let moduleNameHandle = metadataBuilder.GetOrAddString(moduleName)
-        let mvid = metadataReader.GetGuid(moduleDef.Mvid)
-        let mvidHandle = metadataBuilder.GetOrAddGuid(mvid)
+        let mvidHandle = metadataBuilder.GetOrAddGuid(moduleId)
         let encIdHandle = metadataBuilder.GetOrAddGuid(encId)
         let encBaseHandle = metadataBuilder.GetOrAddGuid(encBaseId)
         metadataBuilder.AddModule(0, moduleNameHandle, mvidHandle, encIdHandle, encBaseHandle) |> ignore

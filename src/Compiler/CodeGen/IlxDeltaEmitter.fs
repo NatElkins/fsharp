@@ -42,6 +42,8 @@ type IlxDeltaRequest =
         UpdatedMethods: MethodDefinitionKey list
         Module: ILModuleDef
         SymbolChanges: FSharpSymbolChanges option
+        CurrentGeneration: int
+        PreviousGenerationId: Guid option
     }
 
 /// Helper that produces an empty delta payload.
@@ -165,10 +167,15 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let moduleDef = metadataReader.GetModuleDefinition()
     let moduleName = metadataReader.GetString(moduleDef.Name)
-    let moduleMvid =
-        if moduleDef.Mvid.IsNil then Guid.NewGuid()
-        else metadataReader.GetGuid(moduleDef.Mvid)
-    let encBaseId = moduleMvid
+    let moduleMvid = request.Baseline.ModuleId
+
+    let baseGenerationId =
+        match request.CurrentGeneration, request.PreviousGenerationId with
+        | 1, _ -> request.Baseline.ModuleId
+        | _, Some prev -> prev
+        | _, None -> request.Baseline.ModuleId
+
+    let encBaseId = baseGenerationId
     let encId = Guid.NewGuid()
 
     let getMethodToken key = request.Baseline.MethodTokens |> Map.tryFind key
@@ -215,7 +222,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         resolvedMethods
         |> List.choose (fun (_, _, _, key) -> request.Baseline.MethodTokens |> Map.tryFind key)
 
-    let metadataDelta = DeltaMetadataWriter.emit metadataReader encId encBaseId methodUpdates
+    let metadataDelta = DeltaMetadataWriter.emit metadataReader encId encBaseId moduleMvid methodUpdates
 
     let streams = builder.Build(moduleName, moduleMvid, encId, Some encBaseId)
 

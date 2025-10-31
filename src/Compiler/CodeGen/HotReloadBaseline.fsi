@@ -1,5 +1,6 @@
 module internal FSharp.Compiler.HotReloadBaseline
 
+open System
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.IlxGen
@@ -36,7 +37,8 @@ type EventDefinitionKey =
 /// snapshots along with stable token maps so delta emission can reuse pre-existing metadata handles.
 /// </summary>
 type FSharpEmitBaseline =
-    { Metadata: MetadataSnapshot
+    { ModuleId: Guid
+      Metadata: MetadataSnapshot
       TokenMappings: ILTokenMappings
       TypeTokens: Map<string, int>
       MethodTokens: Map<MethodDefinitionKey, int>
@@ -47,7 +49,11 @@ type FSharpEmitBaseline =
 
 /// <summary>Create a baseline record for the supplied IL module and token mappings.</summary>
 val create:
-    ilModule: ILModuleDef -> tokenMappings: ILTokenMappings -> metadataSnapshot: MetadataSnapshot -> FSharpEmitBaseline
+    ilModule: ILModuleDef ->
+    tokenMappings: ILTokenMappings ->
+    metadataSnapshot: MetadataSnapshot ->
+    moduleId: Guid ->
+        FSharpEmitBaseline
 
 /// <summary>Create a baseline record that also persists the supplied ILX environment snapshot.</summary>
 val createWithEnvironment:
@@ -55,4 +61,5 @@ val createWithEnvironment:
     tokenMappings: ILTokenMappings ->
     metadataSnapshot: MetadataSnapshot ->
     ilxGenEnvironment: IlxGenEnvSnapshot ->
+    moduleId: Guid ->
         FSharpEmitBaseline

@@ -190,7 +190,8 @@ module BaselineTests =
 
     let private emitBaseline () =
         let ilModule, tokenMappings, metadataSnapshot = sampleBaselineArtifacts ()
-        create ilModule tokenMappings metadataSnapshot
+        let moduleId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        create ilModule tokenMappings metadataSnapshot moduleId
 
     let private createDummySnapshot () =
         let snapshotType = typeof<IlxGenEnvSnapshot>
@@ -275,7 +276,8 @@ module BaselineTests =
         let ilModule, tokenMappings, metadataSnapshot = sampleBaselineArtifacts ()
         let snapshot = createDummySnapshot ()
 
-        let baseline = createWithEnvironment ilModule tokenMappings metadataSnapshot snapshot
+        let moduleId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        let baseline = createWithEnvironment ilModule tokenMappings metadataSnapshot snapshot moduleId
 
         Assert.True(baseline.IlxGenEnvironment.IsSome)
         Assert.True(obj.ReferenceEquals(snapshot, baseline.IlxGenEnvironment.Value))

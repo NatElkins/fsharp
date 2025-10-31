@@ -17,6 +17,8 @@ open System.Diagnostics
 open System.Globalization
 open System.IO
 open System.Reflection
+open System.Reflection.Metadata
+open System.Reflection.PortableExecutable
 open System.Text
 open System.Threading
 
@@ -1201,14 +1203,29 @@ let main6
                     ILBinaryWriter.WriteILBinaryFile(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
 
                     if tcConfig.hotReloadCapture then
-                        let _, _, tokenMappings, metadataSnapshot =
+                        let assemblyBytes, _, tokenMappings, metadataSnapshot =
                             ILBinaryWriter.WriteILBinaryInMemoryWithArtifacts(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
+
+                        let moduleId =
+                            use stream = new MemoryStream(assemblyBytes, writable = false)
+                            use peReader = new PEReader(stream)
+                            let metadataReader = peReader.GetMetadataReader()
+                            let moduleDef = metadataReader.GetModuleDefinition()
+                            if moduleDef.Mvid.IsNil then
+                                Guid.NewGuid()
+                            else
+                                metadataReader.GetGuid(moduleDef.Mvid)
 
                         let baseline =
                             if obj.ReferenceEquals(ilxGenEnvSnapshot, null) then
-                                HotReloadBaseline.create ilxMainModule tokenMappings metadataSnapshot
+                                HotReloadBaseline.create ilxMainModule tokenMappings metadataSnapshot moduleId
                             else
-                                HotReloadBaseline.createWithEnvironment ilxMainModule tokenMappings metadataSnapshot ilxGenEnvSnapshot
+                                HotReloadBaseline.createWithEnvironment
+                                    ilxMainModule
+                                    tokenMappings
+                                    metadataSnapshot
+                                    ilxGenEnvSnapshot
+                                    moduleId
 
                         HotReloadState.setBaseline baseline
                 with Failure msg ->

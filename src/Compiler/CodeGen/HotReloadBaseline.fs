@@ -1,5 +1,6 @@
 module internal FSharp.Compiler.HotReloadBaseline
 
+open System
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.IlxGen
@@ -45,6 +46,7 @@ type EventDefinitionKey =
 /// </summary>
 type FSharpEmitBaseline =
     {
+        ModuleId: Guid
         Metadata: MetadataSnapshot
         TokenMappings: ILTokenMappings
         TypeTokens: Map<string, int>
@@ -171,6 +173,7 @@ let rec private collectType
     |> List.fold (collectType tokenMappings scope (enclosing @ [ tdef ])) maps
 
 let private createCore
+    (moduleId: Guid)
     (ilModule: ILModuleDef)
     (tokenMappings: ILTokenMappings)
     (metadataSnapshot: MetadataSnapshot)
@@ -183,6 +186,7 @@ let private createCore
         |> List.fold (collectType tokenMappings scope []) emptyMaps
 
     {
+        ModuleId = moduleId
         Metadata = metadataSnapshot
         TokenMappings = tokenMappings
         TypeTokens = maps.TypeTokens
@@ -194,8 +198,13 @@ let private createCore
     }
 
 /// <summary>Create an <see cref="FSharpEmitBaseline"/> without capturing the ILX environment snapshot.</summary>
-let create (ilModule: ILModuleDef) (tokenMappings: ILTokenMappings) (metadataSnapshot: MetadataSnapshot) =
-    createCore ilModule tokenMappings metadataSnapshot None
+let create
+    (ilModule: ILModuleDef)
+    (tokenMappings: ILTokenMappings)
+    (metadataSnapshot: MetadataSnapshot)
+    (moduleId: Guid)
+    =
+    createCore moduleId ilModule tokenMappings metadataSnapshot None
 
 /// <summary>Create an <see cref="FSharpEmitBaseline"/> that carries the captured ILX environment snapshot.</summary>
 let createWithEnvironment
@@ -203,5 +212,6 @@ let createWithEnvironment
     (tokenMappings: ILTokenMappings)
     (metadataSnapshot: MetadataSnapshot)
     (ilxGenEnvironment: IlxGenEnvSnapshot)
+    (moduleId: Guid)
     =
-    createCore ilModule tokenMappings metadataSnapshot (Some ilxGenEnvironment)
+    createCore moduleId ilModule tokenMappings metadataSnapshot (Some ilxGenEnvironment)

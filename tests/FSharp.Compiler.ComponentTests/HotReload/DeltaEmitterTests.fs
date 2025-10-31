@@ -101,7 +101,8 @@ module DeltaEmitterTests =
                 GuidHeapStart = 0
             }
 
-        let baseline = FSharp.Compiler.HotReloadBaseline.create baselineModule tokenMappings metadataSnapshot
+        let moduleId = Guid.Parse("11111111-2222-3333-4444-555555555555")
+        let baseline = FSharp.Compiler.HotReloadBaseline.create baselineModule tokenMappings metadataSnapshot moduleId
         baselineModule, baseline
 
     let private methodKey (baseline: FSharpEmitBaseline) name =
@@ -121,6 +122,8 @@ module DeltaEmitterTests =
                 UpdatedMethods = [ methodKey baseline "GetValue" ]
                 Module = updatedModule
                 SymbolChanges = None
+                CurrentGeneration = 1
+                PreviousGenerationId = None
             }
 
         let delta = emitDelta request
@@ -169,6 +172,8 @@ module DeltaEmitterTests =
                 UpdatedMethods = [ unknownMethod ]
                 Module = updatedModule
                 SymbolChanges = None
+                CurrentGeneration = 1
+                PreviousGenerationId = None
             }
 
         let delta = emitDelta request
@@ -203,6 +208,8 @@ module DeltaEmitterTests =
                 UpdatedMethods = [ methodKey baseline "GetValue" ]
                 Module = updatedModule
                 SymbolChanges = None
+                CurrentGeneration = 1
+                PreviousGenerationId = None
             }
 
         let delta = emitDelta request
@@ -246,6 +253,8 @@ module DeltaEmitterTests =
                 UpdatedMethods = [ methodKey baseline "GetValue" ]
                 Module = updatedModule
                 SymbolChanges = None
+                CurrentGeneration = 1
+                PreviousGenerationId = None
             }
 
         let delta = emitDelta request
@@ -265,6 +274,64 @@ module DeltaEmitterTests =
         let methodHandle = MetadataTokens.MethodDefinitionHandle 1
         let methodDef = mdReader.GetMethodDefinition methodHandle
         Assert.Equal(bodyInfo.CodeOffset, methodDef.RelativeVirtualAddress)
+
+    [<Fact>]
+    let ``HotReloadState persists EncId sequencing`` () =
+        global.FSharp.Compiler.HotReloadState.clearBaseline()
+        let _, baseline = createBaseline ()
+        global.FSharp.Compiler.HotReloadState.setBaseline baseline
+
+        let session0 =
+            match global.FSharp.Compiler.HotReloadState.tryGetSession() with
+            | ValueSome session -> session
+            | ValueNone -> failwith "Expected hot reload session to be initialised."
+
+        Assert.Equal(1, session0.CurrentGeneration)
+        Assert.True(session0.PreviousGenerationId |> Option.isNone)
+
+        let moduleGen1 = createModule 43
+        let requestGen1 =
+            {
+                IlxDeltaRequest.Baseline = session0.Baseline
+                UpdatedTypes = [ "Sample.Type" ]
+                UpdatedMethods = [ methodKey baseline "GetValue" ]
+                Module = moduleGen1
+                SymbolChanges = None
+                CurrentGeneration = session0.CurrentGeneration
+                PreviousGenerationId = session0.PreviousGenerationId
+            }
+
+        let delta1 = emitDelta requestGen1
+        Assert.Equal(baseline.ModuleId, delta1.BaseGenerationId)
+        Assert.NotEqual(Guid.Empty, delta1.GenerationId)
+
+        global.FSharp.Compiler.HotReloadState.recordDeltaApplied delta1.GenerationId
+
+        let session1 =
+            match global.FSharp.Compiler.HotReloadState.tryGetSession() with
+            | ValueSome session -> session
+            | ValueNone -> failwith "Expected hot reload session to persist after applying delta."
+
+        Assert.Equal(2, session1.CurrentGeneration)
+        Assert.Equal<Guid option>(Some delta1.GenerationId, session1.PreviousGenerationId)
+
+        let moduleGen2 = createModule 44
+        let requestGen2 =
+            {
+                IlxDeltaRequest.Baseline = session1.Baseline
+                UpdatedTypes = [ "Sample.Type" ]
+                UpdatedMethods = [ methodKey baseline "GetValue" ]
+                Module = moduleGen2
+                SymbolChanges = None
+                CurrentGeneration = session1.CurrentGeneration
+                PreviousGenerationId = session1.PreviousGenerationId
+            }
+
+        let delta2 = emitDelta requestGen2
+        Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
+        Assert.NotEqual(Guid.Empty, delta2.GenerationId)
+
+        global.FSharp.Compiler.HotReloadState.clearBaseline()
 
     [<Fact>]
     let ``IlDeltaStreamBuilder emits aligned method bodies`` () =
