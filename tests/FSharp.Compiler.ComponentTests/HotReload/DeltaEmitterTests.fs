@@ -95,7 +95,8 @@ module DeltaEmitterTests =
                 GuidHeapStart = 0
             }
 
-        FSharp.Compiler.HotReloadBaseline.create moduleDef tokenMappings metadataSnapshot
+        let baseline = FSharp.Compiler.HotReloadBaseline.create moduleDef tokenMappings metadataSnapshot
+        moduleDef, baseline
 
     let private methodKey (baseline: FSharpEmitBaseline) name =
         baseline.MethodTokens
@@ -105,12 +106,13 @@ module DeltaEmitterTests =
 
     [<Fact>]
     let ``emitDelta projects known tokens`` () =
-        let baseline = createBaseline ()
+        let moduleDef, baseline = createBaseline ()
         let request =
             {
                 IlxDeltaRequest.Baseline = baseline
                 UpdatedTypes = [ "Sample.Type" ]
                 UpdatedMethods = [ methodKey baseline "GetValue" ]
+                Module = moduleDef
                 SymbolChanges = None
             }
 
@@ -139,7 +141,7 @@ module DeltaEmitterTests =
 
     [<Fact>]
     let ``emitDelta ignores unknown symbols`` () =
-        let baseline = createBaseline ()
+        let moduleDef, baseline = createBaseline ()
         let unknownMethod =
             {
                 DeclaringType = "Sample.Type"
@@ -154,6 +156,7 @@ module DeltaEmitterTests =
                 IlxDeltaRequest.Baseline = baseline
                 UpdatedTypes = [ "Does.NotExist" ]
                 UpdatedMethods = [ unknownMethod ]
+                Module = moduleDef
                 SymbolChanges = None
             }
 
