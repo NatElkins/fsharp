@@ -1,6 +1,7 @@
 namespace FSharp.Compiler.ComponentTests.HotReload
 
 open System
+open System.Collections.Immutable
 open Xunit
 open FSharp.Compiler.IlxDeltaEmitter
 open FSharp.Compiler.HotReloadBaseline
@@ -260,13 +261,20 @@ module DeltaEmitterTests =
             (fun ret -> Assert.Equal<byte>(0x2Auy, ret))
         )
 
+        let metadataBytes = ImmutableArray.CreateRange<byte>(delta.Metadata)
+        use metadataProvider = MetadataReaderProvider.FromMetadataImage(metadataBytes)
+        let mdReader = metadataProvider.GetMetadataReader()
+        let methodHandle = MetadataTokens.MethodDefinitionHandle 1
+        let methodDef = mdReader.GetMethodDefinition methodHandle
+        Assert.Equal(bodyInfo.CodeOffset, methodDef.RelativeVirtualAddress)
+
     [<Fact>]
     let ``IlDeltaStreamBuilder emits aligned method bodies`` () =
         let builder = IlDeltaStreamBuilder()
         let localSignatureToken = 0x11000001
         let code = [| 0x06uy; 0x2Auy |]
 
-        builder.AddMethodBody(0x06000001, localSignatureToken, code)
+        builder.AddMethodBody(0x06000001, localSignatureToken, code) |> ignore
         builder.AddEncLogEntry(TableIndex.MethodDef, 1, EditAndContinueOperation.Default)
         builder.AddEncMapEntry(TableIndex.MethodDef, 1)
 

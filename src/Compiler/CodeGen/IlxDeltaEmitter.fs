@@ -172,6 +172,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let getMethodToken key = request.Baseline.MethodTokens |> Map.tryFind key
 
+    let metadataBuilder = builder.MetadataBuilder
+
     resolvedMethods
     |> List.iter (fun (_, _, _, key) ->
         match getMethodToken key with
@@ -190,7 +192,28 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         let sigBytes = metadataReader.GetBlobBytes(standaloneSignature.Signature)
                         builder.AddStandaloneSignature(sigBytes)
 
-                builder.AddMethodBody(methodToken, localSigToken, ilBytes))
+                let update = builder.AddMethodBody(methodToken, localSigToken, ilBytes)
+
+                let methodName = metadataReader.GetString(methodDef.Name)
+                let methodNameHandle = metadataBuilder.GetOrAddString(methodName)
+                let signatureBytes = metadataReader.GetBlobBytes(methodDef.Signature)
+                let signatureHandle = metadataBuilder.GetOrAddBlob(signatureBytes)
+                let parameterHandle =
+                    let mutable first = ParameterHandle()
+                    let mutable found = false
+                    let mutable enumerator = methodDef.GetParameters().GetEnumerator()
+                    while enumerator.MoveNext() && not found do
+                        first <- enumerator.Current
+                        found <- true
+                    if found then first else ParameterHandle()
+                metadataBuilder.AddMethodDefinition(
+                    methodDef.Attributes,
+                    methodDef.ImplAttributes,
+                    methodNameHandle,
+                    signatureHandle,
+                    update.CodeOffset,
+                    parameterHandle
+                ) |> ignore)
 
     let updatedTypeTokens =
         let methodTypeNames =

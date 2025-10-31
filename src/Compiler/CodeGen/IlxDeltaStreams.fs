@@ -66,13 +66,16 @@ type IlDeltaStreamBuilder() =
         // Ensure the next method starts on the required alignment boundary.
         alignMethodStream ()
 
-        methodBodies.Add(
+        let update =
             {
                 MethodToken = methodToken
                 LocalSignatureToken = localSignatureToken
                 CodeOffset = offset
                 CodeLength = code.Length
-            })
+            }
+
+        methodBodies.Add(update)
+        update
 
     /// <summary>Adds a standalone signature blob to the metadata stream and returns its token.</summary>
     member _.AddStandaloneSignature(signature: byte[]) =
