@@ -33,10 +33,10 @@ module DeltaEmitterTests =
                 ValueSome (proc.ExitCode, proc.StandardOutput.ReadToEnd(), proc.StandardError.ReadToEnd())
         with _ -> ValueNone
 
-    let private createBaseline () =
+    let private createModule returnValue =
         let ilg = PrimaryAssemblyILGlobals
         let methodBody =
-            mkMethodBody (false, [], 2, nonBranchingInstrsToCode [ AI_ldc(DT_I4, ILConst.I4 1); I_ret ], None, None)
+            mkMethodBody (false, [], 2, nonBranchingInstrsToCode [ AI_ldc(DT_I4, ILConst.I4 returnValue); I_ret ], None, None)
 
         let methodDef =
             mkILNonGenericStaticMethod (
@@ -62,19 +62,21 @@ module DeltaEmitterTests =
                     ILTypeInit.BeforeField
                 )
 
-        let moduleDef =
-            mkILSimpleModule
-                "SampleAssembly"
-                "SampleModule"
-                true
-                (4, 0)
-                false
-                (mkILTypeDefs [ typeDef ])
-                None
-                None
-                0
-                (mkILExportedTypes [])
-                "v4.0.30319"
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
+    let private createBaseline () =
+        let baselineModule = createModule 42
 
         let tokenMappings : ILTokenMappings =
             {
@@ -98,8 +100,8 @@ module DeltaEmitterTests =
                 GuidHeapStart = 0
             }
 
-        let baseline = FSharp.Compiler.HotReloadBaseline.create moduleDef tokenMappings metadataSnapshot
-        moduleDef, baseline
+        let baseline = FSharp.Compiler.HotReloadBaseline.create baselineModule tokenMappings metadataSnapshot
+        baselineModule, baseline
 
     let private methodKey (baseline: FSharpEmitBaseline) name =
         baseline.MethodTokens
@@ -109,13 +111,14 @@ module DeltaEmitterTests =
 
     [<Fact>]
     let ``emitDelta projects known tokens`` () =
-        let moduleDef, baseline = createBaseline ()
+        let _, baseline = createBaseline ()
+        let updatedModule = createModule 43
         let request =
             {
                 IlxDeltaRequest.Baseline = baseline
                 UpdatedTypes = [ "Sample.Type" ]
                 UpdatedMethods = [ methodKey baseline "GetValue" ]
-                Module = moduleDef
+                Module = updatedModule
                 SymbolChanges = None
             }
 
@@ -123,8 +126,8 @@ module DeltaEmitterTests =
 
         Assert.Equal<int list>([ 0x02000001 ], delta.UpdatedTypeTokens)
         Assert.Equal<int list>([ 0x06000001 ], delta.UpdatedMethodTokens)
-        Assert.Empty(delta.Metadata)
-        Assert.Empty(delta.IL)
+        Assert.NotEmpty(delta.Metadata)
+        Assert.NotEmpty(delta.IL)
         Assert.True(delta.Pdb.IsNone)
         let expectedEncLog =
             [|
@@ -144,7 +147,8 @@ module DeltaEmitterTests =
 
     [<Fact>]
     let ``emitDelta ignores unknown symbols`` () =
-        let moduleDef, baseline = createBaseline ()
+        let _, baseline = createBaseline ()
+        let updatedModule = createModule 43
         let unknownMethod =
             {
                 DeclaringType = "Sample.Type"
@@ -159,7 +163,7 @@ module DeltaEmitterTests =
                 IlxDeltaRequest.Baseline = baseline
                 UpdatedTypes = [ "Does.NotExist" ]
                 UpdatedMethods = [ unknownMethod ]
-                Module = moduleDef
+                Module = updatedModule
                 SymbolChanges = None
             }
 
@@ -182,6 +186,46 @@ module DeltaEmitterTests =
             // Non-zero exit indicates mdv is installed but not runnable in this environment; treat it similarly to absence.
             printfn "metadata-tools (mdv) CLI reported exit code %d. stderr: %s" exitCode stderr
             ()
+
+    [<Fact>]
+    let ``emitDelta metadata validates with mdv`` () =
+        let _, baseline = createBaseline ()
+        let updatedModule = createModule 43
+        let request =
+            {
+                IlxDeltaRequest.Baseline = baseline
+                UpdatedTypes = [ "Sample.Type" ]
+                UpdatedMethods = [ methodKey baseline "GetValue" ]
+                Module = updatedModule
+                SymbolChanges = None
+            }
+
+        let delta = emitDelta request
+
+        Assert.NotEmpty(delta.Metadata)
+        Assert.NotEmpty(delta.IL)
+
+        match tryRunMdv "--version" with
+        | ValueNone ->
+            printfn "metadata-tools (mdv) CLI not found; skipping validation test."
+        | ValueSome(exitCode, _, _) when exitCode <> 0 ->
+            printfn "metadata-tools (mdv) CLI reported exit code %d during version check; skipping validation test." exitCode
+        | _ ->
+            let tempMeta = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".meta")
+            let tempIl = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".il")
+            try
+                File.WriteAllBytes(tempMeta, delta.Metadata)
+                File.WriteAllBytes(tempIl, delta.IL)
+
+                let arg = $"/g:{tempMeta};{tempIl}"
+                match tryRunMdv arg with
+                | ValueSome(0, _, _) -> ()
+                | ValueSome(code, _, stderr) ->
+                    Assert.True(false, $"mdv validation failed with exit code {code}. stderr: {stderr}")
+                | ValueNone -> Assert.True(false, "mdv CLI became unavailable during validation")
+            finally
+                if File.Exists(tempMeta) then File.Delete(tempMeta)
+                if File.Exists(tempIl) then File.Delete(tempIl)
 
     [<Fact>]
     let ``IlDeltaStreamBuilder emits aligned method bodies`` () =

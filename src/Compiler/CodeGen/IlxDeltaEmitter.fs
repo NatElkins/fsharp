@@ -2,11 +2,20 @@ module internal FSharp.Compiler.IlxDeltaEmitter
 
 open System
 open System.Collections.Generic
+open System.Collections.Immutable
+open System.IO
+open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
+open System.Reflection.PortableExecutable
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILDelta
+open FSharp.Compiler.AbstractIL.ILPdbWriter
 open FSharp.Compiler.HotReload.SymbolChanges
 open FSharp.Compiler.HotReloadBaseline
+open FSharp.Compiler.IlxDeltaStreams
+open Internal.Utilities
+
+module ILWriter = FSharp.Compiler.AbstractIL.ILBinaryWriter
 
 /// Represents the emitted artifacts for a hot reload delta.
 type IlxDelta =
@@ -40,6 +49,28 @@ let private emptyDelta: IlxDelta =
         EncMap = Array.empty
         UpdatedTypeTokens = []
         UpdatedMethodTokens = []
+    }
+
+let private defaultWriterOptions (ilg: ILGlobals) (checksumAlgorithm: HashAlgorithm) : ILWriter.options =
+    {
+        ilg = ilg
+        outfile = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-delta.dll")
+        pdbfile = None
+        portablePDB = true
+        embeddedPDB = false
+        embedAllSource = false
+        embedSourceList = []
+        allGivenSources = []
+        sourceLink = ""
+        checksumAlgorithm = checksumAlgorithm
+        signer = None
+        emitTailcalls = false
+        deterministic = true
+        dumpDebugInfo = false
+        referenceAssemblyOnly = false
+        referenceAssemblyAttribOpt = None
+        referenceAssemblySignatureHash = None
+        pathMap = PathMap.empty
     }
 
 /// Emits the delta artifacts for a request. The current implementation populates token projections
@@ -83,6 +114,69 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         |> Option.defaultValue []
         |> List.map (fun symbol -> symbol.QualifiedName)
 
+    let builder = IlDeltaStreamBuilder()
+
+    let primaryScopeRef =
+        match request.Module.Manifest with
+        | Some manifest ->
+            let publicKey =
+                manifest.PublicKey |> Option.map (fun key -> PublicKey.KeyAsToken key)
+            let asmRef =
+                ILAssemblyRef.Create(
+                    manifest.Name,
+                    None,
+                    publicKey,
+                    manifest.Retargetable,
+                    manifest.Version,
+                    manifest.Locale
+                )
+
+            ILScopeRef.Assembly asmRef
+        | None -> ILScopeRef.PrimaryAssembly
+
+    let fsharpCoreScopeRef =
+        ILScopeRef.Assembly (ILAssemblyRef.Create("FSharp.Core", None, None, false, None, None))
+
+    let ilg = mkILGlobals (primaryScopeRef, [], fsharpCoreScopeRef)
+
+    let writerOptions =
+        defaultWriterOptions ilg HashAlgorithm.Sha256
+    let assemblyBytes, _, _, _ = ILWriter.WriteILBinaryInMemoryWithArtifacts(writerOptions, request.Module, id)
+
+    use peStream = new MemoryStream(assemblyBytes, writable = false)
+    use peReader = new PEReader(peStream)
+    let metadataReader = peReader.GetMetadataReader()
+
+    let moduleDef = metadataReader.GetModuleDefinition()
+    let moduleName = metadataReader.GetString(moduleDef.Name)
+    let moduleMvid =
+        if moduleDef.Mvid.IsNil then Guid.NewGuid()
+        else metadataReader.GetGuid(moduleDef.Mvid)
+    let encBaseId = moduleMvid
+    let encId = Guid.NewGuid()
+
+    let getMethodToken key = request.Baseline.MethodTokens |> Map.tryFind key
+
+    resolvedMethods
+    |> List.iter (fun (_, _, _, key) ->
+        match getMethodToken key with
+        | None -> ()
+        | Some methodToken ->
+            let methodHandle = MetadataTokens.MethodDefinitionHandle methodToken
+            if not methodHandle.IsNil then
+                let methodDef = metadataReader.GetMethodDefinition methodHandle
+                let body = peReader.GetMethodBody(methodDef.RelativeVirtualAddress)
+                let ilBytes = body.GetILBytes() |> Seq.toArray
+                let localSigToken =
+                    if body.LocalSignature.IsNil then
+                        0
+                    else
+                        let standaloneSignature = metadataReader.GetStandaloneSignature(body.LocalSignature)
+                        let sigBytes = metadataReader.GetBlobBytes(standaloneSignature.Signature)
+                        builder.AddStandaloneSignature(sigBytes)
+
+                builder.AddMethodBody(methodToken, localSigToken, ilBytes))
+
     let updatedTypeTokens =
         let methodTypeNames =
             resolvedMethods
@@ -98,9 +192,25 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         resolvedMethods
         |> List.choose (fun (_, _, _, key) -> request.Baseline.MethodTokens |> Map.tryFind key)
 
+    updatedTypeTokens
+    |> List.iter (fun token ->
+        let row = token &&& 0x00FFFFFF
+        builder.AddEncLogEntry(TableIndex.TypeDef, row, EditAndContinueOperation.Default)
+        builder.AddEncMapEntry(TableIndex.TypeDef, row))
+
+    updatedMethodTokens
+    |> List.iter (fun token ->
+        let row = token &&& 0x00FFFFFF
+        builder.AddEncLogEntry(TableIndex.MethodDef, row, EditAndContinueOperation.Default)
+        builder.AddEncMapEntry(TableIndex.MethodDef, row))
+
+    let streams = builder.Build(moduleName, moduleMvid, encId, Some encBaseId)
+
     let encLog, encMap = buildEncTables updatedTypeTokens updatedMethodTokens
 
     { emptyDelta with
+        Metadata = streams.Metadata
+        IL = streams.IL
         UpdatedTypeTokens = updatedTypeTokens
         UpdatedMethodTokens = updatedMethodTokens
         EncLog = encLog
