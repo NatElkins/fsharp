@@ -277,12 +277,14 @@ module DeltaEmitterTests =
 
     [<Fact>]
     let ``HotReloadState persists EncId sequencing`` () =
-        global.FSharp.Compiler.HotReloadState.clearBaseline()
+        let service = global.FSharp.Compiler.HotReload.FSharpEditAndContinueLanguageService.Instance
+
+        service.EndSession()
         let _, baseline = createBaseline ()
-        global.FSharp.Compiler.HotReloadState.setBaseline baseline
+        service.StartSession baseline
 
         let session0 =
-            match global.FSharp.Compiler.HotReloadState.tryGetSession() with
+            match service.TryGetSession() with
             | ValueSome session -> session
             | ValueNone -> failwith "Expected hot reload session to be initialised."
 
@@ -305,10 +307,10 @@ module DeltaEmitterTests =
         Assert.Equal(baseline.ModuleId, delta1.BaseGenerationId)
         Assert.NotEqual(Guid.Empty, delta1.GenerationId)
 
-        global.FSharp.Compiler.HotReloadState.recordDeltaApplied delta1.GenerationId
+        service.OnDeltaApplied delta1.GenerationId
 
         let session1 =
-            match global.FSharp.Compiler.HotReloadState.tryGetSession() with
+            match service.TryGetSession() with
             | ValueSome session -> session
             | ValueNone -> failwith "Expected hot reload session to persist after applying delta."
 
@@ -331,7 +333,7 @@ module DeltaEmitterTests =
         Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
         Assert.NotEqual(Guid.Empty, delta2.GenerationId)
 
-        global.FSharp.Compiler.HotReloadState.clearBaseline()
+        service.EndSession()
 
     [<Fact>]
     let ``IlDeltaStreamBuilder emits aligned method bodies`` () =

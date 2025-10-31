@@ -284,7 +284,8 @@ module BaselineTests =
 
     [<Fact>]
     let ``compile with hot reload flag captures baseline`` () =
-        global.FSharp.Compiler.HotReloadState.clearBaseline()
+        let service = global.FSharp.Compiler.HotReload.FSharpEditAndContinueLanguageService.Instance
+        service.EndSession()
 
         FSharp """
 module Sample
@@ -296,9 +297,9 @@ let mutable state = 1
         |> shouldSucceed
         |> ignore
 
-        match global.FSharp.Compiler.HotReloadState.tryGetBaseline() with
+        match service.TryGetBaseline() with
         | ValueSome baseline ->
             Assert.True(baseline.IlxGenEnvironment.IsSome)
-            global.FSharp.Compiler.HotReloadState.clearBaseline()
+            service.EndSession()
         | ValueNone ->
             Assert.True(false, "Expected hot reload baseline to be captured.")

@@ -33,7 +33,7 @@ open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryReader
 open FSharp.Compiler.AccessibilityLogic
 open FSharp.Compiler.HotReloadBaseline
-open FSharp.Compiler.HotReloadState
+open FSharp.Compiler.HotReload
 open FSharp.Compiler.CheckDeclarations
 open FSharp.Compiler.CompilerConfig
 open FSharp.Compiler.CompilerDiagnostics
@@ -1130,7 +1130,7 @@ let main6
 
     match dynamicAssemblyCreator with
     | None ->
-        HotReloadState.clearBaseline ()
+        FSharpEditAndContinueLanguageService.Instance.EndSession()
 
         try
             match tcConfig.emitMetadataAssembly with
@@ -1227,14 +1227,14 @@ let main6
                                     ilxGenEnvSnapshot
                                     moduleId
 
-                        HotReloadState.setBaseline baseline
+                        FSharpEditAndContinueLanguageService.Instance.StartSession baseline
                 with Failure msg ->
                     error (Error(FSComp.SR.fscProblemWritingBinary (outfile, msg), rangeCmdArgs))
         with e ->
             errorRecoveryNoRange e
             exiter.Exit 1
     | Some da ->
-        HotReloadState.clearBaseline ()
+        FSharpEditAndContinueLanguageService.Instance.EndSession()
         da (tcConfig, tcGlobals, outfile, ilxMainModule)
 
     AbortOnError(diagnosticsLogger, exiter)
