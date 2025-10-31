@@ -129,6 +129,9 @@ module DeltaEmitterTests =
         Assert.NotEmpty(delta.Metadata)
         Assert.NotEmpty(delta.IL)
         Assert.True(delta.Pdb.IsNone)
+        let bodyInfo = Assert.Single(delta.MethodBodies)
+        Assert.Equal(0x06000001, bodyInfo.MethodToken)
+        Assert.True(bodyInfo.CodeLength > 0)
         let expectedEncLog =
             [|
                 (TableIndex.TypeDef, 0x00000001, EditAndContinueOperation.Default)
@@ -173,6 +176,7 @@ module DeltaEmitterTests =
         Assert.Empty(delta.UpdatedMethodTokens)
         Assert.Empty(delta.EncLog)
         Assert.Empty(delta.EncMap)
+        Assert.Empty(delta.MethodBodies)
 
     [<Fact>]
     let ``metadata validator tool is available`` () =
@@ -204,6 +208,7 @@ module DeltaEmitterTests =
 
         Assert.NotEmpty(delta.Metadata)
         Assert.NotEmpty(delta.IL)
+        Assert.Single(delta.MethodBodies) |> ignore
 
         match tryRunMdv "--version" with
         | ValueNone ->

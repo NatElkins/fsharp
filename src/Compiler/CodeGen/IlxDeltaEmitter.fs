@@ -27,6 +27,8 @@ type IlxDelta =
         EncMap: (TableIndex * int) array
         UpdatedTypeTokens: int list
         UpdatedMethodTokens: int list
+        MethodBodies: MethodBodyUpdate list
+        StandaloneSignatures: StandaloneSignatureUpdate list
     }
 
 /// Request payload used when producing a delta. This will accumulate more fields as the emitter is implemented.
@@ -49,6 +51,8 @@ let private emptyDelta: IlxDelta =
         EncMap = Array.empty
         UpdatedTypeTokens = []
         UpdatedMethodTokens = []
+        MethodBodies = []
+        StandaloneSignatures = []
     }
 
 let private defaultWriterOptions (ilg: ILGlobals) (checksumAlgorithm: HashAlgorithm) : ILWriter.options =
@@ -206,13 +210,13 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let streams = builder.Build(moduleName, moduleMvid, encId, Some encBaseId)
 
-    let encLog, encMap = buildEncTables updatedTypeTokens updatedMethodTokens
-
     { emptyDelta with
         Metadata = streams.Metadata
         IL = streams.IL
         UpdatedTypeTokens = updatedTypeTokens
         UpdatedMethodTokens = updatedMethodTokens
-        EncLog = encLog
-        EncMap = encMap
+        EncLog = streams.EncLogEntries |> List.toArray
+        EncMap = streams.EncMapEntries |> List.toArray
+        MethodBodies = streams.MethodBodies
+        StandaloneSignatures = streams.StandaloneSignatures
     }

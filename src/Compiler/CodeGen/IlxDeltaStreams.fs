@@ -28,6 +28,8 @@ type IlDeltaStreams =
         IL: byte[]
         MethodBodies: MethodBodyUpdate list
         StandaloneSignatures: StandaloneSignatureUpdate list
+        EncLogEntries: (TableIndex * int * EditAndContinueOperation) list
+        EncMapEntries: (TableIndex * int) list
     }
 
 /// <summary>
@@ -40,6 +42,8 @@ type IlDeltaStreamBuilder() =
     let methodBodyStream = BlobBuilder()
     let methodBodies = ResizeArray<MethodBodyUpdate>()
     let standaloneSigs = ResizeArray<StandaloneSignatureUpdate>()
+    let encLogEntries = ResizeArray<TableIndex * int * EditAndContinueOperation>()
+    let encMapEntries = ResizeArray<TableIndex * int>()
     let mutable isBuilt = false
 
     let alignMethodStream () =
@@ -85,11 +89,13 @@ type IlDeltaStreamBuilder() =
     member _.AddEncLogEntry(tableIndex: TableIndex, rowId: int, operation: EditAndContinueOperation) =
         let handle = MetadataTokens.EntityHandle(tableIndex, rowId)
         metadataBuilder.AddEncLogEntry(handle, operation) |> ignore
+        encLogEntries.Add(tableIndex, rowId, operation)
 
     /// <summary>Register an Edit-and-Continue map entry.</summary>
     member _.AddEncMapEntry(tableIndex: TableIndex, rowId: int) =
         let handle = MetadataTokens.EntityHandle(tableIndex, rowId)
         metadataBuilder.AddEncMapEntry(handle) |> ignore
+        encMapEntries.Add(tableIndex, rowId)
 
     /// <summary>
     /// Finalise the builder and emit the metadata and IL blobs. The builder can only be consumed once; subsequent
@@ -119,4 +125,6 @@ type IlDeltaStreamBuilder() =
             IL = methodBodyStream.ToArray()
             MethodBodies = methodBodies |> Seq.toList
             StandaloneSignatures = standaloneSigs |> Seq.toList
+            EncLogEntries = encLogEntries |> Seq.toList
+            EncMapEntries = encMapEntries |> Seq.toList
         }
