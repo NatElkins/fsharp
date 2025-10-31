@@ -29,6 +29,8 @@ type IlxDelta =
         UpdatedMethodTokens: int list
         MethodBodies: MethodBodyUpdate list
         StandaloneSignatures: StandaloneSignatureUpdate list
+        GenerationId: Guid
+        BaseGenerationId: Guid
     }
 
 /// Request payload used when producing a delta. This will accumulate more fields as the emitter is implemented.
@@ -53,6 +55,8 @@ let private emptyDelta: IlxDelta =
         UpdatedMethodTokens = []
         MethodBodies = []
         StandaloneSignatures = []
+        GenerationId = Guid.Empty
+        BaseGenerationId = Guid.Empty
     }
 
 let private defaultWriterOptions (ilg: ILGlobals) (checksumAlgorithm: HashAlgorithm) : ILWriter.options =
@@ -226,4 +230,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         EncMap = streams.EncMapEntries |> List.toArray
         MethodBodies = streams.MethodBodies
         StandaloneSignatures = streams.StandaloneSignatures
+        GenerationId = encId
+        BaseGenerationId = encBaseId
     }
