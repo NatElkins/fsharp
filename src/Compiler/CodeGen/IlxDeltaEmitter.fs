@@ -3,6 +3,7 @@ module internal FSharp.Compiler.IlxDeltaEmitter
 open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.AbstractIL.ILDelta
+open FSharp.Compiler.HotReload.SymbolChanges
 
 /// Represents the emitted artifacts for a hot reload delta.
 type IlxDelta =
@@ -22,6 +23,7 @@ type IlxDeltaRequest =
         Baseline: FSharpEmitBaseline
         UpdatedTypes: string list
         UpdatedMethods: MethodDefinitionKey list
+        SymbolChanges: FSharpSymbolChanges option
     }
 
 /// Helper that produces an empty delta payload.
@@ -40,8 +42,15 @@ let private emptyDelta: IlxDelta =
 /// while leaving the raw metadata/IL/PDB payload empty; future work will replace the placeholders
 /// with fully emitted heaps.
 let emitDelta (request: IlxDeltaRequest) : IlxDelta =
+    let symbolChangeTypeNames =
+        request.SymbolChanges
+        |> Option.map FSharpSymbolChanges.entitySymbolsWithChanges
+        |> Option.defaultValue []
+        |> List.map (fun symbol -> symbol.QualifiedName)
+
     let updatedTypeTokens =
-        request.UpdatedTypes
+        (request.UpdatedTypes @ symbolChangeTypeNames)
+        |> List.distinct
         |> List.choose (fun typeName -> request.Baseline.TypeTokens |> Map.tryFind typeName)
 
     let updatedMethodTokens =

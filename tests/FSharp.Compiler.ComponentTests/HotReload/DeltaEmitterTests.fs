@@ -111,6 +111,7 @@ module DeltaEmitterTests =
                 IlxDeltaRequest.Baseline = baseline
                 UpdatedTypes = [ "Sample.Type" ]
                 UpdatedMethods = [ methodKey baseline "GetValue" ]
+                SymbolChanges = None
             }
 
         let delta = emitDelta request
@@ -153,6 +154,7 @@ module DeltaEmitterTests =
                 IlxDeltaRequest.Baseline = baseline
                 UpdatedTypes = [ "Does.NotExist" ]
                 UpdatedMethods = [ unknownMethod ]
+                SymbolChanges = None
             }
 
         let delta = emitDelta request

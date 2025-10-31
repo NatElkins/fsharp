@@ -49,6 +49,27 @@ module FSharpSymbolChanges =
           Synthesized = synthesized
           RudeEdits = definitionMap.RudeEdits }
 
+    /// Collects entity symbols (types/modules) impacted by adds/updates/deletes, including synthesized members promoted to entities.
+    let entitySymbolsWithChanges (changes: FSharpSymbolChanges) : SymbolId list =
+        let updatedEntities =
+            changes.Updated
+            |> List.choose (fun (symbol, _) -> if symbol.Kind = SymbolKind.Entity then Some symbol else None)
+
+        let addedEntities =
+            changes.Added
+            |> List.filter (fun symbol -> symbol.Kind = SymbolKind.Entity)
+
+        let deletedEntities =
+            changes.Deleted
+            |> List.filter (fun symbol -> symbol.Kind = SymbolKind.Entity)
+
+        let synthesizedEntities =
+            changes.Synthesized
+            |> List.choose (fun change -> if change.Symbol.Kind = SymbolKind.Entity then Some change.Symbol else None)
+
+        (updatedEntities @ addedEntities @ deletedEntities @ synthesizedEntities)
+        |> List.distinctBy (fun symbol -> symbol.Path, symbol.LogicalName, symbol.Stamp)
+
     /// Extracts synthesized members classified as added.
     let synthesizedAdded (changes: FSharpSymbolChanges) : SymbolId list =
         changes.Synthesized
