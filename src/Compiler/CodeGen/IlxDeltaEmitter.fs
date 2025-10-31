@@ -56,9 +56,16 @@ let private emptyDelta: IlxDelta =
     }
 
 let private defaultWriterOptions (ilg: ILGlobals) (checksumAlgorithm: HashAlgorithm) : ILWriter.options =
+    // ILBinaryWriter insists on having an output path even when we emit to memory. Generate a
+    // unique, throwaway file name per invocation so parallel sessions never collide, and so we
+    // leave a breadcrumb for debugging when traces mention the synthetic assembly.
+    let scratchDll =
+        let fileName = sprintf "fsharp-hotreload-%s.dll" (Guid.NewGuid().ToString("N"))
+        Path.Combine(Path.GetTempPath(), fileName)
+
     {
         ilg = ilg
-        outfile = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-delta.dll")
+        outfile = scratchDll
         pdbfile = None
         portablePDB = true
         embeddedPDB = false
