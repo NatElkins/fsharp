@@ -233,6 +233,30 @@ module DeltaEmitterTests =
                 if File.Exists(tempIl) then File.Delete(tempIl)
 
     [<Fact>]
+    let ``emitDelta method body reflects updated IL`` () =
+        let _, baseline = createBaseline ()
+        let updatedModule = createModule 100
+        let request =
+            {
+                IlxDeltaRequest.Baseline = baseline
+                UpdatedTypes = [ "Sample.Type" ]
+                UpdatedMethods = [ methodKey baseline "GetValue" ]
+                Module = updatedModule
+                SymbolChanges = None
+            }
+
+        let delta = emitDelta request
+
+        let bodyInfo = Assert.Single(delta.MethodBodies)
+        let ilBytes = delta.IL.AsSpan().Slice(bodyInfo.CodeOffset, bodyInfo.CodeLength).ToArray()
+        Assert.Collection<byte>(
+            ilBytes,
+            (fun opcode -> Assert.Equal<byte>(0x1Fuy, opcode)),
+            (fun operand -> Assert.Equal<byte>(0x64uy, operand)),
+            (fun ret -> Assert.Equal<byte>(0x2Auy, ret))
+        )
+
+    [<Fact>]
     let ``IlDeltaStreamBuilder emits aligned method bodies`` () =
         let builder = IlDeltaStreamBuilder()
         let localSignatureToken = 0x11000001
