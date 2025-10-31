@@ -14,12 +14,20 @@ type MethodBodyUpdate =
         CodeLength: int
     }
 
+/// <summary>Represents a standalone signature (e.g., local signature) emitted in the delta metadata.</summary>
+type StandaloneSignatureUpdate =
+    {
+        Handle: StandaloneSignatureHandle
+        Blob: byte[]
+    }
+
 /// <summary>The emitted metadata and IL payloads produced by <see cref="IlDeltaStreamBuilder"/>.</summary>
 type IlDeltaStreams =
     {
         Metadata: byte[]
         IL: byte[]
         MethodBodies: MethodBodyUpdate list
+        StandaloneSignatures: StandaloneSignatureUpdate list
     }
 
 /// <summary>
@@ -31,6 +39,7 @@ type IlDeltaStreamBuilder() =
     let metadataBuilder = MetadataBuilder()
     let methodBodyStream = BlobBuilder()
     let methodBodies = ResizeArray<MethodBodyUpdate>()
+    let standaloneSigs = ResizeArray<StandaloneSignatureUpdate>()
     let mutable isBuilt = false
 
     let alignMethodStream () =
@@ -42,6 +51,8 @@ type IlDeltaStreamBuilder() =
 
     /// <summary>Inspection hook primarily used in unit tests.</summary>
     member _.MethodBodies = methodBodies |> Seq.toList
+
+    member _.StandaloneSignatures = standaloneSigs |> Seq.toList
 
     /// <summary>Add a method body update for the supplied metadata token.</summary>
     member _.AddMethodBody(methodToken: int, localSignatureToken: int, code: byte[]) =
@@ -58,6 +69,17 @@ type IlDeltaStreamBuilder() =
                 CodeOffset = offset
                 CodeLength = code.Length
             })
+
+    /// <summary>Adds a standalone signature blob to the metadata stream and returns its token.</summary>
+    member _.AddStandaloneSignature(signature: byte[]) =
+        if signature.Length = 0 then
+            0
+        else
+            let blobHandle = metadataBuilder.GetOrAddBlob(signature)
+            let handle = metadataBuilder.AddStandaloneSignature(blobHandle)
+            let token = MetadataTokens.GetToken(EntityHandle.op_Implicit handle)
+            standaloneSigs.Add({ Handle = handle; Blob = Array.copy signature })
+            token
 
     /// <summary>Register an Edit-and-Continue log entry.</summary>
     member _.AddEncLogEntry(tableIndex: TableIndex, rowId: int, operation: EditAndContinueOperation) =
@@ -96,4 +118,5 @@ type IlDeltaStreamBuilder() =
             Metadata = metadataBlob.ToArray()
             IL = methodBodyStream.ToArray()
             MethodBodies = methodBodies |> Seq.toList
+            StandaloneSignatures = standaloneSigs |> Seq.toList
         }

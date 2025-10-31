@@ -10,6 +10,7 @@ open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.IlxDeltaStreams
 open System.Diagnostics
 open System.IO
+open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open Xunit.Sdk
 
@@ -203,3 +204,18 @@ module DeltaEmitterTests =
         Assert.Equal(code.Length, bodyInfo.CodeLength)
         Assert.Equal(localSignatureToken, bodyInfo.LocalSignatureToken)
         Assert.Equal(0, bodyInfo.CodeOffset % 4)
+
+    [<Fact>]
+    let ``IlDeltaStreamBuilder tracks standalone signatures`` () =
+        let builder = IlDeltaStreamBuilder()
+        let signature = [| 0x07uy; 0x02uy |]
+
+        let token = builder.AddStandaloneSignature(signature)
+        Assert.NotEqual(0, token)
+
+        let streams = builder.Build("SampleModule", Guid.NewGuid(), Guid.NewGuid(), None)
+        let standalone = Assert.Single(streams.StandaloneSignatures)
+        Assert.False(standalone.Handle.IsNil)
+        let expectedToken = MetadataTokens.GetToken(EntityHandle.op_Implicit standalone.Handle)
+        Assert.Equal(expectedToken, token)
+        Assert.Equal<byte[]>(signature, standalone.Blob)
