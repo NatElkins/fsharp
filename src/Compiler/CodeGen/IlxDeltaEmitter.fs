@@ -16,6 +16,7 @@ open FSharp.Compiler.IlxDeltaStreams
 open Internal.Utilities
 
 module ILWriter = FSharp.Compiler.AbstractIL.ILBinaryWriter
+module DeltaMetadataWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
 /// Represents the emitted artifacts for a hot reload delta.
 type IlxDelta =
@@ -172,48 +173,32 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let getMethodToken key = request.Baseline.MethodTokens |> Map.tryFind key
 
-    let metadataBuilder = builder.MetadataBuilder
+    let methodUpdates =
+        resolvedMethods
+        |> List.choose (fun (_, _, _, key) ->
+            match getMethodToken key with
+            | None -> None
+            | Some methodToken ->
+                let methodHandle = MetadataTokens.MethodDefinitionHandle methodToken
+                if methodHandle.IsNil then None
+                else
+                    let methodDef = metadataReader.GetMethodDefinition methodHandle
+                    let body = peReader.GetMethodBody(methodDef.RelativeVirtualAddress)
+                    let ilBytes = body.GetILBytes() |> Seq.toArray
+                    let localSigToken =
+                        if body.LocalSignature.IsNil then
+                            0
+                        else
+                            let standaloneSignature = metadataReader.GetStandaloneSignature(body.LocalSignature)
+                            let sigBytes = metadataReader.GetBlobBytes(standaloneSignature.Signature)
+                            builder.AddStandaloneSignature(sigBytes)
 
-    resolvedMethods
-    |> List.iter (fun (_, _, _, key) ->
-        match getMethodToken key with
-        | None -> ()
-        | Some methodToken ->
-            let methodHandle = MetadataTokens.MethodDefinitionHandle methodToken
-            if not methodHandle.IsNil then
-                let methodDef = metadataReader.GetMethodDefinition methodHandle
-                let body = peReader.GetMethodBody(methodDef.RelativeVirtualAddress)
-                let ilBytes = body.GetILBytes() |> Seq.toArray
-                let localSigToken =
-                    if body.LocalSignature.IsNil then
-                        0
-                    else
-                        let standaloneSignature = metadataReader.GetStandaloneSignature(body.LocalSignature)
-                        let sigBytes = metadataReader.GetBlobBytes(standaloneSignature.Signature)
-                        builder.AddStandaloneSignature(sigBytes)
-
-                let update = builder.AddMethodBody(methodToken, localSigToken, ilBytes)
-
-                let methodName = metadataReader.GetString(methodDef.Name)
-                let methodNameHandle = metadataBuilder.GetOrAddString(methodName)
-                let signatureBytes = metadataReader.GetBlobBytes(methodDef.Signature)
-                let signatureHandle = metadataBuilder.GetOrAddBlob(signatureBytes)
-                let parameterHandle =
-                    let mutable first = ParameterHandle()
-                    let mutable found = false
-                    let mutable enumerator = methodDef.GetParameters().GetEnumerator()
-                    while enumerator.MoveNext() && not found do
-                        first <- enumerator.Current
-                        found <- true
-                    if found then first else ParameterHandle()
-                metadataBuilder.AddMethodDefinition(
-                    methodDef.Attributes,
-                    methodDef.ImplAttributes,
-                    methodNameHandle,
-                    signatureHandle,
-                    update.CodeOffset,
-                    parameterHandle
-                ) |> ignore)
+                    let bodyUpdate = builder.AddMethodBody(methodToken, localSigToken, ilBytes)
+                    let entry : DeltaMetadataWriter.MethodMetadataUpdate =
+                        { MethodToken = methodToken
+                          MethodHandle = methodHandle
+                          Body = bodyUpdate }
+                    Some entry)
 
     let updatedTypeTokens =
         let methodTypeNames =
@@ -230,27 +215,17 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         resolvedMethods
         |> List.choose (fun (_, _, _, key) -> request.Baseline.MethodTokens |> Map.tryFind key)
 
-    updatedTypeTokens
-    |> List.iter (fun token ->
-        let row = token &&& 0x00FFFFFF
-        builder.AddEncLogEntry(TableIndex.TypeDef, row, EditAndContinueOperation.Default)
-        builder.AddEncMapEntry(TableIndex.TypeDef, row))
-
-    updatedMethodTokens
-    |> List.iter (fun token ->
-        let row = token &&& 0x00FFFFFF
-        builder.AddEncLogEntry(TableIndex.MethodDef, row, EditAndContinueOperation.Default)
-        builder.AddEncMapEntry(TableIndex.MethodDef, row))
+    let metadataDelta = DeltaMetadataWriter.emit metadataReader encId encBaseId methodUpdates
 
     let streams = builder.Build(moduleName, moduleMvid, encId, Some encBaseId)
 
     { emptyDelta with
-        Metadata = streams.Metadata
+        Metadata = metadataDelta.Metadata
         IL = streams.IL
         UpdatedTypeTokens = updatedTypeTokens
         UpdatedMethodTokens = updatedMethodTokens
-        EncLog = streams.EncLogEntries |> List.toArray
-        EncMap = streams.EncMapEntries |> List.toArray
+        EncLog = metadataDelta.EncLog
+        EncMap = metadataDelta.EncMap
         MethodBodies = streams.MethodBodies
         StandaloneSignatures = streams.StandaloneSignatures
         GenerationId = encId

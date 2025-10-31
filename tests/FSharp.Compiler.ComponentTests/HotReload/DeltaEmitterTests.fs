@@ -137,7 +137,6 @@ module DeltaEmitterTests =
         Assert.NotEqual(Guid.Empty, delta.BaseGenerationId)
         let expectedEncLog =
             [|
-                (TableIndex.TypeDef, 0x00000001, EditAndContinueOperation.Default)
                 (TableIndex.MethodDef, 0x00000001, EditAndContinueOperation.Default)
             |]
 
@@ -145,7 +144,6 @@ module DeltaEmitterTests =
 
         let expectedEncMap =
             [|
-                (TableIndex.TypeDef, 0x00000001)
                 (TableIndex.MethodDef, 0x00000001)
             |]
 
