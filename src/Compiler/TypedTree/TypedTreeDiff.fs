@@ -86,8 +86,36 @@ let private hashList (items: seq<int>) =
 
     acc
 
+let private normalizeTypeString (text: string) =
+    let sb = StringBuilder(text.Length)
+    let mutable i = 0
+    let mutable skipParen = 0
+    let solvedMarker = " (solved: "
+
+    while i < text.Length do
+        let ch = text[i]
+        if ch = '?' then
+            let mutable j = i + 1
+            while j < text.Length && Char.IsDigit text[j] do
+                j <- j + 1
+
+            if j < text.Length && text.AsSpan(j).StartsWith(solvedMarker.AsSpan()) then
+                i <- j + solvedMarker.Length
+                skipParen <- skipParen + 1
+            else
+                sb.Append ch |> ignore
+                i <- i + 1
+        elif ch = ')' && skipParen > 0 then
+            skipParen <- skipParen - 1
+            i <- i + 1
+        else
+            sb.Append ch |> ignore
+            i <- i + 1
+
+    sb.ToString().Replace("  ", " ").Trim()
+
 let private tyToString (_: DisplayEnv) (ty: TType) =
-    sprintf "%A" ty
+    normalizeTypeString (ty.ToString())
 
 let private constDigest (c: Const) =
     match c with
@@ -377,7 +405,8 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
                       Message = "Inline annotation changed." }
                 )
             elif baselineBinding.BodyHash <> updatedBinding.BodyHash then
-                handleEdit baselineBinding SemanticEditKind.MethodBody (Some baselineBinding.BodyHash) (Some updatedBinding.BodyHash)
+                if not baselineBinding.IsSynthesized then
+                    handleEdit baselineBinding SemanticEditKind.MethodBody (Some baselineBinding.BodyHash) (Some updatedBinding.BodyHash)
         | None ->
             rude.Add(
                 { Symbol = Some baselineBinding.Symbol

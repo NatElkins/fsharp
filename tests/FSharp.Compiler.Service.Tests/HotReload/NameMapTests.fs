@@ -1,5 +1,6 @@
 namespace FSharp.Compiler.Service.Tests.HotReload
 
+open System
 open Xunit
 
 open FSharp.Compiler.HotReloadNameMap
@@ -22,6 +23,12 @@ module NameMapTests =
         Assert.Equal(first, replayFirst)
         Assert.Equal(second, replaySecond)
 
+    let private hasLineNumberSuffix (name: string) =
+        let atIndex = name.IndexOf('@')
+        atIndex >= 0
+        && atIndex + 1 < name.Length
+        && Char.IsDigit name[atIndex + 1]
+
     [<Fact>]
     let ``generated names avoid source line suffixes`` () =
         let map = HotReloadNameMap()
@@ -30,5 +37,5 @@ module NameMapTests =
         let name = map.GetOrAddName "closure"
         let another = map.GetOrAddName "closure"
 
-        Assert.DoesNotContain("@", name)
-        Assert.DoesNotContain("@", another)
+        Assert.False(hasLineNumberSuffix name, $"Expected '{name}' to avoid line-number suffixes.")
+        Assert.False(hasLineNumberSuffix another, $"Expected '{another}' to avoid line-number suffixes.")

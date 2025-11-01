@@ -8,6 +8,7 @@ open FSharp.Compiler
 open Xunit
 
 open FSharp.Compiler.CodeAnalysis
+open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.Text
 open FSharp.Compiler.Text.Range
 open FSharp.Compiler.TypedTree
@@ -58,6 +59,12 @@ type private DiffTestHarness() =
             checker.ParseAndCheckProject(projectOptions)
             |> Async.RunImmediate
 
+        if projectResults.HasCriticalErrors then
+            let errors =
+                projectResults.Diagnostics
+                |> Array.choose (fun diag -> if diag.Severity = FSharpDiagnosticSeverity.Error then Some diag.Message else None)
+            failwithf "Compilation failed: %A" errors
+
         let tupleItems =
             typedImplementationFilesProperty.GetValue(projectResults)
             |> FSharpValue.GetTupleFields
@@ -65,9 +72,18 @@ type private DiffTestHarness() =
         let tcGlobals = tupleItems[0] :?> FSharp.Compiler.TcGlobals.TcGlobals
         let implFiles = tupleItems[3] :?> CheckedImplFile list
 
-        tcGlobals,
-        implFiles
-        |> List.find (fun (CheckedImplFile(qualifiedNameOfFile = qname)) -> String.Equals(qname.Text, "Library.fs", StringComparison.Ordinal))
+        let matches (CheckedImplFile(qualifiedNameOfFile = qname)) =
+            let text = qname.Text
+            String.Equals(text, "Library.fs", StringComparison.Ordinal)
+            || String.Equals(text, "Library", StringComparison.Ordinal)
+            || String.Equals(text, "Test", StringComparison.Ordinal)
+
+        let implFile =
+            match List.tryFind matches implFiles with
+            | Some impl -> impl
+            | None -> failwithf "Could not locate Library implementation file. Available files: %A" (implFiles |> List.map (fun (CheckedImplFile(qualifiedNameOfFile = qname)) -> qname.Text))
+
+        tcGlobals, implFile
 
     member _.Diff baseline updated =
         let tcGlobals, baselineImpl = baseline

@@ -81,6 +81,7 @@
     <Compile Include="WarnScopeTests.fs" />
     <Compile Include="HotReload/TypedTreeDiffTests.fs" />
     <Compile Include="HotReload/NameMapTests.fs" />
+    <Compile Include="HotReload/RudeEditDiagnosticsTests.fs" />
   </ItemGroup>
 
 	<ItemGroup>
