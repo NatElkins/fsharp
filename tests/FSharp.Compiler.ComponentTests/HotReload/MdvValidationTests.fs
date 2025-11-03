@@ -1,0 +1,717 @@
+#nowarn "57"
+
+namespace FSharp.Compiler.ComponentTests.HotReload
+
+open System
+open System.Diagnostics
+open System.IO
+open System.Reflection.PortableExecutable
+open System.Reflection.Metadata
+open Xunit
+open Xunit.Sdk
+open System
+open System.Text
+open System.Threading
+
+open FSharp.Compiler
+open FSharp.Compiler.CodeAnalysis
+open FSharp.Compiler.HotReload
+open FSharp.Compiler.HotReloadBaseline
+open FSharp.Compiler.Text
+open FSharp.Compiler.AbstractIL.IL
+open FSharp.Compiler.AbstractIL.ILBinaryReader
+open FSharp.Compiler.AbstractIL.ILPdbWriter
+open FSharp.Compiler.TypedTree
+open FSharp.Test
+open Internal.Utilities
+
+module ILWriter = FSharp.Compiler.AbstractIL.ILBinaryWriter
+
+[<Collection(nameof NotThreadSafeResourceCollection)>]
+module MdvValidationTests =
+
+    let private assertGenerationContains (output: string) (generation: int) (expectedSubstring: string) =
+        let marker = $">>> Generation {generation}:"
+        let index = output.IndexOf(marker, StringComparison.Ordinal)
+        Assert.True(index >= 0, $"mdv output did not contain marker '{marker}'. Full output:{Environment.NewLine}{output}")
+        let slice = output.Substring(index)
+        Assert.Contains(expectedSubstring, slice)
+
+    let private containsSubsequence (source: byte[]) (pattern: byte[]) =
+        if pattern.Length = 0 then
+            true
+        else
+            let sourceSpan = ReadOnlySpan(source)
+            let patternSpan = ReadOnlySpan(pattern)
+            MemoryExtensions.IndexOf(sourceSpan, patternSpan) >= 0
+
+    let private createTempProject () =
+        let root = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-tests", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        let fsPath = Path.Combine(root, "Library.fs")
+        let dllPath = Path.Combine(root, "Library.dll")
+        root, fsPath, dllPath
+
+    type private TemporaryDirectory() =
+        let path = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-build", Guid.NewGuid().ToString("N"))
+        do Directory.CreateDirectory(path) |> ignore
+        member _.Path = path
+        interface IDisposable with
+            member _.Dispose() =
+                try
+                    if Directory.Exists(path) then Directory.Delete(path, true)
+                with _ -> ()
+
+    let private writeCaptureTargets directory =
+        let targetsPath = Path.Combine(directory, "FscWatchCapture.targets")
+        let content =
+            """
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Target Name="FscWatchCaptureArgs" AfterTargets="CoreCompile">
+    <WriteLinesToFile File="$(FscWatchCommandLineLog)" Lines="@(FscCommandLineArgs)" Overwrite="true" />
+  </Target>
+</Project>
+"""
+        File.WriteAllText(targetsPath, content)
+        targetsPath
+
+    let private runProcess workingDirectory exe args =
+        let psi = ProcessStartInfo()
+        psi.FileName <- exe
+        args |> List.iter psi.ArgumentList.Add
+        psi.WorkingDirectory <- workingDirectory
+        psi.RedirectStandardOutput <- true
+        psi.RedirectStandardError <- true
+        psi.UseShellExecute <- false
+
+        use proc = new Process()
+        proc.StartInfo <- psi
+        if not (proc.Start()) then failwithf "Failed to start process '%s'." exe
+
+        let stdoutTask = proc.StandardOutput.ReadToEndAsync()
+        let stderrTask = proc.StandardError.ReadToEndAsync()
+        proc.WaitForExit()
+        stdoutTask.Wait()
+        stderrTask.Wait()
+        proc.ExitCode, stdoutTask.Result, stderrTask.Result
+
+    let private getFscCommandLine (projectPath: string) (configuration: string option) (targetFramework: string option) =
+        let projectFullPath = Path.GetFullPath(projectPath)
+        if not (File.Exists(projectFullPath)) then
+            invalidArg "projectPath" ($"Project file '{projectFullPath}' was not found.")
+
+        use tempDir = new TemporaryDirectory()
+        let captureTargets = writeCaptureTargets tempDir.Path
+        let argsFile = Path.Combine(tempDir.Path, "fsc-watch.args")
+
+        let baseArgs =
+            [ "msbuild"
+              "/restore"
+              projectFullPath
+              "/t:Build"
+              "/p:ProvideCommandLineArgs=true"
+              $"/p:FscWatchCommandLineLog=\"{argsFile}\""
+              $"/p:CustomAfterMicrosoftCommonTargets=\"{captureTargets}\""
+              "/nologo"
+              "/v:quiet" ]
+
+        let argsWithConfiguration =
+            match configuration with
+            | Some value -> baseArgs @ [ $"/p:Configuration={value}" ]
+            | None -> baseArgs
+
+        let fullArgs =
+            match targetFramework with
+            | Some value -> argsWithConfiguration @ [ $"/p:TargetFramework={value}" ]
+            | None -> argsWithConfiguration
+
+        let projectDirectory =
+            match Path.GetDirectoryName(projectFullPath) with
+            | null | "" -> Directory.GetCurrentDirectory()
+            | value -> value
+
+        let exitCode, stdout, stderr = runProcess projectDirectory "dotnet" fullArgs
+        if exitCode <> 0 then
+            failwithf "dotnet msbuild exited with code %d.%sSTDOUT:%s%sSTDERR:%s" exitCode Environment.NewLine stdout Environment.NewLine stderr
+
+        if not (File.Exists(argsFile)) then
+            failwith "Failed to capture F# compiler command-line arguments."
+
+        File.ReadAllLines(argsFile)
+        |> Array.collect (fun line ->
+            line.Split([| ';' |], StringSplitOptions.RemoveEmptyEntries)
+            |> Array.map (fun arg -> arg.Trim()))
+        |> Array.filter (fun arg -> not (String.IsNullOrWhiteSpace(arg)))
+
+    let private ensureHotReloadOption (commandLine: string[]) =
+        let normalized =
+            let result = ResizeArray<string>(commandLine.Length + 1)
+            let mutable awaitingOutArgument = false
+
+            for arg in commandLine do
+                if awaitingOutArgument then
+                    let trimmed = arg.Trim().Trim('"')
+                    result.Add("--out:" + trimmed)
+                    awaitingOutArgument <- false
+                else if arg.StartsWith("-o:", StringComparison.OrdinalIgnoreCase) then
+                    result.Add("--out:" + arg.Substring(3))
+                elif String.Equals(arg, "-o", StringComparison.OrdinalIgnoreCase) then
+                    awaitingOutArgument <- true
+                else
+                    result.Add(arg)
+
+            if awaitingOutArgument then
+                failwith "Malformed compiler command line: '-o' specified without output path."
+
+            result.ToArray()
+
+        if normalized |> Array.exists (fun arg -> arg.StartsWith("--enable:hotreloaddeltas", StringComparison.OrdinalIgnoreCase)) then
+            normalized
+        else
+            Array.append normalized [| "--enable:hotreloaddeltas" |]
+
+    let private sanitizeOptions (options: string[]) =
+        options
+        |> Array.filter (fun opt ->
+            not (opt.Equals("--times", StringComparison.OrdinalIgnoreCase))
+            && not (opt.StartsWith("--sourcelink:", StringComparison.OrdinalIgnoreCase)))
+        |> Array.map (fun opt ->
+            if opt.StartsWith("-o:", StringComparison.OrdinalIgnoreCase) then
+                "--out:" + opt.Substring(3)
+            else
+                opt)
+
+    let private prepareCompileInputs (projectFilePath: string) (commandLine: string[]) =
+        let projectDirectory =
+            match Path.GetDirectoryName(projectFilePath) with
+            | null | "" -> Directory.GetCurrentDirectory()
+            | value -> value
+
+        let normalizePath (path: string) =
+            let trimmed = path.Trim().Trim('"')
+            if Path.IsPathRooted(trimmed) then
+                trimmed
+            else
+                Path.GetFullPath(trimmed, projectDirectory)
+
+        let sanitized = sanitizeOptions commandLine
+
+        let resolvedArgs = ResizeArray<string>(sanitized.Length)
+        let sourceFiles = ResizeArray<string>()
+
+        for arg in sanitized do
+            if arg.StartsWith("--out:", StringComparison.OrdinalIgnoreCase) then
+                let value = arg.Substring("--out:".Length)
+                resolvedArgs.Add("--out:" + normalizePath value)
+            elif arg.StartsWith("--embed:", StringComparison.OrdinalIgnoreCase) then
+                let value = arg.Substring("--embed:".Length)
+                resolvedArgs.Add("--embed:" + normalizePath value)
+            elif arg.EndsWith(".fs", StringComparison.OrdinalIgnoreCase) then
+                let fullPath = normalizePath arg
+                resolvedArgs.Add(fullPath)
+                sourceFiles.Add(fullPath)
+            else
+                resolvedArgs.Add(arg)
+
+        resolvedArgs.ToArray(), sourceFiles.ToArray()
+
+    let private compileProject (checker: FSharpChecker) (fsPath: string) (dllPath: string) (source: string) =
+        File.WriteAllText(fsPath, source)
+
+        let projectOptions, _ =
+            checker.GetProjectOptionsFromScript(
+                fsPath,
+                SourceText.ofString source,
+                assumeDotNetFramework = false,
+                useSdkRefs = true,
+                useFsiAuxLib = false
+            )
+            |> Async.RunSynchronously
+
+        let projectOptions =
+            { projectOptions with
+                SourceFiles = [| fsPath |]
+                OtherOptions =
+                    projectOptions.OtherOptions
+                    |> Array.append
+                        [| "--target:library"
+                           "--langversion:preview"
+                           "--optimize-"
+                           "--debug:portable"
+                           $"--out:{dllPath}" |] }
+
+        let projectResults =
+            checker.ParseAndCheckProject(projectOptions)
+            |> Async.RunSynchronously
+
+        let errors =
+            projectResults.Diagnostics
+            |> Array.filter (fun d -> d.Severity = FSharp.Compiler.Diagnostics.FSharpDiagnosticSeverity.Error)
+
+        match errors with
+        | [||] -> ()
+        | _ -> failwithf "Compilation failed: %A" (errors |> Array.map (fun d -> d.Message))
+
+        let compileDiagnostics, compileException =
+            checker.Compile(Array.append [| "fsc.exe" |] (Array.append projectOptions.OtherOptions [| fsPath |]))
+            |> Async.RunSynchronously
+
+        let compileErrors =
+            compileDiagnostics
+            |> Array.filter (fun diagnostic -> diagnostic.Severity = FSharp.Compiler.Diagnostics.FSharpDiagnosticSeverity.Error)
+
+        match compileErrors, compileException with
+        | [||], None -> projectOptions, projectResults
+        | errs, _ -> failwithf "Compilation produced errors: %A" (errs |> Array.map (fun d -> d.Message))
+
+    let private createBaseline (tcGlobals: FSharp.Compiler.TcGlobals.TcGlobals) (dllPath: string) =
+        let pdbPath = Path.ChangeExtension(dllPath, ".pdb")
+
+        let ilModule =
+            let options : ILReaderOptions =
+                { pdbDirPath = None
+                  reduceMemoryUsage = ReduceMemoryFlag.Yes
+                  metadataOnly = MetadataOnlyFlag.No
+                  tryGetMetadataSnapshot = fun _ -> None }
+
+            use reader = OpenILModuleReader dllPath options
+            reader.ILModuleDef
+
+        let writerOptions: ILWriter.options =
+            { ilg = tcGlobals.ilg
+              outfile = dllPath
+              pdbfile = Some pdbPath
+              emitTailcalls = false
+              deterministic = true
+              portablePDB = true
+              embeddedPDB = false
+              embedAllSource = false
+              embedSourceList = []
+              allGivenSources = []
+              sourceLink = ""
+              checksumAlgorithm = HashAlgorithm.Sha256
+              signer = None
+              dumpDebugInfo = false
+              referenceAssemblyOnly = false
+              referenceAssemblyAttribOpt = None
+              referenceAssemblySignatureHash = None
+              pathMap = PathMap.empty }
+
+        let assemblyBytes, pdbBytesOpt, tokenMappings, metadataSnapshot =
+            ILWriter.WriteILBinaryInMemoryWithArtifacts(writerOptions, ilModule, id)
+
+        let moduleId =
+            use peReader = new System.Reflection.PortableExecutable.PEReader(new MemoryStream(assemblyBytes, false))
+            let metadataReader = peReader.GetMetadataReader()
+            let moduleDef = metadataReader.GetModuleDefinition()
+            if moduleDef.Mvid.IsNil then Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
+
+        let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
+
+        HotReloadBaseline.create ilModule tokenMappings metadataSnapshot moduleId portablePdbSnapshot
+
+    let private getTypedAssembly (projectResults: FSharpCheckProjectResults) =
+        let property =
+            typeof<FSharpCheckProjectResults>.GetProperty(
+                "TypedImplementationFiles",
+                Reflection.BindingFlags.Instance ||| Reflection.BindingFlags.NonPublic ||| Reflection.BindingFlags.Public
+            )
+
+        let tupleItems = property.GetValue(projectResults) |> Microsoft.FSharp.Reflection.FSharpValue.GetTupleFields
+        let tcGlobals = tupleItems[0] :?> FSharp.Compiler.TcGlobals.TcGlobals
+        let implFiles = tupleItems[3] :?> FSharp.Compiler.TypedTree.CheckedImplFile list
+
+        tcGlobals,
+        implFiles
+        |> List.map (fun implFile ->
+            { ImplFile = implFile
+              OptimizeDuringCodeGen = fun _ expr -> expr })
+        |> FSharp.Compiler.TypedTree.CheckedAssemblyAfterOptimization
+
+    let private runMdv baselinePath deltaMeta deltaIl =
+        let args =
+            [ baselinePath
+              $"/g:{deltaMeta};{deltaIl}" ]
+        let psi =
+            ProcessStartInfo(
+                FileName = "mdv",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            )
+        args |> List.iter psi.ArgumentList.Add
+        use proc = new Process()
+        proc.StartInfo <- psi
+        if not (proc.Start()) then failwith "Failed to start mdv."
+        let output = proc.StandardOutput.ReadToEnd()
+        let errors = proc.StandardError.ReadToEnd()
+        proc.WaitForExit()
+        if proc.ExitCode <> 0 then
+            if
+                proc.ExitCode = 150
+                && errors.IndexOf("install or update .NET", StringComparison.OrdinalIgnoreCase) >= 0
+            then
+                None
+            else
+                failwithf "mdv exited with %d. stdout:%s stderr:%s" proc.ExitCode output errors
+        else
+            Some output
+
+    [<Fact>]
+    let ``mdv shows updated user string in Generation 1`` () =
+        let checker =
+            FSharpChecker.Create(
+                keepAssemblyContents = true,
+                enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                captureIdentifiersWhenParsing = false
+            )
+
+        let projectDir, fsPath, dllPath = createTempProject ()
+        let baselineSource =
+            """
+namespace Sample
+
+type Greeter =
+    static member Message () = "Message version 1"
+"""
+        let updatedSource =
+            """
+namespace Sample
+
+type Greeter =
+    static member Message () = "Message version 2"
+"""
+
+        let service = FSharpEditAndContinueLanguageService.Instance
+
+        try
+            // Baseline compilation + session
+            let _, baselineResults = compileProject checker fsPath dllPath baselineSource
+            let tcGlobals, baselineImpl = getTypedAssembly baselineResults
+            let baseline = createBaseline tcGlobals dllPath
+
+            service.EndSession()
+            service.StartSession(baseline, baselineImpl)
+
+            // Updated compilation
+            let _, updatedResults = compileProject checker fsPath dllPath updatedSource
+            let updatedTcGlobals, updatedImpl = getTypedAssembly updatedResults
+
+            let updatedModule =
+                let options : ILReaderOptions =
+                    { pdbDirPath = None
+                      reduceMemoryUsage = ReduceMemoryFlag.Yes
+                      metadataOnly = MetadataOnlyFlag.No
+                      tryGetMetadataSnapshot = fun _ -> None }
+
+                use reader = OpenILModuleReader dllPath options
+                reader.ILModuleDef
+
+            match service.EmitDeltaForCompilation(updatedTcGlobals, updatedImpl, updatedModule) with
+            | Error error -> failwithf "EmitDeltaForCompilation failed: %A" error
+            | Ok result ->
+                printfn "Updated method tokens: %A" result.Delta.UpdatedMethodTokens
+                printfn "EncLog entries: %A" result.Delta.EncLog
+                let tokenNames =
+                    result.Delta.UpdatedMethodTokens
+                    |> List.map (fun token ->
+                        let name =
+                            baseline.MethodTokens
+                            |> Map.toSeq
+                            |> Seq.tryFind (fun (_, t) -> t = token)
+                            |> Option.map (fun (key, _) -> key.DeclaringType, key.Name)
+                        token, name)
+                tokenNames |> List.iter (fun (token, name) -> printfn "Token %08x -> %A" token name)
+                // Persist artifacts for inspection.
+                let deltaDir = Path.Combine(projectDir, "delta")
+                Directory.CreateDirectory(deltaDir) |> ignore
+                let metadataPath = Path.Combine(deltaDir, "1.meta")
+                let ilPath = Path.Combine(deltaDir, "1.il")
+                File.WriteAllBytes(metadataPath, result.Delta.Metadata)
+                File.WriteAllBytes(ilPath, result.Delta.IL)
+
+                let expectedLiteral = Text.Encoding.Unicode.GetBytes("Message version 2")
+                Assert.True(
+                    containsSubsequence result.Delta.Metadata expectedLiteral,
+                    "Expected Generation 1 metadata to contain updated user string 'Message version 2'."
+                )
+
+                // Invoke mdv and assert generation 1 contains the updated literal.
+                match runMdv dllPath metadataPath ilPath with
+                | Some output ->
+                    printfn "mdv output (EmitDeltaForCompilation):%s%s" Environment.NewLine output
+                    Assert.Contains("Generation 1", output)
+                    Assert.Contains("Message version 2", output)
+                    assertGenerationContains output 1 "Message version 2"
+                | None ->
+                    printfn "mdv not available; skipping textual verification for EmitDeltaForCompilation scenario."
+        finally
+            try checker.InvalidateAll() with _ -> ()
+            try service.EndSession() with _ -> ()
+            try Directory.Delete(projectDir, true) with _ -> ()
+
+    let private createMsbuildProject () =
+        let root = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-project", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(root) |> ignore
+        let projectPath = Path.Combine(root, "WatchLoop.fsproj")
+        let fsPath = Path.Combine(root, "Program.fs")
+        let projectContents =
+            """
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.fs" />
+  </ItemGroup>
+</Project>
+"""
+        File.WriteAllText(projectPath, projectContents)
+        root, projectPath, fsPath
+
+    let private tryGetOutputPath (projectFilePath: string) (options: FSharpProjectOptions) =
+        let projectDirectory =
+            match Path.GetDirectoryName(projectFilePath) with
+            | null | "" -> Directory.GetCurrentDirectory()
+            | value -> value
+
+        let trimQuotes (text: string) = text.Trim().Trim('"')
+
+        let toAbsolute path =
+            let candidate = trimQuotes path
+            if Path.IsPathRooted(candidate) then
+                candidate
+            else
+                Path.GetFullPath(candidate, projectDirectory)
+
+        let tryFromLongForm =
+            options.OtherOptions
+            |> Array.tryPick (fun opt ->
+                if opt.StartsWith("--out:", StringComparison.OrdinalIgnoreCase) then
+                    opt.Substring("--out:".Length) |> toAbsolute |> Some
+                elif opt.StartsWith("-o:", StringComparison.OrdinalIgnoreCase) then
+                    opt.Substring("-o:".Length) |> toAbsolute |> Some
+                else
+                    None)
+
+        match tryFromLongForm with
+        | Some path -> Some path
+        | None ->
+            match options.OtherOptions |> Array.tryFindIndex (fun opt -> String.Equals(opt, "-o", StringComparison.OrdinalIgnoreCase)) with
+            | Some idx when idx + 1 < options.OtherOptions.Length ->
+                options.OtherOptions[idx + 1] |> toAbsolute |> Some
+            | _ -> None
+    [<Fact>]
+    let ``FSharpChecker.EmitHotReloadDelta produces IL/metadata deltas`` () =
+        let checker =
+            FSharpChecker.Create(
+                keepAssemblyContents = true,
+                enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                captureIdentifiersWhenParsing = false
+            )
+
+        let projectDir, fsPath, dllPath = createTempProject ()
+        let baselineSource =
+            """
+namespace SampleChecker
+
+type Greeter =
+    static member Message () = "Checker version 1"
+"""
+        let updatedSource =
+            """
+namespace SampleChecker
+
+type Greeter =
+    static member Message () = "Checker version 2"
+"""
+
+        try
+            // Baseline build and start session via FSharpChecker
+            let baselineOptions, _ = compileProject checker fsPath dllPath baselineSource
+            match checker.StartHotReloadSession(baselineOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "StartHotReloadSession failed: %A" error
+            | Ok () -> ()
+
+            // Updated build (writes the new assembly)
+            let updatedOptions, _ = compileProject checker fsPath dllPath updatedSource
+            let deltaResult = checker.EmitHotReloadDelta(updatedOptions) |> Async.RunSynchronously
+
+            match deltaResult with
+            | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
+            | Ok delta ->
+                Assert.NotEmpty(delta.Metadata)
+                Assert.NotEmpty(delta.IL)
+                // Persist artifacts
+                let deltaDir = Path.Combine(projectDir, "checker-delta")
+                Directory.CreateDirectory(deltaDir) |> ignore
+                let metadataPath = Path.Combine(deltaDir, "1.meta")
+                let ilPath = Path.Combine(deltaDir, "1.il")
+                File.WriteAllBytes(metadataPath, delta.Metadata)
+                File.WriteAllBytes(ilPath, delta.IL)
+
+                let expectedLiteral = Text.Encoding.Unicode.GetBytes("Checker version 2")
+                Assert.True(
+                    containsSubsequence delta.Metadata expectedLiteral,
+                    "Expected Generation 1 metadata to contain updated user string 'Checker version 2'."
+                )
+
+                match runMdv dllPath metadataPath ilPath with
+                | Some output ->
+                    printfn "mdv output (EmitHotReloadDelta):%s%s" Environment.NewLine output
+                    Assert.Contains("Generation 1", output)
+                    Assert.Contains("Checker version 2", output)
+                    assertGenerationContains output 1 "Checker version 2"
+                | None ->
+                    printfn "mdv not available; skipping textual verification for EmitHotReloadDelta scenario."
+        finally
+            try checker.InvalidateAll() with _ -> ()
+            try checker.EndHotReloadSession() with _ -> ()
+            try Directory.Delete(projectDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``hot reload delta from project options updates user string literal`` () =
+        let checker =
+            FSharpChecker.Create(
+                keepAssemblyContents = true,
+                enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                captureIdentifiersWhenParsing = false
+            )
+
+        let projectRoot, projectPath, fsPath = createMsbuildProject ()
+        let baselineSource =
+            """
+namespace WatchLoop
+
+module Target =
+    let Message () = "Message version project baseline"
+"""
+
+        let updatedSource =
+            """
+namespace WatchLoop
+
+module Target =
+    let Message () = "Message version project updated"
+"""
+
+        let cleanup () =
+            try checker.EndHotReloadSession() with _ -> ()
+            try checker.InvalidateAll() with _ -> ()
+            try Directory.Delete(projectRoot, true) with _ -> ()
+
+        let originalCwd = Directory.GetCurrentDirectory()
+
+        try
+            Directory.SetCurrentDirectory(projectRoot)
+            checker.InvalidateAll() |> ignore
+            File.WriteAllText(fsPath, baselineSource)
+            let commandLine = getFscCommandLine projectPath (Some "Debug") (Some "net10.0") |> ensureHotReloadOption
+            let normalizedArgs, sourceFiles = prepareCompileInputs projectPath commandLine
+            Assert.True(sourceFiles.Length > 0, "Expected baseline command line to include at least one source file.")
+            let projectOptionsRaw = checker.GetProjectOptionsFromCommandLineArgs(projectPath, commandLine)
+            let baselineTimestamp = DateTime.UtcNow
+            let projectOptions =
+                { projectOptionsRaw with
+                    OtherOptions = normalizedArgs
+                    SourceFiles = sourceFiles
+                    LoadTime = baselineTimestamp
+                    Stamp = Some baselineTimestamp.Ticks }
+
+            let outputPath =
+                tryGetOutputPath projectPath projectOptions
+                |> Option.defaultWith (fun () -> failwith "Unable to determine --out path from project options.")
+
+            let compile includeHotReloadCapture (args: string[]) =
+                let actualArgs =
+                    if includeHotReloadCapture then
+                        args
+                    else
+                        args |> Array.filter (fun arg -> not (arg.StartsWith("--enable:hotreloaddeltas", StringComparison.OrdinalIgnoreCase)))
+
+                let originalDirectory = Directory.GetCurrentDirectory()
+                let diagnostics, exnOpt =
+                    try
+                        Directory.SetCurrentDirectory(projectRoot)
+                        checker.Compile(actualArgs) |> Async.RunSynchronously
+                    finally
+                        Directory.SetCurrentDirectory(originalDirectory)
+                let errors =
+                    diagnostics
+                    |> Array.filter (fun d -> d.Severity = FSharp.Compiler.Diagnostics.FSharpDiagnosticSeverity.Error)
+
+                match errors, exnOpt with
+                | [||], None -> ()
+                | errs, exceptionOpt ->
+                    let diagnosticMessages = errs |> Array.map (fun d -> d.Message)
+                    let exceptionMessages =
+                        match exceptionOpt with
+                        | Some ex -> [| ex.Message |]
+                        | None -> [||]
+                    let messages = Array.append diagnosticMessages exceptionMessages
+
+                    let message =
+                        if messages.Length = 0 then
+                            "Compilation failed with unknown error."
+                        else
+                            String.Join("; ", messages)
+
+                    failwith message
+
+            let compileArgs = Array.append [| "fsc.exe" |] normalizedArgs
+
+            compile true compileArgs
+
+            let baselineCopy = Path.Combine(projectRoot, "baseline.dll")
+            File.Copy(outputPath, baselineCopy, true)
+
+            match checker.StartHotReloadSession(projectOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "StartHotReloadSession failed: %A" error
+            | Ok () -> ()
+
+            File.WriteAllText(fsPath, updatedSource)
+            let updatedCommandLine = getFscCommandLine projectPath (Some "Debug") (Some "net10.0") |> ensureHotReloadOption
+            let updatedArgs, updatedSourceFiles = prepareCompileInputs projectPath updatedCommandLine
+            Assert.True(updatedSourceFiles.Length > 0, "Expected updated command line to include source files.")
+            let updatedOptionsRaw = checker.GetProjectOptionsFromCommandLineArgs(projectPath, updatedCommandLine)
+            let updatedTimestamp = DateTime.UtcNow
+            let updatedOptions =
+                { updatedOptionsRaw with
+                    OtherOptions = updatedArgs
+                    SourceFiles = updatedSourceFiles
+                    LoadTime = updatedTimestamp
+                    Stamp = Some updatedTimestamp.Ticks }
+            let updatedCompileArgs = Array.append [| "fsc.exe" |] updatedArgs
+            checker.NotifyFileChanged(fsPath, updatedOptions) |> Async.RunSynchronously
+            compile false updatedCompileArgs
+
+            Thread.Sleep 200
+
+            match checker.EmitHotReloadDelta(projectOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
+            | Ok delta ->
+                let deltaDir = Path.Combine(projectRoot, "project-delta")
+                Directory.CreateDirectory(deltaDir) |> ignore
+                let metadataPath = Path.Combine(deltaDir, "1.meta")
+                let ilPath = Path.Combine(deltaDir, "1.il")
+                File.WriteAllBytes(metadataPath, delta.Metadata)
+                File.WriteAllBytes(ilPath, delta.IL)
+
+                let expectedLiteral = Text.Encoding.Unicode.GetBytes("Message version project updated")
+                Assert.True(
+                    containsSubsequence delta.Metadata expectedLiteral,
+                    "Expected delta metadata to include updated literal from project build."
+                )
+
+                match runMdv baselineCopy metadataPath ilPath with
+                | Some output ->
+                    Assert.Contains("Generation 1", output)
+                    assertGenerationContains output 1 "Message version project updated"
+                | None ->
+                    printfn "mdv not available; skipping Generation 1 verification for project options scenario."
+        finally
+            try Directory.SetCurrentDirectory(originalCwd) with _ -> ()
+            cleanup ()
+
+    
