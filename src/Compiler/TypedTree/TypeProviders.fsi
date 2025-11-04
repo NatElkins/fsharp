@@ -492,6 +492,9 @@ type ProvidedAssemblyStaticLinkingMap =
     /// Create a new static linking map, ready to populate with data.
     static member CreateNew: unit -> ProvidedAssemblyStaticLinkingMap
 
+    /// Debug helper to print the contents of the static linking map.
+    member Dump: label: string -> unit
+
 /// Check if this is a direct reference to a non-embedded generated type. This is not permitted at any name resolution.
 /// We check by seeing if the type is absent from the remapping context.
 val IsGeneratedTypeDirectReference: Tainted<ProvidedType> * range -> bool

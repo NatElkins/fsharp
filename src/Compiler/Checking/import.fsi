@@ -10,6 +10,7 @@ open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.Text
 open FSharp.Compiler.Xml
 open FSharp.Compiler.TypedTree
+open FSharp.Compiler.TastReflect
 
 #if !NO_TYPEPROVIDERS
 open FSharp.Compiler.TypeProviders
@@ -34,7 +35,12 @@ type AssemblyLoader =
 
     /// Record a root for a [<Generate>] type to help guide static linking & type relocation
     abstract RecordGeneratedTypeRoot: ProviderGeneratedType -> unit
+
+    /// Record that a static parameter referenced the given type definition.
+    abstract RecordTypeDependency: TyconRef -> unit
 #endif
+
+    abstract GetTypeReflectionBuilder: unit -> TypeReflectionBuilder
 
 /// Represents a context used for converting AbstractIL .NET and provided types to F# internal compiler data structures.
 /// Also cache the conversion of AbstractIL ILTypeRef nodes, based on hashes of these.
@@ -51,6 +57,12 @@ type ImportMap =
 
     /// The TcGlobals for the import context
     member g: TcGlobals
+
+    /// Get the shared TypeReflectionBuilder for this import context.
+    member GetTypeReflectionBuilder: unit -> TypeReflectionBuilder
+
+    /// Project a TType into a System.Type using the reflection builder.
+    member ReflectType: topCcu: CcuThunk * ty: TType -> System.Type
 
 module Nullness =
 

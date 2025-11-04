@@ -589,6 +589,40 @@ let StaticLink (ctok, tcConfig: TcConfig, tcImports: TcImports, tcGlobals: TcGlo
                                     yield! loop (mkILTyRef (ilOrigScopeRef, td.Name)) td
                         ]
 
+                if debugStaticLinking then
+                    for KeyValue(k, td) in allTypeDefsInProviderGeneratedAssemblies do
+                        printfn "provider type cache contains key=%s name=%s" k.QualifiedName td.Name
+                    for _ccu, _scopeRef, ilModule in providerGeneratedILModules do
+                        match ilModule.Manifest with
+                        | Some manifest ->
+                            let rec dumpNested prefix scopeRef (nested: ILNestedExportedType) =
+                                let fullName =
+                                    if System.String.IsNullOrEmpty prefix then
+                                        nested.Name
+                                    else
+                                        prefix + "." + nested.Name
+
+                                printfn "provider exported nested type %s scope=%A" fullName scopeRef
+
+                                for child in nested.Nested.AsList() do
+                                    dumpNested fullName scopeRef child
+
+                            let rec dumpExported prefix scopeRef (et: ILExportedTypeOrForwarder) =
+                                let fullName =
+                                    if System.String.IsNullOrEmpty prefix then
+                                        et.Name
+                                    else
+                                        prefix + "." + et.Name
+
+                                printfn "provider exported type %s scope=%A forwarder=%b" fullName scopeRef et.IsForwarder
+
+                                for nested in et.Nested.AsList() do
+                                    dumpNested fullName scopeRef nested
+
+                            for et in manifest.ExportedTypes.AsList() do
+                                dumpExported "" et.ScopeRef et
+                        | None -> ()
+
                 // Debugging output
                 if debugStaticLinking then
                     for ProviderGeneratedType(ilOrigTyRef, _, _) in tcImports.ProviderGeneratedTypeRoots do

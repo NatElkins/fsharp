@@ -1446,6 +1446,11 @@ type ProvidedAssemblyStaticLinkingMap =
     static member CreateNew() = 
         { ILTypeMap = Dictionary() }
 
+    member map.Dump(label: string) =
+        printfn "[tp-staticlink-map][%s] entries=%d" label map.ILTypeMap.Count
+        for KeyValue(k,v) in map.ILTypeMap do
+            printfn "  remap %s -> %s" (k.ToString()) (v.ToString())
+
 /// Check if this is a direct reference to a non-embedded generated type. This is not permitted at any name resolution.
 /// We check by seeing if the type is absent from the remapping context.
 let IsGeneratedTypeDirectReference (st: Tainted<ProvidedType>, m) =

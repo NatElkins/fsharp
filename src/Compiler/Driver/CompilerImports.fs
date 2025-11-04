@@ -41,6 +41,7 @@ open FSharp.Compiler.TypedTree
 open FSharp.Compiler.TypedTreeBasics
 open FSharp.Compiler.TypedTreeOps
 open FSharp.Compiler.BuildGraph
+open FSharp.Compiler.TastReflect
 
 #if !NO_TYPEPROVIDERS
 open FSharp.Compiler.TypeProviders
@@ -1240,6 +1241,8 @@ and [<Sealed>] TcImports
         Dictionary<ILTypeRef, int * ProviderGeneratedType>()
 
     let tcImportsWeak = TcImportsWeakFacade(tciLock, WeakReference<_> this)
+
+    let typeProviderTypeDependencies = HashSet<TyconRef>()
 #endif
 
     let disposal =
@@ -1248,6 +1251,7 @@ and [<Sealed>] TcImports
 
     let mutable disposed = false // this doesn't need locking, it's only for debugging
     let mutable tcGlobals = None // this doesn't need locking, it's set during construction of the TcImports
+    let mutable typeReflectionBuilder : TypeReflectionBuilder option = None
 
     let CheckDisposed () =
         if disposed then
@@ -1325,6 +1329,11 @@ and [<Sealed>] TcImports
     member _.Weak =
         CheckDisposed()
         tcImportsWeak
+
+    member _.RecordTypeDependency tcref =
+        tciLock.AcquireLock(fun tcitok ->
+            RequireTcImportsLock(tcitok, typeProviderTypeDependencies)
+            typeProviderTypeDependencies.Add tcref |> ignore)
 #endif
 
     member _.RegisterCcu ccuInfo =
@@ -1462,16 +1471,69 @@ and [<Sealed>] TcImports
         match assembly with
         | Tainted.Null -> false, None
         | Tainted.NonNull assembly ->
+            let assemblyTypeName = assembly.PUntaint((fun a -> a.GetType().FullName), m)
+            printfn "[tp-assembly-info] assemblyType=%s" assemblyTypeName
             let aname = assembly.PUntaint((fun a -> a.GetName()), m)
+            printfn "[tp-assembly-info] assembly=%s" (aname.Name)
             let ilShortAssemName = string aname.Name
 
             match tcImports.FindCcu(ctok, m, ilShortAssemName, lookupOnly = true) with
             | ResolvedCcu ccu ->
                 if ccu.IsProviderGenerated then
                     let dllinfo = tcImports.FindDllInfo(ctok, m, ilShortAssemName)
+                    printfn "[tp-assembly-info] resolved provider-generated ccu=%s" ilShortAssemName
                     true, dllinfo.ProviderGeneratedStaticLinkMap
                 else
-                    false, None
+                    printfn "[tp-assembly-info] resolved non-generated ccu=%s -- upgrading to provider generated" ilShortAssemName
+                    let dllinfo = tcImports.FindDllInfo(ctok, m, ilShortAssemName)
+                    let actualAssembly = assembly.PUntaint((fun x -> x.Handle), m)
+                    let bytes =
+                        assembly
+                            .PApplyWithProvider((fun (assembly, provider) -> assembly.GetManifestModuleContents provider), m)
+                            .PUntaint(id, m)
+
+                    printfn "[tp-assembly-info] refreshing metadata for %s bytes=%d" dllinfo.FileName bytes.Length
+                    let dumpPath =
+                        Path.Combine(
+                            Path.GetTempPath(),
+                            $"fs1023-generated-{Guid.NewGuid():N}.dll")
+                    File.WriteAllBytes(dumpPath, bytes)
+                    printfn "[tp-assembly-info] wrote generated assembly snapshot to %s" dumpPath
+
+                    let tcConfig = tcConfigP.Get ctok
+
+                    let ilModule, ilAssemblyRefs =
+                        let opts: ILReaderOptions =
+                            {
+                                reduceMemoryUsage = tcConfig.reduceMemoryUsage
+                                pdbDirPath = None
+                                metadataOnly = MetadataOnlyFlag.Yes
+                                tryGetMetadataSnapshot = tcConfig.tryGetMetadataSnapshot
+                            }
+
+                        let reader = OpenILModuleReaderFromBytes dllinfo.FileName bytes opts
+                        reader.ILModuleDef, reader.ILAssemblyRefs
+
+                    let rawMetadata = RawFSharpAssemblyDataBackedByFileOnDisk(ilModule, ilAssemblyRefs)
+                    let mapOpt =
+                        if tcImports.GetTcGlobals().isInteractive then None
+                        else Some(ProvidedAssemblyStaticLinkingMap.CreateNew())
+                    let updatedDllInfo =
+                        { dllinfo with
+                            RawMetadata = rawMetadata
+                            ILAssemblyRefs = ilAssemblyRefs
+                            IsProviderGenerated = true
+                            ProviderGeneratedAssembly = Some actualAssembly
+                            ProviderGeneratedStaticLinkMap = mapOpt }
+                    tcImports.RegisterDll updatedDllInfo
+
+                    match tcImports.FindCcuInfo(ctok, m, ilShortAssemName, lookupOnly = false) with
+                    | ResolvedImportedAssembly(importedAssembly, _) ->
+                        let updatedCcuInfo = { importedAssembly with IsProviderGenerated = true }
+                        tcImports.RegisterCcu updatedCcuInfo
+                    | UnresolvedImportedAssembly _ -> ()
+
+                    true, mapOpt
 
             | UnresolvedCcu _ ->
                 let g = tcImports.GetTcGlobals()
@@ -1559,6 +1621,13 @@ and [<Sealed>] TcImports
                 true, dllinfo.ProviderGeneratedStaticLinkMap
 
     member _.RecordGeneratedTypeRoot root =
+        let rec dumpType indent (ProviderGeneratedType(ilOrig, ilRenamed, nested)) =
+            printfn "[tp-generated-root]%s orig=%s renamed=%s" indent (ilOrig.ToString()) (ilRenamed.ToString())
+            for child in nested do
+                dumpType (indent + "  ") child
+
+        dumpType "" root
+
         tciLock.AcquireLock(fun tcitok ->
             // checking if given ProviderGeneratedType was already recorded before (probably for another set of static parameters)
             let (ProviderGeneratedType(_, ilTyRef, _)) = root
@@ -1576,6 +1645,13 @@ and [<Sealed>] TcImports
         tciLock.AcquireLock(fun tcitok ->
             RequireTcImportsLock(tcitok, generatedTypeRoots)
             generatedTypeRoots.Values |> Seq.sortBy fst |> Seq.map snd |> Seq.toList)
+
+    member _.PopTypeProviderTypeDependencies() =
+        tciLock.AcquireLock(fun tcitok ->
+            RequireTcImportsLock(tcitok, typeProviderTypeDependencies)
+            let results = typeProviderTypeDependencies |> Seq.toList
+            typeProviderTypeDependencies.Clear()
+            results)
 #endif
 
     member private tcImports.AttachDisposeAction action =
@@ -1691,6 +1767,9 @@ and [<Sealed>] TcImports
 
                 member _.TryFindXmlDocumentationInfo assemblyName =
                     tcImports.TryFindXmlDocumentationInfo(assemblyName)
+
+                member _.GetTypeReflectionBuilder() =
+                    tcImports.GetTypeReflectionBuilder()
             }
 #else
             { new AssemblyLoader with
@@ -1704,9 +1783,33 @@ and [<Sealed>] TcImports
                     tcImports.GetProvidedAssemblyInfo(ctok, m, assembly)
 
                 member _.RecordGeneratedTypeRoot root = tcImports.RecordGeneratedTypeRoot root
+
+                member _.GetTypeReflectionBuilder() =
+                    tcImports.GetTypeReflectionBuilder()
+
+                member _.RecordTypeDependency tcref = tcImports.RecordTypeDependency tcref
             }
 #endif
         ImportMap(tcImports.GetTcGlobals(), loaderInterface)
+
+    member tcImports.GetTypeReflectionBuilder() =
+        CheckDisposed()
+
+        match typeReflectionBuilder with
+        | Some builder -> builder
+        | None ->
+            match tcGlobals with
+            | Some g ->
+                let builder = TypeReflectionBuilder g
+                typeReflectionBuilder <- Some builder
+                builder
+            | None ->
+                match importsBase with
+                | Some baseImports ->
+                    let builder = baseImports.GetTypeReflectionBuilder()
+                    typeReflectionBuilder <- Some builder
+                    builder
+                | None -> failwith "Type reflection builder requested before TcGlobals initialized"
 
     // Note the tcGlobals are only available once mscorlib and fslib have been established. For TcImports,
     // they are logically only needed when converting AbsIL data structures into F# data structures, and
@@ -1729,6 +1832,8 @@ and [<Sealed>] TcImports
     member private tcImports.SetTcGlobals g =
         CheckDisposed()
         tcGlobals <- Some g
+        if typeReflectionBuilder.IsNone then
+            typeReflectionBuilder <- Some (TypeReflectionBuilder g)
 
 #if !NO_TYPEPROVIDERS
     member private tcImports.InjectProvidedNamespaceOrTypeIntoEntity

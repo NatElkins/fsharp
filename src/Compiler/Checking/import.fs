@@ -25,6 +25,7 @@ open FSharp.Compiler.TypedTreeBasics
 open FSharp.Compiler.TypedTreeOps
 open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.Caches
+open FSharp.Compiler.TastReflect
 
 #if !NO_TYPEPROVIDERS
 open FSharp.Compiler.TypeProviders
@@ -48,7 +49,12 @@ type AssemblyLoader =
 
     /// Record a root for a [<Generate>] type to help guide static linking & type relocation
     abstract RecordGeneratedTypeRoot : ProviderGeneratedType -> unit
+
+    /// Record that a static parameter referenced the given type definition.
+    abstract RecordTypeDependency : TyconRef -> unit
 #endif
+
+    abstract GetTypeReflectionBuilder : unit -> TypeReflectionBuilder
 
 //-------------------------------------------------------------------------
 // Import an IL types as F# types.
@@ -71,6 +77,11 @@ type ImportMap(g: TcGlobals, assemblyLoader: AssemblyLoader) =
     member _.assemblyLoader = assemblyLoader
 
     member _.ILTypeRefToTyconRefCache = typeRefToTyconRefCache
+
+    member _.GetTypeReflectionBuilder() = assemblyLoader.GetTypeReflectionBuilder()
+
+    member this.ReflectType(topCcu: CcuThunk, ty: TType) =
+        this.GetTypeReflectionBuilder().GetSystemType(topCcu, ty)
 
 let CanImportILScopeRef (env: ImportMap) m scoref =
 

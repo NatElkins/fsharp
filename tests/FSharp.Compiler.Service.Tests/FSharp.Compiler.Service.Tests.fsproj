@@ -78,6 +78,7 @@
     <Compile Include="SynPatTests.fs" />
     <Compile Include="CapturedTypes.fs" />
     <Compile Include="WarnScopeTests.fs" />
+    <Compile Include="TypeProviderDependencyInvalidationTests.fs" />
   </ItemGroup>
 
 	<ItemGroup>
@@ -96,6 +97,9 @@
 	</ProjectReference>
     <ProjectReference Include="..\..\tests\FSharp.Test.Utilities\FSharp.Test.Utilities.fsproj" />
     <ProjectReference Include="..\service\data\CSharp_Analysis\CSharp_Analysis.csproj" />
+    <ProjectReference Include="..\..\..\FSharp.TypeProviders.SDK\src\FSharp.TypeProviders.SDK.fsproj">
+      <SetTargetFramework>TargetFramework=netstandard2.0</SetTargetFramework>
+    </ProjectReference>
   </ItemGroup>
 
 </Project>

@@ -335,6 +335,7 @@
     <Compile Include="TypedTree\TcGlobals.fs" />
     <Compile Include="TypedTree\TypedTreeOps.fsi" />
     <Compile Include="TypedTree\TypedTreeOps.fs" />
+    <Compile Include="TypedTree\TastReflection.fs" />
     <Compile Include="TypedTree\TypedTreePickle.fsi" />
     <Compile Include="TypedTree\TypedTreePickle.fs" />
     <Compile Include="TypedTree\UpdatePrettyTyparNames.fsi" />

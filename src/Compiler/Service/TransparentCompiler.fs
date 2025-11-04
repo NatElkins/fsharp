@@ -1419,6 +1419,13 @@ type internal TransparentCompiler
                 try
                     //do! maxParallelismSemaphore.WaitAsync(ct) |> NodeCode.AwaitTask
 
+                    let _ =
+#if !NO_TYPEPROVIDERS
+                        tcImports.PopTypeProviderTypeDependencies()
+#else
+                        ()
+#endif
+
                     let! finisher =
                         CheckOneInputWithCallback
                             nodeToCheck
@@ -1437,12 +1444,24 @@ type internal TransparentCompiler
 
                     fileChecked.Trigger(fileName, Unchecked.defaultof<_>)
 
+                    let typeProviderDependencies =
+#if !NO_TYPEPROVIDERS
+                        tcImports.PopTypeProviderTypeDependencies()
+                        |> List.choose (fun tcref ->
+                            let file = tcref.Range.FileName
+                            if String.IsNullOrEmpty file then None else Some file)
+#else
+                        []
+#endif
+
                     return
                         {
                             finisher = finisher
                             moduleNamesDict = moduleNamesDict
                             tcDiagnosticsRev = [ errHandler.CollectedPhasedDiagnostics ]
-                            tcDependencyFiles = [ fileName ]
+                            tcDependencyFiles =
+                                (fileName :: typeProviderDependencies)
+                                |> List.distinct
                             sink = sink
                         }
                 finally

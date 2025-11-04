@@ -3064,7 +3064,9 @@ module EstablishTypeDefinitionCores =
             let isRootGenerated, rootProvAssemStaticLinkInfoOpt = 
                 let stRootAssembly = theRootTypeWithRemapping.PApply((fun st -> st.Assembly), m)
 
-                cenv.amap.assemblyLoader.GetProvidedAssemblyInfo (ctok, m, stRootAssembly)
+                let res = cenv.amap.assemblyLoader.GetProvidedAssemblyInfo (ctok, m, stRootAssembly)
+                printfn "[tp-generation] root assembly generated=%b hasMap=%b" (fst res) (snd res |> Option.isSome)
+                res
 
             let isRootGenerated = isRootGenerated || theRootTypeWithRemapping.PUntaint((fun st -> not st.IsErased), m)
 
@@ -3081,13 +3083,25 @@ module EstablishTypeDefinitionCores =
                 errorR(Error(FSComp.SR.tcGeneratedTypesShouldBeInternalOrPrivate(), tcref.Range))
 
             let isSuppressRelocate = g.isInteractive || isForcedSuppressRelocate
+            printfn "[tp-generation] root isSuppressRelocate=%b isForced=%b interactive=%b" isSuppressRelocate isForcedSuppressRelocate g.isInteractive
     
+            let providedMethods =
+                theRootTypeWithRemapping.PApplyArray((fun st -> st.GetMethods()), "GetMethods", m)
+            let providedProperties =
+                theRootTypeWithRemapping.PApplyArray((fun st -> st.GetProperties()), "GetProperties", m)
+            let assemblyTypes =
+                theRootTypeWithRemapping.PApply((fun st -> st.Assembly), m)
+                    .PUntaint((fun asm -> asm.Handle.GetTypes() |> Array.map (fun t -> t.FullName)), m)
+            printfn "[tp-generated-type] assembly types=%A" assemblyTypes
+            printfn "[tp-generated-type] provider methods=%A" (providedMethods |> Array.map (fun mem -> mem.PUntaint((fun m -> m.Name), m)))
+            printfn "[tp-generated-type] provider properties=%A" (providedProperties |> Array.map (fun mem -> mem.PUntaint((fun m -> m.Name), m)))
             // Adjust the representation of the container type
             let repr =
                 Construct.NewProvidedTyconRepr(resolutionEnvironment, theRootTypeWithRemapping, 
                                                Import.ImportProvidedType cenv.amap m, 
                                                isSuppressRelocate, m)
             tycon.entity_tycon_repr <- repr
+            printfn "[tp-generated-type] root %s members=%A" tycon.CompiledName (tycon.MembersOfFSharpTyconSorted |> List.map (fun v -> v.CompiledName))
             // Record the details so we can map System.Type --> TyconRef
             let ilOrigRootTypeRef = GetOriginalILTypeRefOfProvidedType (theRootTypeWithRemapping, m)
             theRootTypeWithRemapping.PUntaint ((fun st -> ignore(lookupTyconRef.TryRemove(st)) ; ignore(lookupTyconRef.TryAdd(st, tcref))), m)
@@ -3108,6 +3122,8 @@ module EstablishTypeDefinitionCores =
                     cenv.amap.assemblyLoader.GetProvidedAssemblyInfo (ctok, m, stAssembly)
 
                 let isGenerated = isGenerated || st.PUntaint((fun st -> not st.IsErased), m)
+                let nestedFullName = st.PUntaint((fun st -> st.FullName), m)
+                printfn "[tp-generation] nested type %s isGenerated=%b isSuppressRelocate=%b" nestedFullName isGenerated isSuppressRelocate
 
                 if not isGenerated then 
                     let desig = st.TypeProviderDesignation
@@ -3122,6 +3138,7 @@ module EstablishTypeDefinitionCores =
                                                              Import.ImportProvidedType cenv.amap m, 
                                                              isSuppressRelocate, 
                                                              m=m, cpath=cpath, access=access)
+                printfn "[tp-generated-type] nested add %s members=%A" nestedTycon.CompiledName (nestedTycon.MembersOfFSharpTyconSorted |> List.map (fun v -> v.CompiledName))
                 eref.ModuleOrNamespaceType.AddProvidedTypeEntity nestedTycon
 
                 let nestedTyRef = eref.NestedTyconRef nestedTycon
@@ -3138,7 +3155,10 @@ module EstablishTypeDefinitionCores =
                     // Record the details so we can build correct ILTypeDefs during static linking rewriting
                     if not isSuppressRelocate then 
                         match provAssemStaticLinkInfoOpt with 
-                        | Some provAssemStaticLinkInfo -> provAssemStaticLinkInfo.ILTypeMap[ilOrigTypeRef] <- ilTgtTyRef
+                        | Some provAssemStaticLinkInfo ->
+                            printfn "[tp-staticlink-map][nested] %A -> %A" ilOrigTypeRef ilTgtTyRef
+                            provAssemStaticLinkInfo.ILTypeMap[ilOrigTypeRef] <- ilTgtTyRef
+                            provAssemStaticLinkInfo.Dump("nested")
                         | None -> ()
                        
                     ProviderGeneratedType(ilOrigTypeRef, ilTgtTyRef, doNestedTypes nestedTyRef st)
@@ -3154,11 +3174,17 @@ module EstablishTypeDefinitionCores =
                 |> Array.toList
 
             let nested = doNestedTypes tcref theRootTypeWithRemapping 
+            printfn "[tp-generated-type] root %s after nested members=%A" tycon.CompiledName (tycon.MembersOfFSharpTyconSorted |> List.map (fun v -> v.CompiledName))
+            let adhocMembers = tycon.TypeContents.tcaug_adhoc_list |> Seq.map (fun (_, vref) -> vref.CompiledName) |> Seq.toArray
+            printfn "[tp-generated-type] root %s adhoc=%A" tycon.CompiledName adhocMembers
             if not isSuppressRelocate then 
 
                 let ilTgtRootTyRef = tycon.CompiledRepresentationForNamedType
                 match rootProvAssemStaticLinkInfoOpt with 
-                | Some provAssemStaticLinkInfo -> provAssemStaticLinkInfo.ILTypeMap[ilOrigRootTypeRef] <- ilTgtRootTyRef
+                | Some provAssemStaticLinkInfo ->
+                    printfn "[tp-staticlink-map][root] %A -> %A" ilOrigRootTypeRef ilTgtRootTyRef
+                    provAssemStaticLinkInfo.ILTypeMap[ilOrigRootTypeRef] <- ilTgtRootTyRef
+                    provAssemStaticLinkInfo.Dump("root")
                 | None -> ()
 
                 if not inSig then 

@@ -1220,6 +1220,7 @@ let PublishValueDefnMaybeInclCompilerGenerated (cenv: cenv) env inclCompilerGene
 
         let tcaug = vspec.MemberApparentEntity.TypeContents
         let vref = mkLocalValRef vspec
+        printfn "[tp-publish] entity=%s member=%s" vspec.MemberApparentEntity.LogicalName (vspec.CompiledName None)
         tcaug.tcaug_adhoc <- NameMultiMap.add vspec.LogicalName vref tcaug.tcaug_adhoc
         tcaug.tcaug_adhoc_list.Add (ValRefIsExplicitImpl g vref, vref)
     | _ -> ()
@@ -4869,7 +4870,15 @@ and TcTyparConstraints (cenv: cenv) newOk checkConstraints occ env tpenv synCons
 #if !NO_TYPEPROVIDERS
 and TcStaticConstantParameter (cenv: cenv) (env: TcEnv) tpenv kind (StripParenTypes v) idOpt container =
     let g = cenv.g
-    let fail() = error(Error(FSComp.SR.etInvalidStaticArgument(NicePrint.minimalStringOfType env.DisplayEnv kind), v.Range))
+    let failWithReason reason =
+        let expected = NicePrint.minimalStringOfType env.DisplayEnv kind
+        let message =
+            match reason with
+            | Some text when not (String.IsNullOrWhiteSpace text) -> expected + " (" + text + ")"
+            | _ -> expected
+        error (Error(FSComp.SR.etInvalidStaticArgument(message), v.Range))
+
+    let fail() = failWithReason None
     let record ttype =
         match idOpt with
         | Some id ->
@@ -4877,66 +4886,133 @@ and TcStaticConstantParameter (cenv: cenv) (env: TcEnv) tpenv kind (StripParenTy
             CallNameResolutionSink cenv.tcSink (id.idRange, env.NameEnv, item, emptyTyparInst, ItemOccurrence.Use, env.AccessRights)
         | _ -> ()
 
-    match v with
-    | SynType.StaticConstant(sc, _) ->
-        let v =
-            match sc with
-            | SynConst.Byte n when typeEquiv g g.byte_ty kind -> record(g.byte_ty); box (n: byte)
-            | SynConst.Int16 n when typeEquiv g g.int16_ty kind -> record(g.int16_ty); box (n: int16)
-            | SynConst.Int32 n when typeEquiv g g.int32_ty kind -> record(g.int32_ty); box (n: int)
-            | SynConst.Int64 n when typeEquiv g g.int64_ty kind -> record(g.int64_ty); box (n: int64)
-            | SynConst.SByte n when typeEquiv g g.sbyte_ty kind -> record(g.sbyte_ty); box (n: sbyte)
-            | SynConst.UInt16 n when typeEquiv g g.uint16_ty kind -> record(g.uint16_ty); box (n: uint16)
-            | SynConst.UInt32 n when typeEquiv g g.uint32_ty kind -> record(g.uint32_ty); box (n: uint32)
-            | SynConst.UInt64 n when typeEquiv g g.uint64_ty kind -> record(g.uint64_ty); box (n: uint64)
-            | SynConst.Decimal n when typeEquiv g g.decimal_ty kind -> record(g.decimal_ty); box (n: decimal)
-            | SynConst.Single n when typeEquiv g g.float32_ty kind -> record(g.float32_ty); box (n: single)
-            | SynConst.Double n when typeEquiv g g.float_ty kind -> record(g.float_ty); box (n: double)
-            | SynConst.Char n when typeEquiv g g.char_ty kind -> record(g.char_ty); box (n: char)
-            | SynConst.String (s, _, _) when typeEquiv g g.string_ty kind -> record(g.string_ty); box (s: string)
-            | SynConst.SourceIdentifier (i, s, m) when typeEquiv g g.string_ty kind ->
-                let s = applyLineDirectivesToSourceIdentifier i s m
-                record(g.string_ty); box (s: string)
-            | SynConst.Bool b when typeEquiv g g.bool_ty kind -> record(g.bool_ty); box (b: bool)
-            | _ -> fail()
-        v, tpenv
+    if typeEquiv g g.system_Type_ty kind then
+        let typeSyn =
+            match v with
+            | SynType.StaticConstant _
+            | SynType.StaticConstantExpr _
+            | SynType.StaticConstantNamed _ -> fail()
+            | _ -> v
 
-    | SynType.StaticConstantExpr(e, _ ) ->
+        let ty, tpenv' =
+            TcTypeAndRecover cenv NewTyparsOK CheckCxs ItemOccurrence.UseInType WarnOnIWSAM.No env tpenv typeSyn
 
-        // If an error occurs, don't try to recover, since the constant expression will be nothing like what we need
-        let te, tpenv' = TcExprNoRecover cenv (MustEqual kind) env tpenv e
+#if !NO_TYPEPROVIDERS
+        let typeDependencies = HashSet<TyconRef>()
 
-        // Evaluate the constant expression using static attribute argument rules
-        let te = EvalLiteralExprOrAttribArg g te
-        let v =
-            match stripDebugPoints (stripExpr te) with
-            // Check we have a residue constant. We know the type was correct because we checked the expression with this type.
-            | Expr.Const (c, _, _) ->
-                match c with
-                | Const.Byte n -> record(g.byte_ty); box (n: byte)
-                | Const.Int16 n -> record(g.int16_ty); box (n: int16)
-                | Const.Int32 n -> record(g.int32_ty); box (n: int)
-                | Const.Int64 n -> record(g.int64_ty); box (n: int64)
-                | Const.SByte n -> record(g.sbyte_ty); box (n: sbyte)
-                | Const.UInt16 n -> record(g.uint16_ty); box (n: uint16)
-                | Const.UInt32 n -> record(g.uint32_ty); box (n: uint32)
-                | Const.UInt64 n -> record(g.uint64_ty); box (n: uint64)
-                | Const.Decimal n -> record(g.decimal_ty); box (n: decimal)
-                | Const.Single n -> record(g.float32_ty); box (n: single)
-                | Const.Double n -> record(g.float_ty); box (n: double)
-                | Const.Char n -> record(g.char_ty); box (n: char)
-                | Const.String s -> record(g.string_ty); box (s: string)
-                | Const.Bool b -> record(g.bool_ty); box (b: bool)
+        let rec addMeasureDependencies measure =
+            match measure with
+            | Measure.Var _ -> ()
+            | Measure.Const(tcref, _) ->
+                typeDependencies.Add tcref |> ignore
+            | Measure.Prod(m1, m2, _) ->
+                addMeasureDependencies m1
+                addMeasureDependencies m2
+            | Measure.Inv m ->
+                addMeasureDependencies m
+            | Measure.One _ -> ()
+            | Measure.RationalPower(m, _) ->
+                addMeasureDependencies m
+
+        let rec addTypeDependencies ty =
+            match stripTyEqnsWrtErasure Erasure.EraseAll g ty with
+            | TType_app(tcref, tyargs, _) ->
+#if !NO_TYPEPROVIDERS
+                if tcref.IsProvided then
+                    failWithReason (Some "provided types cannot be used as static arguments")
+#endif
+                typeDependencies.Add tcref |> ignore
+                tyargs |> List.iter addTypeDependencies
+            | TType_tuple(_, tys) ->
+                tys |> List.iter addTypeDependencies
+            | TType_fun(domainTy, rangeTy, _) ->
+                addTypeDependencies domainTy
+                addTypeDependencies rangeTy
+            | TType_forall(_, bodyTy) ->
+                addTypeDependencies bodyTy
+            | TType_ucase(ucref, tyinst) ->
+                typeDependencies.Add ucref.TyconRef |> ignore
+                tyinst |> List.iter addTypeDependencies
+            | TType_anon _ ->
+                failWithReason (Some "anonymous record types are not supported as static arguments")
+            | TType_measure m ->
+                addMeasureDependencies m
+            | TType_var _ -> failWithReason (Some "type parameters are not supported as static arguments")
+        addTypeDependencies ty
+
+        for dep in typeDependencies do
+            cenv.amap.assemblyLoader.RecordTypeDependency dep
+#else
+        match stripTyEqnsWrtErasure Erasure.EraseAll g ty with
+        | TType_anon _ -> failWithReason (Some "anonymous record types are not supported as static arguments")
+        | _ -> ()
+#endif
+
+        let systemTy = cenv.amap.ReflectType(cenv.thisCcu, ty)
+        record g.system_Type_ty
+        box systemTy, tpenv'
+
+    else
+        match v with
+        | SynType.StaticConstant(sc, _) ->
+            let v =
+                match sc with
+                | SynConst.Byte n when typeEquiv g g.byte_ty kind -> record(g.byte_ty); box (n: byte)
+                | SynConst.Int16 n when typeEquiv g g.int16_ty kind -> record(g.int16_ty); box (n: int16)
+                | SynConst.Int32 n when typeEquiv g g.int32_ty kind -> record(g.int32_ty); box (n: int)
+                | SynConst.Int64 n when typeEquiv g g.int64_ty kind -> record(g.int64_ty); box (n: int64)
+                | SynConst.SByte n when typeEquiv g g.sbyte_ty kind -> record(g.sbyte_ty); box (n: sbyte)
+                | SynConst.UInt16 n when typeEquiv g g.uint16_ty kind -> record(g.uint16_ty); box (n: uint16)
+                | SynConst.UInt32 n when typeEquiv g g.uint32_ty kind -> record(g.uint32_ty); box (n: uint32)
+                | SynConst.UInt64 n when typeEquiv g g.uint64_ty kind -> record(g.uint64_ty); box (n: uint64)
+                | SynConst.Decimal n when typeEquiv g g.decimal_ty kind -> record(g.decimal_ty); box (n: decimal)
+                | SynConst.Single n when typeEquiv g g.float32_ty kind -> record(g.float32_ty); box (n: single)
+                | SynConst.Double n when typeEquiv g g.float_ty kind -> record(g.float_ty); box (n: double)
+                | SynConst.Char n when typeEquiv g g.char_ty kind -> record(g.char_ty); box (n: char)
+                | SynConst.String (s, _, _) when typeEquiv g g.string_ty kind -> record(g.string_ty); box (s: string)
+                | SynConst.SourceIdentifier (i, s, m) when typeEquiv g g.string_ty kind ->
+                    let s = applyLineDirectivesToSourceIdentifier i s m
+                    record(g.string_ty); box (s: string)
+                | SynConst.Bool b when typeEquiv g g.bool_ty kind -> record(g.bool_ty); box (b: bool)
                 | _ -> fail()
-            | _ -> error(Error(FSComp.SR.tcInvalidConstantExpression(), v.Range))
-        v, tpenv'
+            v, tpenv
 
-    | SynType.LongIdent synLongId ->
-        let m = synLongId.Range
-        TcStaticConstantParameter cenv env tpenv kind (SynType.StaticConstantExpr(SynExpr.LongIdent (false, synLongId, None, m), m)) idOpt container
+        | SynType.StaticConstantExpr(e, _ ) ->
 
-    | _ ->
-        fail()
+            // If an error occurs, don't try to recover, since the constant expression will be nothing like what we need
+            let te, tpenv' = TcExprNoRecover cenv (MustEqual kind) env tpenv e
+
+            // Evaluate the constant expression using static attribute argument rules
+            let te = EvalLiteralExprOrAttribArg g te
+            let v =
+                match stripDebugPoints (stripExpr te) with
+                // Check we have a residue constant. We know the type was correct because we checked the expression with this type.
+                | Expr.Const (c, _, _) ->
+                    match c with
+                    | Const.Byte n -> record(g.byte_ty); box (n: byte)
+                    | Const.Int16 n -> record(g.int16_ty); box (n: int16)
+                    | Const.Int32 n -> record(g.int32_ty); box (n: int)
+                    | Const.Int64 n -> record(g.int64_ty); box (n: int64)
+                    | Const.SByte n -> record(g.sbyte_ty); box (n: sbyte)
+                    | Const.UInt16 n -> record(g.uint16_ty); box (n: uint16)
+                    | Const.UInt32 n -> record(g.uint32_ty); box (n: uint32)
+                    | Const.UInt64 n -> record(g.uint64_ty); box (n: uint64)
+                    | Const.Decimal n -> record(g.decimal_ty); box (n: decimal)
+                    | Const.Single n -> record(g.float32_ty); box (n: single)
+                    | Const.Double n -> record(g.float_ty); box (n: double)
+                    | Const.Char n -> record(g.char_ty); box (n: char)
+                    | Const.String s -> record(g.string_ty); box (s: string)
+                    | Const.Bool b -> record(g.bool_ty); box (b: bool)
+                    | _ -> fail()
+                | _ -> error(Error(FSComp.SR.tcInvalidConstantExpression(), v.Range))
+            v, tpenv'
+
+        | SynType.LongIdent synLongId ->
+            let m = synLongId.Range
+            TcStaticConstantParameter cenv env tpenv kind (SynType.StaticConstantExpr(SynExpr.LongIdent (false, synLongId, None, m), m)) idOpt container
+
+        | _ ->
+            fail()
 
 and CrackStaticConstantArgs (cenv: cenv) env tpenv (staticParameters: Tainted<ProvidedParameterInfo>[], args: SynType list, container, containerName, m) =
     let args =

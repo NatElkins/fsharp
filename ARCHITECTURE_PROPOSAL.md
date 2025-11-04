@@ -1,0 +1,224 @@
+# FS-1023 — “Type Providers Generate Types From Types”
+
+This document proposes an updated architecture for implementing the FS-1023 feature on top of the current `dotnet/fsharp` tree.  FS-1023 allows a type provider to accept an existing type (e.g. an F# record) as a static parameter and emit new types or members that are derived from the shape of that type.  The original proof-of-concept lives on the historical `visualfsharp` fork (`colinbull/rfc/fs-1023-type-providers`).  That branch pre-dates the current repository layout, the split `Check*` modules, the modern type-provider hosting API, and the Roslyn-based toolchain.  We treat it as conceptual guidance only.
+
+The remainder of this document records the data structures that must change, the information that has to be threaded through the compiler pipeline, integration points with the Type Provider SDK, and the major open questions that must be answered before work begins on a production-quality implementation.
+
+---
+
+## Status Update — 2025-11-03
+
+- `TcImports.GetProvidedAssemblyInfo` now refreshes provider metadata using the type provider’s `GetManifestModuleContents` hook. This guarantees we observe the provider-generated IL when a previously-non-generated reference becomes generative.
+- Diagnostic snapshots of the emitted DLL confirm the provider currently ships only infrastructure helpers (`Fs1023.Fs1023Provider`, `<StartupCode$…>`). The consumer-facing type `Fs1023Consumer.Provided` never appears, so the compiler must synthesise the method/property surface during `TcTyconDefnCore_Phase1C`.
+- `TypeProviderDependencyInvalidationTests` still fail with `MethodDefNotFound: Fs1023Consumer.Provided::get_Value`. We therefore remain blocked on publishing `Val` metadata for provider members and on translating provider invoker expressions into IL.
+- Upcoming focus: (1) ingest `ProvidedMethodInfo`/`ProvidedPropertyInfo` objects and create real `Val` + `ValMemberInfo` entries backed by `ProvidedExpr`, (2) plug those `Val`s into `InfoReader` so that reflection/projection paths recognise the generated surface, and (3) keep the richer logging behind a conditional flag once the pipeline succeeds.
+- Test plan: add targeted component tests that (a) interrogate the reflection builder (`Type.GetProperty("Value")`), (b) assert the generated `Tycon` publishes `get_Value`/`Map` before emission, and (c) disassemble the produced IL so any regression in IlxGen shows up before the end-to-end assembly load fails.
+
+Key lesson: relying on the provider to bake the generated type into its assembly is not enough—the current SDK sample emits only helper classes. We must treat the provider’s invoker expressions as the source of truth and ensure they flow all the way into IlxGen.
+
+---
+
+## 1. Overview of the existing pipeline
+
+1. Parsing produces `SynType.StaticConstant*` nodes for static parameters on type provider invocations.
+2. The checker runs `TcStaticConstantParameter` (in `CheckExpressions.fs`) to evaluate each static argument, enforcing that only primitive literal types are used.
+3. For type provider applications, `CrackStaticConstantArgs` evaluates each static argument, and `TcProvidedTypeAppToStaticConstantArgs` forwards the resulting `obj[]` to the provider via `ProvidedType.ApplyStaticArguments`.
+4. The provider supplies a `ProvidedTypeDefinition` that becomes a `Tycon` with `TProvidedTypeRepr` representation.  Subsequent compilation of the consumer project uses the standard provided-type machinery—no knowledge of the source F# type is retained after static argument evaluation.
+
+## 2. New capability we must add
+
+We must support a new kind of static parameter whose CLR type is `System.Type`.  When the user writes:
+
+```fsharp
+type MyRecord = { Id: int; Name: string }
+
+type Poco = PocoProvider<MyRecord>
+```
+
+the compiler must:
+
+1. Resolve `MyRecord` to a `TType`.
+2. Produce a live `System.Type` object that exposes the same members as the target type (even though the project has not been emitted to disk yet).
+3. Pass that `System.Type` instance to the provider.
+4. Track the dependency so that edits to `MyRecord` invalidate the provided types that were created from it.
+
+The provider may call reflection APIs on the `System.Type`—`GetFields`, `GetCustomAttributes`, `GetGenericArguments`, `DeclaringType`, etc.  The implementation must therefore provide a full fidelity proxy over the compiler’s typed tree.
+
+---
+
+## 3. Proposed architecture
+
+### 3.1 Representing F# types as `System.Type`
+
+* Add a new internal module (suggested location: `src/Compiler/TypedTree/TastReflection.fs`) that can project `TyconRef`, `TType`, and their members into runtime reflection objects.
+  * The historical branch introduced `AssemblyReaderReflection` and `TastReflect`.  We can modernize that code to fit the current compiler and reuse the conceptual approach: implement subclasses of `System.Type`, `MethodInfo`, `PropertyInfo`, etc. that delegate queries to the typed tree.
+  * Caches keyed by `Stamp` and `TyconRef` are required so that repeated projections return reference-equal objects.  This ensures provider-side caching and comparison continues to work.
+  * Provide helpers to fabricate generic parameter types, generic instantiations (`MakeGenericType`), nested types, and array/pointer/byref wrappers.
+  * Propagate custom attributes: field/property attributes, record/union metadata, measure annotations, obsolete attributes, etc.  The new module should leverage `AttribInfo` → `ICustomAttributeData` translation that the type provider runtime already uses.
+  * Ensure the projected `System.Type` objects behave like genuine runtime types so that generative providers can embed them into emitted IL without surprises (a concern raised in discussion #125).
+
+* Thread access to this projection service through `ImportMap` / `TcImports`.
+  * Add a memo-table `ProvidedTypeReflectionCache` to `TcImportsData`.
+  * Expose a method `TcImports.GetOrCreateProvidedTypeForTType : CompilationThreadToken * range * TType -> ProvidedTypeReflection`.
+
+### 3.2 Extending static parameter evaluation
+
+* Update `TcStaticConstantParameter` (in `src/Compiler/Checking/Expressions/CheckExpressions.fs`) to recognise when the expected static-argument kind is `g.system_Type_typ`.
+  * Parse and type-check the argument expression as a type (support `SynType.LongIdent`, `SynType.AnonRecd`, generic instantiations, etc).
+  * Produce a `TType` value `tyArg` (ensuring it is fully resolved and not itself provided).
+  * Use the new projection module to obtain a `System.Type` proxy for `tyArg`.  Record the dependency between the provided type application and the referenced `Entity`.
+  * Box the resulting `System.Type` and return it to `CrackStaticConstantArgs`.
+  * For generative providers, ensure that the projected type can be re-resolved later when the provider emits IL (e.g., capture sufficient `TyconRef` identity to rebuild the proxy during static-linking).
+
+* Extend error reporting for unsupported cases:
+  * If the referenced type is itself provided or otherwise unresolved, produce a diagnostic (`etStaticParameterRequiresConcreteType`).
+  * If the type’s shape cannot be projected (e.g., type providers generating types from other providers), fail with a clear message and do not crash.
+
+### 3.3 Tracking dependencies and invalidation
+
+* When a `System.Type` proxy is produced, register the underlying `TyconRef` with the existing provided-type invalidation mechanism (`CompilerImports.RecordGeneratedTypeRoot` and the `TypeProviderInlinedRepresentation` dependency graph).
+* Extend the provided entity metadata to record “type arguments consumed as `System.Type`”.  On recompilation we should re-run the provider whenever any of those entities change.
+* Update design-time tooling (FSharp.Compiler.Service) so that cross-project invalidation triggers provider refreshes when the referenced type comes from another project or script.
+
+### 3.4 Type Provider SDK adjustments
+
+* The SDK already accepts `ProvidedStaticParameter(parameterType = typeof<Type>)`.  No API change is necessary, but we must ensure the test suite covers the end-to-end scenario.
+* Provide a sample provider (`TypePassingProvider`) that exercises the new feature and demonstrates recommended practices (e.g., defensive copying, dealing with generic types, attribute access).
+
+### 3.5 Compiler service and tooling surface
+
+* FCS exposes `FSharpProjectOptions.TypeProviderAssemblies`.  The projection service must be available in the service layer so that design-time checks use the same implementation as command-line compilation.
+* Ensure `FSharpChecker.GetDeclarationListInfo` and other language service features handle the new provider outputs—no additional changes anticipated beyond provider invalidation.
+
+---
+
+## 4. Detailed data structure changes
+
+| Area | Proposed change |
+|------|-----------------|
+| `TcImportsData` | Add caches for the new reflection proxies (`Dictionary<Stamp, ProvidedSymbol>`) and plumb them through the `ImportMap`. |
+| `cenv` (`CheckExpressions`) | Extend the environment to carry a `TypeReflectionBuilder` handle so that `TcStaticConstantParameter` can request proxies without reaching back into global state. |
+| `TProvidedTypeInfo` (in `TypeProviders.fs`) | Record the set of `TyconRef`s that were used as `System.Type` arguments when instantiating the provider.  Use this for invalidation and for debugging information. |
+| `GraphChecking/FileContentMapping` | Static parameter expressions are already visited; no change beyond recognising the new literal form. |
+| `CompilerDiagnostics.fs` | Add diagnostics for unsupported cases (e.g., static argument is a provided type, static argument references a type that cannot be materialised). |
+| `FSharp.TypeProviders.SDK` | Add regression tests in `tests/` to verify that `ProvidedStaticParameter(typeof<Type>)` receives the fields/properties defined in the F# type. |
+
+---
+
+## 5. Execution flow with the new feature
+
+1. **Parse** user code; static arguments referencing types are represented as `SynType.StaticConstantExpr (SynExpr.LongIdent ...)`.
+2. **Type check**; when `TcStaticConstantParameter` sees that the expected parameter type is `System.Type`, it:
+   * Resolves the `SynType` to a `TType`.
+   * Requests a `System.Type` proxy from the `TypeReflectionBuilder`.
+   * Records dependency information.
+3. **Apply static arguments**; `CrackStaticConstantArgs` packs the `System.Type` objects into the argument array passed to the provider.
+4. **Provider execution** uses reflection on the supplied type to generate new types.
+5. **Generated types** flow back through the existing provided-type pipeline, with additional dependency metadata so that changes to the original F# type trigger invalidation.
+
+---
+
+## 6. Open questions
+
+1. **Type identity and lifetime** – Should we expose a single proxy per `TyconRef`, or should we create fresh proxies per instantiation (e.g., different nullness or unit-of-measure instantiations)?  Recommendation: cache per `TType` including generic arguments, and ensure equality semantics mimic `System.Type`.  
+   *Answer:* we cache by fully-instantiated `TType` (including measure/nullability info) in `TcImports.ProvidedTypeReflectionCache`.  Each proxy carries the `TyconRef` and instantiation so `Equals`/`GetHashCode` mirrors CLR semantics.  This matches both the prototype (`lookupTyconRef`/`lookupILTypeRef`) and the TPSDK `TargetTypeDefinition`, keeping provider caches stable.
+2. **Generic type parameters** – How do we represent type parameters that originate from the consumer’s generic type definitions?  We must fabricate `RuntimeTypeHandle`-less objects that behave like open generic parameters.  The historical implementation used custom subclasses of `Type` and `MethodInfo`; we should port that design.  
+   *Answer:* generic parameters reuse the TPSDK `TypeSymbol` machinery.  Each `Typar` projects to a proxy `System.Type` with `IsGenericParameter = true` and the correct `GenericParameterPosition`, and instantiations go through the existing `MakeGenericType` helper.
+3. **Provided → provided** – Should a provider be allowed to pass a provided type as the `System.Type` argument to another provider?  The design discussion (fslang-design/125) highlights demand for provider chaining, but it complicates dependency tracking and debugging.  Initial implementation should likely restrict input types to concrete, non-provided entities and revisit once the foundations are stable.  
+   *Answer:* the first release rejects provided inputs with a targeted diagnostic.  The dependency graph (`ProviderGeneratedType` roots) currently assumes concrete IL; extending it to cover provider chaining can be a follow-up once the base scenario is solid.
+4. **Erasing vs generative providers** – Generative providers expect to emit IL consumed by other assemblies.  Can the projected `System.Type` be safely embedded in generated assemblies before the current project is emitted?  Do we need metadata-only reference images to make this work?  
+   *Answer:* generative providers remain supported.  The `TastReflection` assembly proxies report the final assembly identity, and the existing static-linking map (`ProvidedAssemblyStaticLinkingMap` applied in `CheckDeclarations.fs`) rewrites IL type refs when we inline generated assemblies.  No reference-only image is needed.
+5. **Metadata preservation** – Which compiler-generated features must the proxy expose?  At minimum: record/union shape APIs, property getters/setters, field mutability, attributes, module static members, interface implementations, measure annotations, and optional/default values, as requested in the design discussion.  
+   *Answer:* we reuse the attribute and member translation routines already in `TypeProviders.fs`, so proxies expose the same metadata the compiler emits (record copy methods, union tags, optional parameters, measure attributes, etc.).  The TastReflect test suite (noted by @dsyme) will return to validate parity against CLR reflection.
+6. **Performance** – The reflection layer must avoid blocking the compilation thread with heavy allocations.  We should measure impact on large solutions and consider lazy materialisation for expensive members (e.g., attributes) plus shared caches across providers.  
+   *Answer:* proxy construction is memoised via `ConcurrentDictionary<Stamp, ProvidedSymbol>` caches.  Members/attributes are materialised lazily, matching the current TPSDK behaviour, and we will profile the TPSDK test matrix before enabling the feature.
+7. **Debuggability** – Provide a straightforward way to inspect the proxies (friendly `ToString`, `DebuggerDisplay`) so provider authors can reason about the projected types.  
+   *Answer:* we retain the same `DebuggerDisplay`/`ToString` helpers used by `ProvidedTypeDefinition`, so proxies print as their logical full names in the debugger.
+8. **Testing generative outputs** – Add integration tests that compile downstream assemblies (e.g., C# consumers) against provider output to validate binary compatibility, especially for INPC, serialization, and proxy scenarios mentioned in the discussion.  
+   *Answer:* new integration tests under `tests/fsharp/typeProviders/typePassing` will cover both erasing and generative providers, including a small C# consumer that references the generated assembly.
+9. **Provider invalidation semantics** – When the input type changes shape (field order, optionality, generic arguments) how granular should invalidation be?  Providers may need fine-grained change data to avoid expensive recomputation.  
+   *Answer:* each provider application records the `TyconRef` stamps it reads during static-parameter evaluation.  These feed into the existing invalidation path (`RecordGeneratedTypeRoot` plus the incremental builder), so any structural change reruns the provider.  If profiling shows we need finer granularity we can extend the recorded metadata.
+10. **Limitations on input types** – Should private/internal types be allowed?  How do signature files influence visibility?  Are anonymous records, type abbreviations, or provided types legal inputs?  We need explicit rules.  
+   *Answer:* any accessible concrete type (respecting signature-file visibility) is allowed.  Type abbreviations are expanded.  Anonymous records and provided types are rejected initially; users can wrap them in named records if necessary.  Metadata-defined types continue to work unchanged because we pass the actual `System.Type`.
+11. **Tooling story** – IDEs must surface diagnostics and completions when provider output depends on project types.  What hooks are required in FSharp.Compiler.Service to expose the new proxy layer to tooling?  
+   *Answer:* `FSharpChecker` already drives the same pipeline as the command-line compiler, so once the proxy layer lives in `TcImports` the IDE benefits automatically.  We will surface a lightweight `TypeReflectionBuilder` handle via FCS for tooling needing direct access and make sure the incremental builder invalidates design-time caches when dependent types change.
+12. **Design-time vs target types** – Providers interact with design-time types while the compiler emits target types. How are projected proxies translated back to the design-time view?  
+   *Answer:* the new `TastReflection` proxies implement the target-type contracts.  Before handing them to the provider we run them through the existing TPSDK translation layer, which converts target representations into the design-time types the provider author expects (this mirrors the workflow described by @dsyme in the original prototype notes).
+13. **Forward references / mutually recursive types** – What happens when a provider consumes a type declared later in the same recursive group?  
+   *Answer:* the type-abbreviation pipeline already runs in multiple passes.  During the first pass the right-hand-side type is fully elaborated before the tycon’s abbreviation is recorded, so the projected proxy can be created immediately.  If the type is still incomplete we fall back to the existing `NewErrorType` recovery.
+14. **Scripts and interactive sessions** – How does the design operate in F# Interactive where snippets are re-typechecked repeatedly?  
+   *Answer:* the projection cache lives inside each checker/session (`TcImports`).  FSI creates a new checker instance per session, so proxies are rebuilt per session and safely invalidate between submissions just like other type-provider state.
+15. **Cross-project invalidation** – What if the consumed type lives in another project and is only available via metadata?  
+   *Answer:* static parameters are resolved through `TcImports`. If the type comes from metadata we simply reuse the existing `System.Type` from the loaded assembly; no projection or additional invalidation is required beyond the standard project-system rebuild when that upstream assembly changes.
+16. **Static-linking remapper and additional references** – Can FS-1023 generated assemblies reference other types in the current project?  
+   *Answer:* inlining still relies on `ProvidedAssemblyStaticLinkingMap`. Providers should continue to reference types via the `System.Type` objects they were given.  We do not expand the remapper to cover arbitrary project types; generating IL that references unrelated project members remains unsupported.
+17. **Anonymous record support** – Is rejecting anonymous records a design choice or an implementation limitation?  
+   *Answer:* it’s an initial limitation. Supporting anonymous records would require projecting compiler-generated symbol names.  We may add that later if real scenarios emerge; for now provider authors should use named records or type abbreviations that expand to anonymous records.
+18. **Design-time translation mechanics** – The TPSDK distinguishes “design-time” and “target” types. How will the new proxies flow through that machinery?  
+   *Answer:* the proxies implement the same “target model” contracts (`System.Type` plus `TryGetTyconRef`) that the SDK already understands.  We will extend `ProvidedTypes.ConvertTargetTypeToSource` (and the surrounding helpers) so when it encounters a `TastReflection` proxy it routes through the existing `TargetTypeDefinition` adapter, producing a design-time type without changing provider APIs.
+19. **Reflection surface completeness** – Which reflection members must be implemented on the proxy types?  
+   *Answer:* every member that CLR reflection exposes for F# declarations and that providers routinely use: constructors, methods (including generated record/union helpers), properties, events, nested types, generic parameters, `GetCustomAttributes`/`GetCustomAttributesData`, default values, and the metadata flags (`IsSealed`, `IsAbstract`, etc.).  The TastReflect parity tests from the original prototype—comparing proxy output against `typeof` for concrete assemblies—will return to guard this contract.
+20. **Dependency tracking granularity** – How do we ensure we rerun providers when indirect dependencies (base types, signature files) change?  
+   *Answer:* projection records every `TyconRef` visited (base types, interfaces, field types, etc.).  Those stamps are fed into the existing invalidation machinery, and the incremental builder already treats signature edits as type changes, so indirect modifications invalidate provider output automatically.
+21. **Provider output referencing other project types** – How do we keep providers from emitting IL that references arbitrary project members?  
+   *Answer:* the compiler enforces this today via `IsGeneratedTypeDirectReference`; if a generated assembly references a non-generated project type we report an error during static linking.  Documentation for FS-1023 will call this out so provider authors stick to the `System.Type` handles supplied via the static parameters.
+22. **Proxy cache lifecycle and concurrency** – Do we need special handling when multiple checker instances run in parallel?  
+   *Answer:* proxy caches live inside each `TcImports` instance and are protected by the existing `tciLock`.  IDE background builds already rely on this lock for thread safety, so FS-1023 can reuse the same mechanism; no additional locking is required.
+23. **Equality semantics across translation** – Will provider authors see the expected reference equality once the proxy flows through the design-time adapter?  
+   *Answer:* yes.  The TPSDK’s `ConvertTargetTypeToSource` returns the same `System.Type` instance for repeated requests, and those values compare equal to both the proxy and any direct `typeof` results for metadata types, preserving dictionary behaviour.
+24. **Interop with future partial support** – How will FS-1023 interact with forthcoming partial-type work?  
+   *Answer:* FS-1023 ships independently.  When partial class support arrives we simply allow providers to observe both parts via the proxy; no contract changes are required now, but we’ve noted this dependency so the later work reuses the same projection infrastructure.
+25. **Diagnostics for FS-1023 constraints** – What experience do developers get when constraints are violated?  
+   *Answer:* existing diagnostics such as `etErasedTypeUsedInGeneration` cover most cases, and we plan to add a targeted error (with source range) when a provider emits IL referencing non-generated project types.  This keeps feedback actionable during compilation.
+
+---
+
+## 7. Next steps
+
+1. Prototype the `TypeReflectionBuilder` in isolation using the current typed-tree APIs.
+2. Extend `TcStaticConstantParameter` to emit stub `System.Type` proxies and add unit tests that ensure the provider receives the expected field/property metadata.
+3. Integrate dependency tracking so that editing the source type re-runs the provider.
+4. Round out the proxy to cover generics, nested types, attributes, and arrays.
+5. Land end-to-end tests in both the compiler (`tests/fsharp/typeProviders`) and the Type Provider SDK.
+
+Once this foundation is in place, we can proceed towards integrating partial-type support and, eventually, Roslyn source generator interop as described in the broader plan.
+
+---
+
+## 8. Risk assessment
+
+- **Cache divergence** — If proxy caches fall out of sync with the typed tree, providers could observe stale metadata or crash during static-linking. *Mitigation:* scope caches to a checker lifetime, key by `Stamp`, and invalidate through the existing incremental builder hooks exercised in Phase 2.
+- **Performance regressions** — Large providers may project thousands of types per compilation. *Mitigation:* measure allocations with ETW/perfview on the TPSDK test matrix, keep projections lazy, and gate the feature behind an `langVersion` flag until profiling shows acceptable overhead.
+- **Incomplete metadata fidelity** — Missing attributes or member flags would break providers that emit IL mirroring the source type. *Mitigation:* extend TastReflection unit tests to cover every construct listed in §6.5 and block merge unless parity is proven on CI.
+- **Error handling gaps** — Improper diagnostics for unsupported types would give users confusing failures. *Mitigation:* add targeted errors (`etStaticParameterRequiresConcreteType`, etc.) with integration tests exercising anonymous-record and provided-type inputs.
+- **Cross-repository drift** — TPSDK and compiler changes must ship in lockstep; mismatches could strand users on incompatible package versions. *Mitigation:* stage changes behind feature flags, publish preview NuGets, and document the minimum compiler/SDK pairing in release notes.
+
+## 9. Validation metrics
+
+- 100% of new TastReflection unit tests covering records, unions, generics, attributes, and nested types must pass on Windows, macOS, and Linux.
+- End-to-end provider scenarios in `tests/fsharp/typeProviders/typePassing` must show zero delta in compilation time >5% compared to baseline projects.
+- IDE smoke tests (VS, Ionide) must complete without additional provider reloads beyond those triggered by deliberate edits to dependent types.
+- At least two partner providers (one generative, one erasing) should confirm compatibility via experimental packages before general availability.
+
+---
+
+## References
+
+* [FS-1023 RFC — Allow type providers to generate types from types](https://raw.githubusercontent.com/fsharp/fslang-design/refs/heads/main/RFCs/FS-1023-type-providers-generate-types-from-types.md)
+* [FS-1023 approved suggestion](https://github.com/fsharp/fslang-suggestions/issues/212)
+* [fslang-design discussion #125 — Allow type providers to generate types from other types](https://github.com/fsharp/fslang-design/discussions/125)
+* Historical prototype: [colinbull/visualfsharp `rfc/fs-1023-type-providers`](https://github.com/colinbull/visualfsharp/tree/rfc/fs-1023-type-providers)
+* Related source-generator threads:
+  * [fsharp/fslang-suggestions #864 — Support C# source generators](https://github.com/fsharp/fslang-suggestions/issues/864)
+  * [dotnet/fsharp #14300 — Consumption of .NET libraries built with source generators](https://github.com/dotnet/fsharp/issues/14300)
+* Roslyn documentation (future interop):
+  * [Source generators overview](https://github.com/dotnet/roslyn/blob/main/docs/features/source-generators.md)
+  * [Incremental generators](https://github.com/dotnet/roslyn/blob/main/docs/features/incremental-generators.md)
+* Supporting resources:
+  * [F# Type Provider SDK](https://github.com/fsprojects/FSharp.TypeProviders.SDK)
+  * [System.Text.Json source generation docs](https://learn.microsoft.com/dotnet/standard/serialization/system-text-json/source-generation)
+  * [Myriad metaprogramming discussion / commentary](https://github.com/fsharp/fslang-suggestions/issues/864#issuecomment-758969586)
+
+---
+
+_Prepared on branch `fs-1023` to guide modern implementation work for FS-1023._

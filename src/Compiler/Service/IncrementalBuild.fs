@@ -264,6 +264,13 @@ type BoundModel private (
             let hadParseErrors = not (Array.isEmpty parseErrors)
             let input, moduleNamesDict = DeduplicateParsedInputModuleName prevTcInfo.moduleNamesDict input
 
+            let _ =
+#if !NO_TYPEPROVIDERS
+                tcImports.PopTypeProviderTypeDependencies()
+#else
+                ()
+#endif
+
             let! (tcEnvAtEndOfFile, topAttribs, implFile, ccuSigForFile), tcState =
                 CheckOneInput (
                         (fun () -> hadParseErrors || diagnosticsLogger.ErrorCount > 0),
@@ -279,6 +286,20 @@ type BoundModel private (
             let newErrors = Array.append parseErrors (capturingDiagnosticsLogger.Diagnostics |> List.toArray)
             let tcEnvAtEndOfFile = if keepAllBackgroundResolutions then tcEnvAtEndOfFile else tcState.TcEnvFromImpls
 
+#if !NO_TYPEPROVIDERS
+            let typeProviderDependencies =
+                tcImports.PopTypeProviderTypeDependencies()
+                |> List.choose (fun tcref ->
+                    let file = tcref.Range.FileName
+                    if String.IsNullOrEmpty file then None else Some file)
+#else
+            let typeProviderDependencies = []
+#endif
+
+            let dependencyFiles =
+                (fileName :: typeProviderDependencies @ prevTcInfo.tcDependencyFiles)
+                |> List.distinct
+
             let tcInfo =
                 {
                     tcState = tcState
@@ -287,7 +308,7 @@ type BoundModel private (
                     latestCcuSigForFile = Some ccuSigForFile
                     tcDiagnosticsRev = newErrors :: prevTcInfo.tcDiagnosticsRev
                     topAttribs = Some topAttribs
-                    tcDependencyFiles = fileName :: prevTcInfo.tcDependencyFiles
+                    tcDependencyFiles = dependencyFiles
                     sigNameOpt =
                         match input with
                         | ParsedInput.SigFile sigFile ->

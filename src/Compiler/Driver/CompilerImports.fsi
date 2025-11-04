@@ -171,6 +171,7 @@ type TcImports =
 
 #if !NO_TYPEPROVIDERS
     member ProviderGeneratedTypeRoots: ProviderGeneratedType list
+    member PopTypeProviderTypeDependencies: unit -> TyconRef list
 #endif
 
     member GetImportMap: unit -> Import.ImportMap
