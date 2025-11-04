@@ -820,6 +820,80 @@ module Demo =
             try Directory.Delete(projectDir, true) with _ -> ()
 
     [<Fact>]
+    let ``mdv validates method-body edit with closure`` () =
+        let checker =
+            FSharpChecker.Create(
+                keepAssemblyContents = true,
+                enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                captureIdentifiersWhenParsing = false
+            )
+
+        let projectDir, fsPath, dllPath = createTempProject ()
+        let baselineSource =
+            """
+namespace MdVClosure
+
+module Demo =
+    let GetMessage () =
+        let prefix = "Integration closure baseline"
+        fun value -> sprintf "%s %s" prefix value
+
+    let Invoke value = (GetMessage()) value
+"""
+
+        let updatedSource =
+            """
+namespace MdVClosure
+
+module Demo =
+    let GetMessage () =
+        let prefix = "Integration closure updated"
+        fun value -> sprintf "%s %s" prefix value
+
+    let Invoke value = (GetMessage()) value
+"""
+
+        let deltaDir = Path.Combine(projectDir, "mdv-closure-delta")
+
+        try
+            let baselineOptions, _ = compileProject checker fsPath dllPath baselineSource
+            let baselineCopy = Path.Combine(projectDir, "baseline.dll")
+            File.Copy(dllPath, baselineCopy, true)
+
+            match checker.StartHotReloadSession(baselineOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "StartHotReloadSession failed: %A" error
+            | Ok () -> ()
+
+            let updatedOptions, _ = compileProject checker fsPath dllPath updatedSource
+
+            match checker.EmitHotReloadDelta(updatedOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
+            | Ok delta ->
+                Directory.CreateDirectory(deltaDir) |> ignore
+                let metadataPath = Path.Combine(deltaDir, "1.meta")
+                let ilPath = Path.Combine(deltaDir, "1.il")
+                File.WriteAllBytes(metadataPath, delta.Metadata)
+                File.WriteAllBytes(ilPath, delta.IL)
+
+                let expectedLiteral = Text.Encoding.Unicode.GetBytes("Integration closure updated")
+                Assert.True(
+                    containsSubsequence delta.Metadata expectedLiteral,
+                    "Expected closure scenario metadata delta to contain updated literal."
+                )
+
+                match runMdv baselineCopy metadataPath ilPath with
+                | Some output ->
+                    Assert.Contains("Generation 1", output)
+                    assertGenerationContains output 1 "Integration closure updated"
+                | None ->
+                    printfn "mdv not available; skipping closure verification."
+        finally
+            try checker.InvalidateAll() with _ -> ()
+            try checker.EndHotReloadSession() with _ -> ()
+            try Directory.Delete(deltaDir, true) with _ -> ()
+            try Directory.Delete(projectDir, true) with _ -> ()
+
+    [<Fact>]
     let ``mdv validates consecutive method-body edits`` () =
         let checker =
             FSharpChecker.Create(
