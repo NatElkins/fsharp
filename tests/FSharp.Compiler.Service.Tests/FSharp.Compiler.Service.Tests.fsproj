@@ -80,6 +80,7 @@
     <Compile Include="CapturedTypes.fs" />
     <Compile Include="WarnScopeTests.fs" />
     <Compile Include="HotReload/TypedTreeDiffTests.fs" />
+    <Compile Include="HotReload/HotReloadCheckerTests.fs" />
     <Compile Include="HotReload/NameMapTests.fs" />
     <Compile Include="HotReload/RudeEditDiagnosticsTests.fs" />
   </ItemGroup>

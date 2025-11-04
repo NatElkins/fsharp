@@ -145,6 +145,52 @@ function Print-Usage() {
     Write-Host "Command line arguments starting with '/p:' are passed through to MSBuild."
 }
 
+function Invoke-HotReloadDemoSmokeTest([string] $dotnetExe) {
+    if ($script:HotReloadDemoSmokeTestExecuted) {
+        return
+    }
+
+    $demoDirectory = Join-Path $RepoRoot "tests/projects/HotReloadDemo/HotReloadDemoApp"
+    if (-not (Test-Path $demoDirectory)) {
+        Write-Verbose "Hot reload demo directory not found; skipping smoke test."
+        $script:HotReloadDemoSmokeTestExecuted = $True
+        return
+    }
+
+    Write-Host "Running hot reload demo smoke test..."
+
+    $previousValue = [System.Environment]::GetEnvironmentVariable("DOTNET_MODIFIABLE_ASSEMBLIES", "Process")
+    $output = @()
+    $exitCode = 0
+    try {
+        [System.Environment]::SetEnvironmentVariable("DOTNET_MODIFIABLE_ASSEMBLIES", "debug", "Process")
+
+        Push-Location $demoDirectory
+        try {
+            $output = & $dotnetExe run -- --scripted 2>&1
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    finally {
+        [System.Environment]::SetEnvironmentVariable("DOTNET_MODIFIABLE_ASSEMBLIES", $previousValue, "Process")
+    }
+
+    $output | ForEach-Object { Write-Host $_ }
+
+    if ($exitCode -ne 0) {
+        throw "Hot reload demo smoke test failed with exit code $exitCode"
+    }
+
+    if ($output -notmatch "Scripted run succeeded: delta emitted") {
+        throw "Hot reload demo smoke test did not report success marker"
+    }
+
+    $script:HotReloadDemoSmokeTestExecuted = $True
+}
+
 # Process the command line arguments and establish defaults for the values which are not
 # specified.
 function Process-Arguments() {
@@ -158,6 +204,7 @@ function Process-Arguments() {
     }
 
     $script:nodeReuse = $False;
+    $script:HotReloadDemoSmokeTestExecuted = $False
 
     if ($testAll) {
         $script:testDesktop = $True
@@ -555,6 +602,11 @@ try {
 
     $dotnetPath = InitializeDotNetCli
     $env:DOTNET_ROOT = "$dotnetPath"
+    $dotnetExecutableName = "dotnet"
+    if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+        $dotnetExecutableName = "dotnet.exe"
+    }
+    $dotnetExe = Join-Path $dotnetPath $dotnetExecutableName
     Get-Item -Path Env:
 
     if ($bootstrap) {
@@ -603,10 +655,12 @@ try {
 
     if ($testCoreClr) {
         TestUsingMSBuild -testProject "$RepoRoot\FSharp.sln" -targetFramework $script:coreclrTargetFramework
+        Invoke-HotReloadDemoSmokeTest $dotnetExe
     }
 
     if ($testDesktop) {
         TestUsingMSBuild -testProject "$RepoRoot\FSharp.sln" -targetFramework $script:desktopTargetFramework
+        Invoke-HotReloadDemoSmokeTest $dotnetExe
     }
 
     if ($testFSharpQA) {

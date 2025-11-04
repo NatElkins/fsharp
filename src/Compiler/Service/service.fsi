@@ -14,6 +14,42 @@ open FSharp.Compiler.Symbols
 open FSharp.Compiler.Text
 open FSharp.Compiler.Tokenization
 
+[<RequireQualifiedAccess>]
+type FSharpHotReloadError =
+    | NoActiveSession
+    | NoChanges
+    | MissingOutputPath
+    | UnsupportedEdit of string
+    | CompilationFailed of FSharpDiagnostic[]
+    | DeltaEmissionFailed of string
+
+type FSharpHotReloadDelta =
+    { Metadata: byte[]
+      IL: byte[]
+      Pdb: byte[] option
+      UpdatedTypes: int list
+      UpdatedMethods: int list
+      GenerationId: Guid
+      BaseGenerationId: Guid }
+
+[<System.Flags>]
+type FSharpHotReloadCapability =
+    | None = 0
+    | Il = 1
+    | Metadata = 2
+    | PortablePdb = 4
+    | MultipleGenerations = 8
+    | RuntimeApply = 16
+
+type FSharpHotReloadCapabilities =
+    internal new : FSharpHotReloadCapability -> FSharpHotReloadCapabilities
+    member Flags: FSharpHotReloadCapability
+    member SupportsIl: bool
+    member SupportsMetadata: bool
+    member SupportsPortablePdb: bool
+    member SupportsMultipleGenerations: bool
+    member SupportsRuntimeApply: bool
+
 /// Used to parse and check F# source code.
 [<Sealed; AutoSerializable(false)>]
 type public FSharpChecker =
@@ -54,6 +90,19 @@ type public FSharpChecker =
         [<Experimental "This parameter is experimental and likely to be removed in the future.">] ?transparentCompilerCacheSizes:
             CacheSizes ->
             FSharpChecker
+
+    member StartHotReloadSession:
+        projectOptions: FSharpProjectOptions * ?userOpName: string -> Async<Result<unit, FSharpHotReloadError>>
+
+    member EmitHotReloadDelta:
+        projectOptions: FSharpProjectOptions * ?userOpName: string ->
+            Async<Result<FSharpHotReloadDelta, FSharpHotReloadError>>
+
+    member EndHotReloadSession: unit -> unit
+
+    member HotReloadSessionActive: bool
+
+    member HotReloadCapabilities: FSharpHotReloadCapabilities
 
     [<Experimental("This FCS API is experimental and subject to change.")>]
     member UsesTransparentCompiler: bool

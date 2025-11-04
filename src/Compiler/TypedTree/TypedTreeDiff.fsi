@@ -44,7 +44,8 @@ type SemanticEdit =
       Kind: SemanticEditKind
       BaselineHash: int option
       UpdatedHash: int option
-      IsSynthesized: bool }
+      IsSynthesized: bool
+      ContainingEntity: string option }
 
 type RudeEdit =
     { Symbol: SymbolId option

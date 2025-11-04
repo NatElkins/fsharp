@@ -1,6 +1,7 @@
 module internal FSharp.Compiler.HotReloadBaseline
 
 open System
+open System.Collections.Immutable
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.IlxGen
@@ -40,6 +41,14 @@ type EventDefinitionKey =
         EventType: ILType option
     }
 
+/// <summary>Portable PDB snapshot captured during baseline emission.</summary>
+type PortablePdbSnapshot =
+    {
+        Bytes: byte[]
+        TableRowCounts: ImmutableArray<int>
+        EntryPointToken: int option
+    }
+
 /// <summary>
 /// Represents the captured state of a baseline emission, mirroring Roslyn's EmitBaseline. It stores metadata
 /// snapshots along with stable token maps so delta emission can reuse pre-existing metadata handles.
@@ -55,6 +64,7 @@ type FSharpEmitBaseline =
         PropertyTokens: Map<PropertyDefinitionKey, int>
         EventTokens: Map<EventDefinitionKey, int>
         IlxGenEnvironment: IlxGenEnvSnapshot option
+        PortablePdb: PortablePdbSnapshot option
     }
 
 type private BaselineMaps =
@@ -178,6 +188,7 @@ let private createCore
     (tokenMappings: ILTokenMappings)
     (metadataSnapshot: MetadataSnapshot)
     (ilxGenEnvironment: IlxGenEnvSnapshot option)
+    (portablePdbSnapshot: PortablePdbSnapshot option)
     =
     let scope = ILScopeRef.Local
 
@@ -195,6 +206,7 @@ let private createCore
         PropertyTokens = maps.PropertyTokens
         EventTokens = maps.EventTokens
         IlxGenEnvironment = ilxGenEnvironment
+        PortablePdb = portablePdbSnapshot
     }
 
 /// <summary>Create an <see cref="FSharpEmitBaseline"/> without capturing the ILX environment snapshot.</summary>
@@ -203,8 +215,9 @@ let create
     (tokenMappings: ILTokenMappings)
     (metadataSnapshot: MetadataSnapshot)
     (moduleId: Guid)
+    (portablePdbSnapshot: PortablePdbSnapshot option)
     =
-    createCore moduleId ilModule tokenMappings metadataSnapshot None
+    createCore moduleId ilModule tokenMappings metadataSnapshot None portablePdbSnapshot
 
 /// <summary>Create an <see cref="FSharpEmitBaseline"/> that carries the captured ILX environment snapshot.</summary>
 let createWithEnvironment
@@ -213,5 +226,6 @@ let createWithEnvironment
     (metadataSnapshot: MetadataSnapshot)
     (ilxGenEnvironment: IlxGenEnvSnapshot)
     (moduleId: Guid)
+    (portablePdbSnapshot: PortablePdbSnapshot option)
     =
-    createCore moduleId ilModule tokenMappings metadataSnapshot (Some ilxGenEnvironment)
+    createCore moduleId ilModule tokenMappings metadataSnapshot (Some ilxGenEnvironment) portablePdbSnapshot

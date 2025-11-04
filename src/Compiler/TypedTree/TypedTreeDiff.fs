@@ -52,7 +52,8 @@ type SemanticEdit =
       Kind: SemanticEditKind
       BaselineHash: int option
       UpdatedHash: int option
-      IsSynthesized: bool }
+      IsSynthesized: bool
+      ContainingEntity: string option }
 
 type RudeEdit =
     { Symbol: SymbolId option
@@ -250,7 +251,8 @@ type private BindingSnapshot =
       InlineInfo: ValInline
       SignatureText: string
       BodyHash: int
-      IsSynthesized: bool }
+      IsSynthesized: bool
+      ContainingEntity: string option }
 
 type private EntitySnapshot =
     { Symbol: SymbolId
@@ -265,7 +267,9 @@ let private symbolId path logicalName stamp kind isSynthesized =
       Kind = kind
       IsSynthesized = isSynthesized }
 
-let private bindingKey (snapshot: BindingSnapshot) = snapshot.Symbol.QualifiedName + "|" + snapshot.SignatureText
+let private bindingKey (snapshot: BindingSnapshot) =
+    let entityKey = snapshot.ContainingEntity |> Option.defaultValue ""
+    snapshot.Symbol.QualifiedName + "|" + snapshot.SignatureText + "|" + entityKey
 
 let private entityKey (snapshot: EntitySnapshot) = snapshot.Symbol.QualifiedName
 
@@ -296,16 +300,28 @@ and private snapshotModuleContents denv path (map, entities) contents =
     | ModuleOrNamespaceContents.TMDefDo _ -> (map, entities)
     | ModuleOrNamespaceContents.TMDefOpens _ -> (map, entities)
 
+and private tryGetContainingEntityFullName (var: Val) =
+    match var.MemberInfo with
+    | Some memberInfo ->
+        try
+            let tyconRef = memberInfo.ApparentEnclosingEntity
+            let ilTypeRef = tyconRef.CompiledRepresentationForNamedType
+            Some(ilTypeRef.FullName)
+        with _ -> None
+    | None -> None
+
 and private snapshotBinding denv path (TBind (var, expr, _)) =
     let signature = tyToString denv var.Type
     let bodyHash = exprDigest denv expr
+    let containingEntity = tryGetContainingEntityFullName var
     let symbol = symbolId path var.LogicalName var.Stamp SymbolKind.Value var.IsCompilerGenerated
 
     { Symbol = symbol
       InlineInfo = var.InlineInfo
       SignatureText = signature
       BodyHash = bodyHash
-      IsSynthesized = var.IsCompilerGenerated }: BindingSnapshot
+      IsSynthesized = var.IsCompilerGenerated
+      ContainingEntity = containingEntity }: BindingSnapshot
 
 and private snapshotTycon denv path (tycon: Tycon) =
     let reprText =
@@ -385,7 +401,8 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
               Kind = kind
               BaselineHash = baselineHash
               UpdatedHash = updatedHash
-              IsSynthesized = snapshot.IsSynthesized }
+              IsSynthesized = snapshot.IsSynthesized
+              ContainingEntity = snapshot.ContainingEntity }
         )
 
     for KeyValue(key, baselineBinding) in baseline do

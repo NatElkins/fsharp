@@ -534,6 +534,8 @@ type public FSharpCheckProjectResults =
     /// Get an optimized view of the overall contents of the assembly. Only valid to use if HasCriticalErrors is false.
     member GetOptimizedAssemblyContents: unit -> FSharpAssemblyContents
 
+    member internal HotReloadOptimizationData: TcGlobals * CheckedAssemblyAfterOptimization
+
     /// Get the resolution of the ProjectOptions
     member ProjectContext: FSharpProjectContext
 

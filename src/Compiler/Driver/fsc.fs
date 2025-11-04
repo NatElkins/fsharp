@@ -33,6 +33,7 @@ open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryReader
 open FSharp.Compiler.AccessibilityLogic
 open FSharp.Compiler.HotReloadBaseline
+open FSharp.Compiler.HotReloadPdb
 open FSharp.Compiler.HotReload
 open FSharp.Compiler.CheckDeclarations
 open FSharp.Compiler.CompilerConfig
@@ -44,6 +45,7 @@ open FSharp.Compiler.DependencyManager
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.DiagnosticsLogger
 open FSharp.Compiler.Features
+open FSharp.Compiler.HotReloadNameMap
 open FSharp.Compiler.IlxGen
 open FSharp.Compiler.InfoReader
 open FSharp.Compiler.IO
@@ -968,6 +970,18 @@ let main4
     ReportTime tcConfig "TAST -> IL"
     use _ = UseBuildPhase BuildPhase.IlxGen
 
+    let compilerGlobalState = tcGlobals.CompilerGlobalState.Value
+
+    if tcConfig.hotReloadCapture then
+        match compilerGlobalState.HotReloadNameMap with
+        | Some map -> map.BeginSession()
+        | None ->
+            let map = HotReloadNameMap()
+            map.BeginSession()
+            compilerGlobalState.HotReloadNameMap <- Some map
+    else
+        compilerGlobalState.HotReloadNameMap <- None
+
     // Create the Abstract IL generator
     let ilxGenerator =
         CreateIlxAssemblyGenerator(tcConfig, tcImports, tcGlobals, (LightweightTcValForUsingInBuildMethodCall tcGlobals), generatedCcu)
@@ -1031,6 +1045,7 @@ let main4
         tcGlobals,
         diagnosticsLogger,
         staticLinker,
+        optimizedImpls,
         outfile,
         pdbfile,
         ilxMainModule,
@@ -1050,6 +1065,7 @@ let main5
           tcGlobals,
           diagnosticsLogger: DiagnosticsLogger,
           staticLinker,
+          optimizedImpls,
           outfile,
           pdbfile,
           ilxMainModule,
@@ -1079,6 +1095,7 @@ let main5
         tcImports,
         tcGlobals,
         diagnosticsLogger,
+        optimizedImpls,
         ilxMainModule,
         ilxGenEnvSnapshot,
         outfile,
@@ -1098,6 +1115,7 @@ let main6
           tcImports: TcImports,
           tcGlobals: TcGlobals,
           diagnosticsLogger: DiagnosticsLogger,
+          optimizedImpls,
           ilxMainModule,
           ilxGenEnvSnapshot,
           outfile,
@@ -1131,6 +1149,7 @@ let main6
     match dynamicAssemblyCreator with
     | None ->
         FSharpEditAndContinueLanguageService.Instance.EndSession()
+        tcGlobals.CompilerGlobalState.Value.HotReloadNameMap <- None
 
         try
             match tcConfig.emitMetadataAssembly with
@@ -1203,8 +1222,10 @@ let main6
                     ILBinaryWriter.WriteILBinaryFile(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
 
                     if tcConfig.hotReloadCapture then
-                        let assemblyBytes, _, tokenMappings, metadataSnapshot =
+                        let assemblyBytes, pdbBytesOpt, tokenMappings, metadataSnapshot =
                             ILBinaryWriter.WriteILBinaryInMemoryWithArtifacts(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
+
+                        let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
 
                         let moduleId =
                             use stream = new MemoryStream(assemblyBytes, writable = false)
@@ -1218,7 +1239,12 @@ let main6
 
                         let baseline =
                             if obj.ReferenceEquals(ilxGenEnvSnapshot, null) then
-                                HotReloadBaseline.create ilxMainModule tokenMappings metadataSnapshot moduleId
+                                HotReloadBaseline.create
+                                    ilxMainModule
+                                    tokenMappings
+                                    metadataSnapshot
+                                    moduleId
+                                    portablePdbSnapshot
                             else
                                 HotReloadBaseline.createWithEnvironment
                                     ilxMainModule
@@ -1226,8 +1252,12 @@ let main6
                                     metadataSnapshot
                                     ilxGenEnvSnapshot
                                     moduleId
+                                    portablePdbSnapshot
 
-                        FSharpEditAndContinueLanguageService.Instance.StartSession baseline
+                        FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, optimizedImpls)
+                        match tcGlobals.CompilerGlobalState.Value.HotReloadNameMap with
+                        | Some map -> map.BeginSession()
+                        | None -> ()
                 with Failure msg ->
                     error (Error(FSComp.SR.fscProblemWritingBinary (outfile, msg), rangeCmdArgs))
         with e ->
@@ -1235,6 +1265,7 @@ let main6
             exiter.Exit 1
     | Some da ->
         FSharpEditAndContinueLanguageService.Instance.EndSession()
+        tcGlobals.CompilerGlobalState.Value.HotReloadNameMap <- None
         da (tcConfig, tcGlobals, outfile, ilxMainModule)
 
     AbortOnError(diagnosticsLogger, exiter)

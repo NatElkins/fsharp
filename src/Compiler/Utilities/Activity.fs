@@ -90,6 +90,8 @@ module internal Activity =
         let callerMemberName = "callerMemberName"
         let callerFilePath = "callerFilePath"
         let callerLineNumber = "callerLineNumber"
+        let generation = "generation"
+        let hotReloadAction = "hotReloadAction"
 
         let AllKnownTags =
             [|
@@ -112,6 +114,8 @@ module internal Activity =
                 callerMemberName
                 callerFilePath
                 callerLineNumber
+                generation
+                hotReloadAction
             |]
 
     module Events =

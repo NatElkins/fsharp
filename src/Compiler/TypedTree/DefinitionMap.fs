@@ -16,7 +16,8 @@ type SymbolChange =
       EditKind: SymbolEditKind
       BaselineHash: int option
       UpdatedHash: int option
-      IsSynthesized: bool }
+      IsSynthesized: bool
+      ContainingEntity: string option }
 
 [<RequireQualifiedAccess>]
 /// Aggregates semantic edits and rude edits for the current compilation unit.
@@ -41,7 +42,8 @@ module FSharpDefinitionMap =
                   EditKind = editKind
                   BaselineHash = edit.BaselineHash
                   UpdatedHash = edit.UpdatedHash
-                  IsSynthesized = edit.IsSynthesized })
+                  IsSynthesized = edit.IsSynthesized
+                  ContainingEntity = edit.ContainingEntity })
 
         { Changes = changes; RudeEdits = diff.RudeEdits }
 
@@ -54,11 +56,11 @@ module FSharpDefinitionMap =
             | _ -> None)
 
     /// Retrieves all updated symbols along with the semantic edit classification.
-    let updated (map: FSharpDefinitionMap) : (SymbolId * SemanticEditKind) list =
+    let updated (map: FSharpDefinitionMap) : (SymbolChange * SemanticEditKind) list =
         map.Changes
         |> List.choose (fun (change: SymbolChange) ->
             match change.EditKind with
-            | SymbolEditKind.Updated kind -> Some(change.Symbol, kind)
+            | SymbolEditKind.Updated kind -> Some(change, kind)
             | _ -> None)
 
     /// Retrieves all symbols deleted from the updated compilation.
@@ -82,11 +84,11 @@ module FSharpDefinitionMap =
             | _ -> None)
 
     /// Retrieves synthesized symbols classified as updated.
-    let synthesizedUpdated (map: FSharpDefinitionMap) : (SymbolId * SemanticEditKind) list =
+    let synthesizedUpdated (map: FSharpDefinitionMap) : (SymbolChange * SemanticEditKind) list =
         synthesized map
         |> List.choose (fun change ->
             match change.EditKind with
-            | SymbolEditKind.Updated kind -> Some(change.Symbol, kind)
+            | SymbolEditKind.Updated kind -> Some(change, kind)
             | _ -> None)
 
     /// Retrieves synthesized symbols classified as deleted.

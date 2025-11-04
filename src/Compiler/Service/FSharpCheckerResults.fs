@@ -3893,6 +3893,31 @@ type FSharpCheckProjectResults
 
         FSharpAssemblyContents(tcGlobals, thisCcu, Some ccuSig, tcImports, mimpls)
 
+    member _.HotReloadOptimizationData =
+        if not keepAssemblyContents then
+            invalidOp
+                "The 'keepAssemblyContents' flag must be set to true on the FSharpChecker in order to access the checked contents of assemblies"
+
+        let tcGlobals, tcImports, thisCcu, _, _, _, _, _, _, tcAssemblyExpr, _, _ =
+            getDetails ()
+
+        let mimpls =
+            match tcAssemblyExpr with
+            | None -> []
+            | Some mimpls -> mimpls
+
+        let outfile = ""
+        let importMap = tcImports.GetImportMap()
+        let optEnv0 = GetInitialOptimizationEnv(tcImports, tcGlobals)
+        let tcConfig = getTcConfig ()
+        let isIncrementalFragment = false
+        let tcVal = LightweightTcValForUsingInBuildMethodCall tcGlobals
+
+        let optimizedImpls, _optimizationData, _ =
+            ApplyAllOptimizations(tcConfig, tcGlobals, tcVal, outfile, importMap, isIncrementalFragment, optEnv0, thisCcu, mimpls)
+
+        tcGlobals, optimizedImpls
+
     // Not, this does not have to be a SyncOp, it can be called from any thread
     // TODO: this should be async
     member _.GetUsesOfSymbol(symbol: FSharpSymbol, ?cancellationToken: CancellationToken) =

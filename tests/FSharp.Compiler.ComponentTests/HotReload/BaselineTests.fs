@@ -15,6 +15,7 @@ open FSharp.Test
 open FSharp.Test.Compiler
 open Internal.Utilities
 
+[<Collection(nameof NotThreadSafeResourceCollection)>]
 module BaselineTests =
 
     let private mkSimpleMethodBody instrs =
@@ -191,7 +192,7 @@ module BaselineTests =
     let private emitBaseline () =
         let ilModule, tokenMappings, metadataSnapshot = sampleBaselineArtifacts ()
         let moduleId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-        create ilModule tokenMappings metadataSnapshot moduleId
+        create ilModule tokenMappings metadataSnapshot moduleId None
 
     let private createDummySnapshot () =
         let snapshotType = typeof<IlxGenEnvSnapshot>
@@ -277,7 +278,7 @@ module BaselineTests =
         let snapshot = createDummySnapshot ()
 
         let moduleId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
-        let baseline = createWithEnvironment ilModule tokenMappings metadataSnapshot snapshot moduleId
+        let baseline = createWithEnvironment ilModule tokenMappings metadataSnapshot snapshot moduleId None
 
         Assert.True(baseline.IlxGenEnvironment.IsSome)
         Assert.True(obj.ReferenceEquals(snapshot, baseline.IlxGenEnvironment.Value))

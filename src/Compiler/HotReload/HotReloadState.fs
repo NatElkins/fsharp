@@ -2,21 +2,24 @@ module internal FSharp.Compiler.HotReloadState
 
 open System
 open FSharp.Compiler.HotReloadBaseline
+open FSharp.Compiler.TypedTree
 
 type HotReloadSession =
     {
         Baseline: FSharpEmitBaseline
+        ImplementationFiles: CheckedAssemblyAfterOptimization
         CurrentGeneration: int
         PreviousGenerationId: Guid option
     }
 
 let mutable private session: HotReloadSession voption = ValueNone
 
-let setBaseline (value: FSharpEmitBaseline) =
+let setBaseline (value: FSharpEmitBaseline) (implementationFiles: CheckedAssemblyAfterOptimization) =
     session <-
         ValueSome
             {
                 Baseline = value
+                ImplementationFiles = implementationFiles
                 CurrentGeneration = 1
                 PreviousGenerationId = None
             }
@@ -29,6 +32,17 @@ let tryGetBaseline () =
     | ValueNone -> ValueNone
 
 let tryGetSession () = session
+
+let updateImplementationFiles (implementationFiles: CheckedAssemblyAfterOptimization) =
+    match session with
+    | ValueSome state ->
+        session <-
+            ValueSome
+                {
+                    state with
+                        ImplementationFiles = implementationFiles
+                }
+    | ValueNone -> ()
 
 let recordDeltaApplied (generationId: Guid) =
     match session with

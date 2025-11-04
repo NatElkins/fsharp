@@ -1,9 +1,14 @@
 namespace FSharp.Compiler.HotReload
 
 open System
+open FSharp.Compiler
+open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.AbstractIL.IL
+open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaEmitter
+open FSharp.Compiler.HotReload.DeltaBuilder
+open FSharp.Compiler.TypedTree
 
 /// <summary>
 /// Entry point mirroring Roslyn's <c>EditAndContinueLanguageService</c>. It centralises session lifecycle
@@ -12,13 +17,31 @@ open FSharp.Compiler.IlxDeltaEmitter
 type internal FSharpEditAndContinueLanguageService private () =
 
     static let lazyInstance = lazy FSharpEditAndContinueLanguageService()
+    static let mutable lastBaselineState : (FSharpEmitBaseline * CheckedAssemblyAfterOptimization) option = None
 
     /// <summary>Singleton instance consumed by CLI and IDE hosts.</summary>
     static member Instance = lazyInstance.Value
 
     /// <summary>Initialise or replace the current baseline and reset the generation counters.</summary>
     member _.StartSession(baseline: FSharpEmitBaseline) =
-        FSharp.Compiler.HotReloadState.setBaseline baseline
+        use _ =
+            Activity.start "HotReload.StartSession" [|
+                Activity.Tags.project, baseline.ModuleId.ToString()
+                Activity.Tags.hotReloadAction, "baseline"
+            |]
+
+        FSharp.Compiler.HotReloadState.setBaseline baseline (CheckedAssemblyAfterOptimization [])
+        lastBaselineState <- Some(baseline, CheckedAssemblyAfterOptimization [])
+
+    member _.StartSession(baseline: FSharpEmitBaseline, implementationFiles: CheckedAssemblyAfterOptimization) =
+        use _ =
+            Activity.start "HotReload.StartSession" [|
+                Activity.Tags.project, baseline.ModuleId.ToString()
+                Activity.Tags.hotReloadAction, "baseline+impl"
+            |]
+
+        FSharp.Compiler.HotReloadState.setBaseline baseline implementationFiles
+        lastBaselineState <- Some(baseline, implementationFiles)
 
     /// <summary>Attempts to fetch the current baseline.</summary>
     member _.TryGetBaseline() =
@@ -43,6 +66,11 @@ type internal FSharpEditAndContinueLanguageService private () =
         match FSharp.Compiler.HotReloadState.tryGetSession() with
         | ValueNone -> Error HotReloadError.NoActiveSession
         | ValueSome session ->
+            use _ =
+                Activity.start "HotReload.EmitDelta" [|
+                    Activity.Tags.generation, string session.CurrentGeneration
+                    Activity.Tags.project, session.Baseline.ModuleId.ToString()
+                |]
             try
                 let deltaRequest =
                     { IlxDeltaRequest.Baseline = session.Baseline
@@ -55,7 +83,10 @@ type internal FSharpEditAndContinueLanguageService private () =
 
                 let delta = FSharp.Compiler.IlxDeltaEmitter.emitDelta deltaRequest
                 Ok { Delta = delta }
-            with ex ->
+            with
+            | HotReloadUnsupportedEditException message ->
+                Error(HotReloadError.UnsupportedEdit message)
+            | ex ->
                 Error(HotReloadError.DeltaEmissionException ex)
 
     /// <summary>Returns <c>true</c> if a hot reload session is active.</summary>
@@ -69,6 +100,54 @@ type internal FSharpEditAndContinueLanguageService private () =
             this.OnDeltaApplied(result.Delta.GenerationId)
             Ok result
         | Error error -> Error error
+
+    member this.EmitDeltaForCompilation(
+        tcGlobals: TcGlobals,
+        updatedImplementation: CheckedAssemblyAfterOptimization,
+        ilModule: ILModuleDef
+    ) : Result<DeltaEmissionResult, HotReloadError> =
+        let sessionOpt =
+            match FSharp.Compiler.HotReloadState.tryGetSession() with
+            | ValueNone ->
+                match lastBaselineState with
+                | Some(baseline, implementationFiles) ->
+                    FSharp.Compiler.HotReloadState.setBaseline baseline implementationFiles
+                    FSharp.Compiler.HotReloadState.tryGetSession()
+                | None -> ValueNone
+            | ValueSome _ as session -> session
+
+        match sessionOpt with
+        | ValueNone -> Error HotReloadError.NoActiveSession
+        | ValueSome session ->
+            use _ =
+                Activity.start "HotReload.EmitDeltaForCompilation" [|
+                    Activity.Tags.generation, string session.CurrentGeneration
+                    Activity.Tags.project, session.Baseline.ModuleId.ToString()
+                |]
+            let symbolChanges = computeSymbolChanges tcGlobals session.ImplementationFiles updatedImplementation
+
+            if not (List.isEmpty symbolChanges.RudeEdits) then
+                Error(HotReloadError.UnsupportedEdit "Rude edits detected; full rebuild required.")
+            elif not (List.isEmpty symbolChanges.Added) || not (List.isEmpty symbolChanges.Deleted) then
+                Error(HotReloadError.UnsupportedEdit "Structural edits detected; full rebuild required.")
+            else
+                let updatedTypes, updatedMethods = mapSymbolChangesToDelta session.Baseline symbolChanges
+
+                if List.isEmpty updatedMethods then
+                    Error HotReloadError.NoChanges
+                else
+                    let request : DeltaEmissionRequest =
+                        { IlModule = ilModule
+                          UpdatedTypes = updatedTypes
+                          UpdatedMethods = updatedMethods
+                          SymbolChanges = Some symbolChanges }
+
+                    match this.EmitDelta request with
+                    | Ok result ->
+                        this.CommitPendingUpdate(result.Delta.GenerationId)
+                        FSharp.Compiler.HotReloadState.updateImplementationFiles updatedImplementation
+                        Ok result
+                    | Error error -> Error error
 
     /// <summary>Explicit commit hook mirroring Roslyn's service contract.</summary>
     member this.CommitPendingUpdate(generationId: Guid) =

@@ -1,6 +1,7 @@
 module internal FSharp.Compiler.HotReloadBaseline
 
 open System
+open System.Collections.Immutable
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.IlxGen
@@ -32,6 +33,12 @@ type EventDefinitionKey =
       Name: string
       EventType: ILType option }
 
+/// <summary>Portable PDB snapshot captured during baseline emission.</summary>
+type PortablePdbSnapshot =
+    { Bytes: byte[]
+      TableRowCounts: ImmutableArray<int>
+      EntryPointToken: int option }
+
 /// <summary>
 /// Represents the captured state of a baseline emission, mirroring Roslyn's EmitBaseline. It stores metadata
 /// snapshots along with stable token maps so delta emission can reuse pre-existing metadata handles.
@@ -45,7 +52,8 @@ type FSharpEmitBaseline =
       FieldTokens: Map<FieldDefinitionKey, int>
       PropertyTokens: Map<PropertyDefinitionKey, int>
       EventTokens: Map<EventDefinitionKey, int>
-      IlxGenEnvironment: IlxGenEnvSnapshot option }
+      IlxGenEnvironment: IlxGenEnvSnapshot option
+      PortablePdb: PortablePdbSnapshot option }
 
 /// <summary>Create a baseline record for the supplied IL module and token mappings.</summary>
 val create:
@@ -53,6 +61,7 @@ val create:
     tokenMappings: ILTokenMappings ->
     metadataSnapshot: MetadataSnapshot ->
     moduleId: Guid ->
+    portablePdbSnapshot: PortablePdbSnapshot option ->
         FSharpEmitBaseline
 
 /// <summary>Create a baseline record that also persists the supplied ILX environment snapshot.</summary>
@@ -62,4 +71,5 @@ val createWithEnvironment:
     metadataSnapshot: MetadataSnapshot ->
     ilxGenEnvironment: IlxGenEnvSnapshot ->
     moduleId: Guid ->
+    portablePdbSnapshot: PortablePdbSnapshot option ->
         FSharpEmitBaseline

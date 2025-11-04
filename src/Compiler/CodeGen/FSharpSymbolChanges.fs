@@ -15,12 +15,18 @@ type SynthesizedMemberChange =
     { Symbol: SymbolId
       EditKind: SynthesizedMemberEditKind
       BaselineHash: int option
-      UpdatedHash: int option }
+      UpdatedHash: int option
+      ContainingEntity: string option }
+
+type UpdatedSymbolChange =
+    { Symbol: SymbolId
+      Kind: SemanticEditKind
+      ContainingEntity: string option }
 
 /// Aggregated symbol changes derived from the typed-tree diff and definition map.
 type FSharpSymbolChanges =
     { Added: SymbolId list
-      Updated: (SymbolId * SemanticEditKind) list
+      Updated: UpdatedSymbolChange list
       Deleted: SymbolId list
       Synthesized: SynthesizedMemberChange list
       RudeEdits: RudeEdit list }
@@ -41,10 +47,19 @@ module FSharpSymbolChanges =
                 { Symbol = change.Symbol
                   EditKind = editKind
                   BaselineHash = change.BaselineHash
-                  UpdatedHash = change.UpdatedHash })
+                  UpdatedHash = change.UpdatedHash
+                  ContainingEntity = change.ContainingEntity })
+
+        let updated =
+            definitionMap
+            |> FSharpDefinitionMap.updated
+            |> List.map (fun (change, kind) ->
+                { Symbol = change.Symbol
+                  Kind = kind
+                  ContainingEntity = change.ContainingEntity })
 
         { Added = FSharpDefinitionMap.added definitionMap
-          Updated = FSharpDefinitionMap.updated definitionMap
+          Updated = updated
           Deleted = FSharpDefinitionMap.deleted definitionMap
           Synthesized = synthesized
           RudeEdits = definitionMap.RudeEdits }
@@ -53,7 +68,7 @@ module FSharpSymbolChanges =
     let entitySymbolsWithChanges (changes: FSharpSymbolChanges) : SymbolId list =
         let updatedEntities =
             changes.Updated
-            |> List.choose (fun (symbol, _) -> if symbol.Kind = SymbolKind.Entity then Some symbol else None)
+            |> List.choose (fun change -> if change.Symbol.Kind = SymbolKind.Entity then Some change.Symbol else None)
 
         let addedEntities =
             changes.Added

@@ -10,6 +10,8 @@ open FSharp.Compiler.IlxDeltaEmitter
 /// <summary>Errors surfaced when emitting hot reload deltas.</summary>
 type internal HotReloadError =
     | NoActiveSession
+    | NoChanges
+    | UnsupportedEdit of string
     | DeltaEmissionException of exn
 
 /// <summary>Input describing the members that changed during the current hot reload cycle.</summary>

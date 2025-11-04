@@ -41,6 +41,8 @@ module internal Activity =
         val callerMemberName: string
         val callerFilePath: string
         val callerLineNumber: string
+        val generation: string
+        val hotReloadAction: string
 
     module Events =
         val cacheHit: string

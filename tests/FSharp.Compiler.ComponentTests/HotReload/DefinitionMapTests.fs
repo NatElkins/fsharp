@@ -24,7 +24,8 @@ module DefinitionMapTests =
               Kind = SemanticEditKind.Insert
               BaselineHash = None
               UpdatedHash = Some 42
-              IsSynthesized = false }
+              IsSynthesized = false
+              ContainingEntity = None }
 
         let result = diffResult [ edit ] [] |> FSharpDefinitionMap.ofTypedTreeDiff
 
@@ -39,14 +40,15 @@ module DefinitionMapTests =
               Kind = SemanticEditKind.MethodBody
               BaselineHash = Some 11
               UpdatedHash = Some 12
-              IsSynthesized = false }
+              IsSynthesized = false
+              ContainingEntity = None }
 
         let result = diffResult [ edit ] [] |> FSharpDefinitionMap.ofTypedTreeDiff
 
         let updated = FSharpDefinitionMap.updated result
         Assert.Single updated |> ignore
-        let (symbol, kind) = List.head updated
-        Assert.Equal("Module.Method", symbol.QualifiedName)
+        let (updateChange, kind) = List.head updated
+        Assert.Equal("Module.Method", updateChange.Symbol.QualifiedName)
         Assert.Equal(SemanticEditKind.MethodBody, kind)
         let change =
             result.Changes
@@ -62,14 +64,15 @@ module DefinitionMapTests =
               Kind = SemanticEditKind.TypeDefinition
               BaselineHash = Some 5
               UpdatedHash = Some 6
-              IsSynthesized = false }
+              IsSynthesized = false
+              ContainingEntity = None }
 
         let result = diffResult [ edit ] [] |> FSharpDefinitionMap.ofTypedTreeDiff
 
         let updated = FSharpDefinitionMap.updated result
         Assert.Single updated |> ignore
-        let (symbol, kind) = List.head updated
-        Assert.Equal(SymbolKind.Entity, symbol.Kind)
+        let (updateChange, kind) = List.head updated
+        Assert.Equal(SymbolKind.Entity, updateChange.Symbol.Kind)
         Assert.Equal(SemanticEditKind.TypeDefinition, kind)
 
     [<Fact>]
@@ -79,7 +82,8 @@ module DefinitionMapTests =
               Kind = SemanticEditKind.Delete
               BaselineHash = Some 1
               UpdatedHash = None
-              IsSynthesized = false }
+              IsSynthesized = false
+              ContainingEntity = None }
 
         let result = diffResult [ edit ] [] |> FSharpDefinitionMap.ofTypedTreeDiff
         let deleted = FSharpDefinitionMap.deleted result
@@ -104,7 +108,8 @@ module DefinitionMapTests =
               Kind = SemanticEditKind.MethodBody
               BaselineHash = Some 1
               UpdatedHash = Some 2
-              IsSynthesized = true }
+              IsSynthesized = true
+              ContainingEntity = None }
 
         let result = diffResult [ synthesizedEdit ] [] |> FSharpDefinitionMap.ofTypedTreeDiff
 

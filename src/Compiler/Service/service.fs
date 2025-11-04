@@ -3,10 +3,25 @@
 namespace FSharp.Compiler.CodeAnalysis
 
 open System
+open System.Collections
+open System.Diagnostics
+open System.IO
+open System.Reflection
+open System.Reflection.Emit
+open System.Reflection.Metadata
+open System.Reflection.PortableExecutable
+open System.Security.Cryptography
+open System.Threading
 open Internal.Utilities.Collections
+open Internal.Utilities
 open Internal.Utilities.Library
 open FSharp.Compiler
+open FSharp.Compiler.AbstractIL
+open FSharp.Compiler.AbstractIL.IL
+open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.AbstractIL.ILBinaryReader
+open FSharp.Compiler.AbstractIL.ILDynamicAssemblyWriter
+open FSharp.Compiler.AbstractIL.ILPdbWriter
 open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.CodeAnalysis.TransparentCompiler
 open FSharp.Compiler.CompilerConfig
@@ -18,6 +33,53 @@ open FSharp.Compiler.Symbols
 open FSharp.Compiler.Tokenization
 open FSharp.Compiler.Text
 open FSharp.Compiler.Text.Range
+open FSharp.Compiler.TcGlobals
+open FSharp.Compiler.BuildGraph
+open FSharp.Compiler.HotReload
+open FSharp.Compiler.HotReloadBaseline
+open FSharp.Compiler.HotReload.DeltaBuilder
+open FSharp.Compiler.IlxDeltaEmitter
+open FSharp.Compiler.TypedTree
+open FSharp.Compiler.HotReloadNameMap
+
+[<RequireQualifiedAccess>]
+type FSharpHotReloadError =
+    | NoActiveSession
+    | NoChanges
+    | MissingOutputPath
+    | UnsupportedEdit of string
+    | CompilationFailed of FSharpDiagnostic[]
+    | DeltaEmissionFailed of string
+
+[<System.Flags>]
+type FSharpHotReloadCapability =
+    | None = 0
+    | Il = 1
+    | Metadata = 2
+    | PortablePdb = 4
+    | MultipleGenerations = 8
+    | RuntimeApply = 16
+
+type FSharpHotReloadCapabilities internal (flags: FSharpHotReloadCapability) =
+    member _.Flags = flags
+    member _.SupportsIl = flags.HasFlag(FSharpHotReloadCapability.Il)
+    member _.SupportsMetadata = flags.HasFlag(FSharpHotReloadCapability.Metadata)
+    member _.SupportsPortablePdb = flags.HasFlag(FSharpHotReloadCapability.PortablePdb)
+    member _.SupportsMultipleGenerations = flags.HasFlag(FSharpHotReloadCapability.MultipleGenerations)
+    member _.SupportsRuntimeApply = flags.HasFlag(FSharpHotReloadCapability.RuntimeApply)
+
+    static member internal FromInternalFlags(flags: HotReloadCapabilityFlags) =
+        let casted = enum<FSharpHotReloadCapability>(int flags)
+        FSharpHotReloadCapabilities(casted)
+
+type FSharpHotReloadDelta =
+    { Metadata: byte[]
+      IL: byte[]
+      Pdb: byte[] option
+      UpdatedTypes: int list
+      UpdatedMethods: int list
+      GenerationId: Guid
+      BaseGenerationId: Guid }
 
 /// Callback that indicates whether a requested result has become obsolete.
 [<NoComparison; NoEquality>]
@@ -149,6 +211,12 @@ type FSharpChecker
     let braceMatchCache =
         MruCache<AnyCallerThreadToken, _, _>(braceMatchCacheSize, areSimilar = AreSimilarForParsing, areSame = AreSameForParsing)
 
+    let hotReloadGate = obj()
+
+    let mutable currentHotReloadNameMap: HotReloadNameMap option = None
+
+    let mutable currentBaselineState: (FSharpEmitBaseline * CheckedAssemblyAfterOptimization) option = None
+
     static let inferParallelReferenceResolution (parallelReferenceResolution: bool option) =
         let explicitValue =
             parallelReferenceResolution
@@ -163,6 +231,179 @@ type FSharpChecker
             |> Option.defaultValue explicitValue
 
         withEnvOverride
+
+    let ensureKeepAssemblyContents () =
+        if not keepAssemblyContents then
+            invalidOp
+                "Hot reload APIs require the checker to be created with keepAssemblyContents=true. Pass keepAssemblyContents=true when calling FSharpChecker.Create."
+
+    let trimQuotes (text: string) =
+        text.Trim().Trim('"')
+
+    let tryGetOutputPath (options: FSharpProjectOptions) =
+        let tryFromLongForm =
+            options.OtherOptions
+            |> Array.tryPick (fun opt ->
+                if opt.StartsWith("--out:", StringComparison.OrdinalIgnoreCase) then
+                    opt.Substring("--out:".Length) |> trimQuotes |> Some
+                else
+                    None)
+
+        match tryFromLongForm with
+        | Some path -> Some(Path.GetFullPath(path))
+        | None ->
+            match
+                options.OtherOptions
+                |> Array.tryFindIndex (fun opt -> String.Equals(opt, "-o", StringComparison.OrdinalIgnoreCase))
+            with
+            | Some idx when idx + 1 < options.OtherOptions.Length ->
+                options.OtherOptions[idx + 1] |> trimQuotes |> Path.GetFullPath |> Some
+            | _ -> None
+
+    let getErrorDiagnostics (diagnostics: FSharpDiagnostic[]) =
+        diagnostics
+        |> Array.filter (fun diagnostic -> diagnostic.Severity = FSharpDiagnosticSeverity.Error)
+
+    let waitForStableFile path =
+        let maxAttempts = 20
+        let sleepMillis = 25
+        let mutable attempts = 0
+        let mutable stableCount = 0
+        let mutable lastWrite = DateTime.MinValue
+        let mutable lastSize = -1L
+        while attempts < maxAttempts && stableCount < 2 do
+            let exists = File.Exists path
+            let currentWrite =
+                if exists then File.GetLastWriteTimeUtc path else DateTime.MinValue
+            let currentSize =
+                if exists then FileInfo(path).Length else -1L
+            if currentWrite = lastWrite && currentSize = lastSize then
+                stableCount <- stableCount + 1
+            else
+                stableCount <- 0
+                lastWrite <- currentWrite
+                lastSize <- currentSize
+            if stableCount < 2 then
+                Thread.Sleep sleepMillis
+            attempts <- attempts + 1
+
+    let shouldTraceHotReload () =
+        match System.Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_STRINGS") with
+        | null -> false
+        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+        | _ -> false
+
+    let computeFileHash (path: string) : byte[] option =
+        if File.Exists path then
+            try
+                use stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)
+                use sha = System.Security.Cryptography.SHA256.Create()
+                Some(sha.ComputeHash stream)
+            with _ -> None
+        else
+            None
+
+    let waitForFileChange path previousTimestamp previousHash =
+        let maxAttempts = 40
+        let sleepMillis = 25
+        let mutable attempts = 0
+        let mutable observedChange = false
+        let trace = shouldTraceHotReload ()
+        while attempts < maxAttempts && not observedChange do
+            let current =
+                if File.Exists path then File.GetLastWriteTimeUtc path else DateTime.MinValue
+            if current <> previousTimestamp then
+                if trace then
+                    printfn "[fsharp-hotreload][trace] detected write timestamp change for %s (prev=%O, new=%O)" path previousTimestamp current
+                observedChange <- true
+            else
+                match computeFileHash path, previousHash with
+                | Some currentBytes, Some previousBytes
+                    when not (StructuralComparisons.StructuralEqualityComparer.Equals(currentBytes, previousBytes)) ->
+                    if trace then
+                        printfn "[fsharp-hotreload][trace] detected content hash change for %s" path
+                    observedChange <- true
+                | _ ->
+                    Thread.Sleep sleepMillis
+                    attempts <- attempts + 1
+        if observedChange then
+            waitForStableFile path
+
+    let readIlModule path =
+        waitForStableFile path
+        let options : ILReaderOptions =
+            { pdbDirPath = None
+              reduceMemoryUsage = ReduceMemoryFlag.Yes
+              metadataOnly = MetadataOnlyFlag.No
+              tryGetMetadataSnapshot = fun _ -> None }
+
+        use reader = OpenILModuleReader path options
+        reader.ILModuleDef
+
+    let toPublicDelta (delta: IlxDelta) : FSharpHotReloadDelta =
+        { Metadata = Array.copy delta.Metadata
+          IL = Array.copy delta.IL
+          Pdb = delta.Pdb |> Option.map Array.copy
+          UpdatedTypes = delta.UpdatedTypeTokens
+          UpdatedMethods = delta.UpdatedMethodTokens
+          GenerationId = delta.GenerationId
+          BaseGenerationId = delta.BaseGenerationId }
+
+    let mapHotReloadError =
+        function
+        | HotReloadError.NoActiveSession -> FSharpHotReloadError.NoActiveSession
+        | HotReloadError.NoChanges -> FSharpHotReloadError.NoChanges
+        | HotReloadError.UnsupportedEdit message -> FSharpHotReloadError.UnsupportedEdit message
+        | HotReloadError.DeltaEmissionException ex -> FSharpHotReloadError.DeltaEmissionFailed ex.Message
+
+    let createBaseline (tcGlobals: TcGlobals) (ilModule: ILModuleDef) (outputPath: string) =
+        let pdbPath =
+            Path.ChangeExtension(outputPath, ".pdb")
+            |> Option.ofObj
+            |> Option.defaultValue (outputPath + ".pdb")
+
+        let writerOptions: ILBinaryWriter.options =
+            { ilg = tcGlobals.ilg
+              outfile = outputPath
+              pdbfile =
+                if File.Exists(pdbPath) then
+                    Some pdbPath
+                else
+                    None
+              emitTailcalls = false
+              deterministic = true
+              portablePDB = true
+              embeddedPDB = false
+              embedAllSource = false
+              embedSourceList = []
+              allGivenSources = []
+              sourceLink = ""
+              checksumAlgorithm = HashAlgorithm.Sha256
+              signer = None
+              dumpDebugInfo = false
+              referenceAssemblyOnly = false
+              referenceAssemblyAttribOpt = None
+              referenceAssemblySignatureHash = None
+              pathMap = PathMap.empty }
+
+        let _, pdbBytesOpt, tokenMappings, metadataSnapshot =
+            ILBinaryWriter.WriteILBinaryInMemoryWithArtifacts(writerOptions, ilModule, id)
+
+        let moduleId =
+            use stream = File.OpenRead(outputPath)
+            use peReader = new PEReader(stream)
+            let metadataReader = peReader.GetMetadataReader()
+            let moduleDef = metadataReader.GetModuleDefinition()
+
+            if moduleDef.Mvid.IsNil then
+                Guid.NewGuid()
+            else
+                metadataReader.GetGuid(moduleDef.Mvid)
+
+        let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
+
+        HotReloadBaseline.create ilModule tokenMappings metadataSnapshot moduleId portablePdbSnapshot
 
     static member getParallelReferenceResolutionFromEnvironment() =
         getParallelReferenceResolutionFromEnvironment ()
@@ -235,6 +476,169 @@ type FSharpChecker
             useTransparentCompiler,
             ?transparentCompilerCacheSizes = transparentCompilerCacheSizes
         )
+
+    member this.StartHotReloadSession(projectOptions: FSharpProjectOptions, ?userOpName: string) =
+        async {
+            ensureKeepAssemblyContents ()
+
+            let opName = defaultArg userOpName "Unknown"
+
+            use _ = Activity.start "FSharpChecker.StartHotReloadSession" [|
+                Activity.Tags.userOpName, opName
+                Activity.Tags.project, projectOptions.ProjectFileName
+            |]
+
+            match tryGetOutputPath projectOptions with
+            | None -> return Result.Error FSharpHotReloadError.MissingOutputPath
+            | Some outputPath ->
+                let baselineTimestamp =
+                    if File.Exists outputPath then
+                        File.GetLastWriteTimeUtc outputPath
+                    else
+                        DateTime.MinValue
+                let baselineHash = computeFileHash outputPath
+                let! projectResults : FSharpCheckProjectResults =
+                    this.ParseAndCheckProject(projectOptions, userOpName = opName)
+                let errors = getErrorDiagnostics projectResults.Diagnostics
+
+                if projectResults.HasCriticalErrors || errors.Length > 0 then
+                    return Result.Error(FSharpHotReloadError.CompilationFailed errors)
+                elif not (File.Exists(outputPath)) then
+                    return
+                        Result.Error(
+                            FSharpHotReloadError.DeltaEmissionFailed(
+                                $"Output assembly '{outputPath}' was not found. Build the project before starting a hot reload session."
+                            )
+                        )
+                else
+                    let tcGlobals, optimizedImpls = projectResults.HotReloadOptimizationData
+                    waitForFileChange outputPath baselineTimestamp baselineHash
+
+                    let baselineResult : Result<_, FSharpHotReloadError> =
+                        try
+                            let ilModule = readIlModule outputPath
+                            let baseline = createBaseline tcGlobals ilModule outputPath
+                            Ok(baseline, optimizedImpls)
+                        with ex ->
+                            Result.Error(
+                                FSharpHotReloadError.DeltaEmissionFailed(
+                                    $"Failed to create hot reload baseline: {ex.Message}"
+                                )
+                            )
+
+                    match baselineResult with
+                    | Result.Error error -> return Result.Error error
+                    | Ok(baseline, implementationFiles) ->
+                        lock hotReloadGate (fun () ->
+                            let compilerState = tcGlobals.CompilerGlobalState.Value
+
+                            let map =
+                                match currentHotReloadNameMap with
+                                | Some map ->
+                                    map.BeginSession()
+                                    map
+                                | None ->
+                                    let map = HotReloadNameMap()
+                                    map.BeginSession()
+                                    currentHotReloadNameMap <- Some map
+                                    map
+
+                            compilerState.HotReloadNameMap <- Some map
+
+                            FSharpEditAndContinueLanguageService.Instance.EndSession()
+                            FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
+                            currentBaselineState <- Some(baseline, implementationFiles))
+
+                        return Result.Ok ()
+        }
+
+    member this.EmitHotReloadDelta(projectOptions: FSharpProjectOptions, ?userOpName: string) =
+        async {
+            ensureKeepAssemblyContents ()
+
+            let opName = defaultArg userOpName "Unknown"
+
+            use _ = Activity.start "FSharpChecker.EmitHotReloadDelta" [|
+                Activity.Tags.userOpName, opName
+                Activity.Tags.project, projectOptions.ProjectFileName
+            |]
+
+            match tryGetOutputPath projectOptions with
+            | None -> return Result.Error FSharpHotReloadError.MissingOutputPath
+            | Some outputPath ->
+                let! projectResults : FSharpCheckProjectResults =
+                    this.ParseAndCheckProject(projectOptions, userOpName = opName)
+
+                let errors = getErrorDiagnostics projectResults.Diagnostics
+
+                if projectResults.HasCriticalErrors || errors.Length > 0 then
+                    return Result.Error(FSharpHotReloadError.CompilationFailed errors)
+                elif not (File.Exists(outputPath)) then
+                    return
+                        Result.Error(
+                            FSharpHotReloadError.DeltaEmissionFailed(
+                                $"Output assembly '{outputPath}' was not found. Build the project before emitting a hot reload delta."
+                            )
+                        )
+                else
+                    let tcGlobals, optimizedImpls = projectResults.HotReloadOptimizationData
+
+                    lock hotReloadGate (fun () ->
+                        if not FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
+                            match currentBaselineState with
+                            | Some(baseline, implementationFiles) ->
+                                let compilerState = tcGlobals.CompilerGlobalState.Value
+
+                                match currentHotReloadNameMap with
+                                | Some map -> compilerState.HotReloadNameMap <- Some map
+                                | None -> ()
+
+                                FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
+                            | None -> ())
+
+                    if not FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
+                        return Result.Error FSharpHotReloadError.NoActiveSession
+                    else
+                        let ilModuleResult : Result<_, FSharpHotReloadError> =
+                            try
+                                readIlModule outputPath |> Ok
+                            with ex ->
+                                Result.Error(
+                                    FSharpHotReloadError.DeltaEmissionFailed(
+                                        $"Failed to read updated assembly '{outputPath}': {ex.Message}"
+                                    )
+                                )
+
+                        match ilModuleResult with
+                        | Result.Error error -> return Result.Error error
+                        | Ok ilModule ->
+                            lock hotReloadGate (fun () ->
+                                match currentHotReloadNameMap with
+                                | Some map -> tcGlobals.CompilerGlobalState.Value.HotReloadNameMap <- Some map
+                                | None -> ())
+
+                            match
+                                FSharpEditAndContinueLanguageService.Instance.EmitDeltaForCompilation(
+                                    tcGlobals,
+                                    optimizedImpls,
+                                    ilModule
+                                )
+                            with
+                            | Ok result -> return Result.Ok(toPublicDelta result.Delta)
+                            | Error error -> return Result.Error(mapHotReloadError error)
+        }
+
+    member _.EndHotReloadSession() =
+        lock hotReloadGate (fun () ->
+            currentHotReloadNameMap <- None
+            currentBaselineState <- None
+            FSharpEditAndContinueLanguageService.Instance.EndSession())
+
+    member _.HotReloadSessionActive = FSharpEditAndContinueLanguageService.Instance.IsSessionActive
+
+    member _.HotReloadCapabilities =
+        let capabilities = HotReloadCapability.current
+        FSharpHotReloadCapabilities.FromInternalFlags(capabilities.Flags)
 
     member _.UsesTransparentCompiler = useTransparentCompiler = Some true
 

@@ -25,19 +25,25 @@ module SymbolChangesTests =
               Kind = SemanticEditKind.MethodBody
               BaselineHash = Some 10
               UpdatedHash = Some 20
-              IsSynthesized = true }
+              IsSynthesized = true
+              ContainingEntity = None }
 
         let regularEdit : SemanticEdit =
             { Symbol = symbol [ "Module" ] "Value" 8L SymbolKind.Value false
               Kind = SemanticEditKind.MethodBody
               BaselineHash = Some 3
               UpdatedHash = Some 4
-              IsSynthesized = false }
+              IsSynthesized = false
+              ContainingEntity = None }
 
         let definitionMap = diff [ synthesizedEdit; regularEdit ] [] |> FSharpDefinitionMap.ofTypedTreeDiff
         let symbolChanges = FSharpSymbolChanges.ofDefinitionMap definitionMap
 
-        Assert.Equal<(SymbolId * SemanticEditKind) list>([ synthesizedEdit.Symbol, SemanticEditKind.MethodBody ], FSharpDefinitionMap.synthesizedUpdated definitionMap)
+        let synthesizedDefinitionUpdates = FSharpDefinitionMap.synthesizedUpdated definitionMap
+        Assert.Single synthesizedDefinitionUpdates |> ignore
+        let (synthChange, synthKind) = List.head synthesizedDefinitionUpdates
+        Assert.Equal(synthesizedEdit.Symbol.QualifiedName, synthChange.Symbol.QualifiedName)
+        Assert.Equal(SemanticEditKind.MethodBody, synthKind)
 
         let synthesizedUpdated = FSharpSymbolChanges.synthesizedUpdated symbolChanges
         Assert.Single synthesizedUpdated |> ignore
@@ -46,4 +52,4 @@ module SymbolChangesTests =
         Assert.Equal(SemanticEditKind.MethodBody, editKind)
 
         // Regular edits should still appear in the aggregated updated list.
-        Assert.Contains(symbolChanges.Updated, fun (symbol, _) -> symbol.QualifiedName = "Module.Value")
+        Assert.Contains(symbolChanges.Updated, fun change -> change.Symbol.QualifiedName = "Module.Value")
