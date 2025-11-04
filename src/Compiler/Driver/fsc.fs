@@ -1222,20 +1222,22 @@ let main6
                     ILBinaryWriter.WriteILBinaryFile(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
 
                     if tcConfig.hotReloadCapture then
-                        let assemblyBytes, pdbBytesOpt, tokenMappings, metadataSnapshot =
+                        let assemblyBytes, pdbBytesOpt, tokenMappings, _ =
                             ILBinaryWriter.WriteILBinaryInMemoryWithArtifacts(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
 
                         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
 
-                        let moduleId =
+                        let moduleId, metadataSnapshot =
                             use stream = new MemoryStream(assemblyBytes, writable = false)
                             use peReader = new PEReader(stream)
                             let metadataReader = peReader.GetMetadataReader()
                             let moduleDef = metadataReader.GetModuleDefinition()
-                            if moduleDef.Mvid.IsNil then
-                                Guid.NewGuid()
-                            else
-                                metadataReader.GetGuid(moduleDef.Mvid)
+                            let moduleId =
+                                if moduleDef.Mvid.IsNil then
+                                    Guid.NewGuid()
+                                else
+                                    metadataReader.GetGuid(moduleDef.Mvid)
+                            moduleId, HotReloadBaseline.metadataSnapshotFromReader metadataReader
 
                         let baseline =
                             if obj.ReferenceEquals(ilxGenEnvSnapshot, null) then

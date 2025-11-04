@@ -241,23 +241,63 @@ type FSharpChecker
         text.Trim().Trim('"')
 
     let tryGetOutputPath (options: FSharpProjectOptions) =
+        let projectDirectory =
+            let resolveDirectory (path: string) =
+                if String.IsNullOrWhiteSpace(path) then
+                    Directory.GetCurrentDirectory()
+                else
+                    let absolute =
+                        if Path.IsPathRooted(path) then
+                            path
+                        else
+                            Path.GetFullPath(path)
+
+                    match Path.GetDirectoryName(absolute) with
+                    | null
+                    | "" -> Directory.GetCurrentDirectory()
+                    | value -> value
+
+            match options.ProjectFileName with
+            | null
+            | "" -> Directory.GetCurrentDirectory()
+            | fileName -> resolveDirectory fileName
+
+        let resolveOutputPath (path: string) =
+            let trimmed = trimQuotes path
+            if Path.IsPathRooted(trimmed) then
+                Path.GetFullPath(trimmed)
+            else
+                let baseDirectory =
+                    if String.IsNullOrWhiteSpace(projectDirectory) then
+                        Directory.GetCurrentDirectory()
+                    else
+                        projectDirectory
+
+                let combined =
+                    if String.IsNullOrWhiteSpace(trimmed) then
+                        baseDirectory
+                    else
+                        Path.Combine(baseDirectory, trimmed)
+
+                Path.GetFullPath(combined)
+
         let tryFromLongForm =
             options.OtherOptions
             |> Array.tryPick (fun opt ->
                 if opt.StartsWith("--out:", StringComparison.OrdinalIgnoreCase) then
-                    opt.Substring("--out:".Length) |> trimQuotes |> Some
+                    opt.Substring("--out:".Length) |> resolveOutputPath |> Some
                 else
                     None)
 
         match tryFromLongForm with
-        | Some path -> Some(Path.GetFullPath(path))
+        | Some path -> Some path
         | None ->
             match
                 options.OtherOptions
                 |> Array.tryFindIndex (fun opt -> String.Equals(opt, "-o", StringComparison.OrdinalIgnoreCase))
             with
             | Some idx when idx + 1 < options.OtherOptions.Length ->
-                options.OtherOptions[idx + 1] |> trimQuotes |> Path.GetFullPath |> Some
+                options.OtherOptions[idx + 1] |> resolveOutputPath |> Some
             | _ -> None
 
     let getErrorDiagnostics (diagnostics: FSharpDiagnostic[]) =
@@ -387,19 +427,22 @@ type FSharpChecker
               referenceAssemblySignatureHash = None
               pathMap = PathMap.empty }
 
-        let _, pdbBytesOpt, tokenMappings, metadataSnapshot =
+        let _, pdbBytesOpt, tokenMappings, _ =
             ILBinaryWriter.WriteILBinaryInMemoryWithArtifacts(writerOptions, ilModule, id)
 
-        let moduleId =
+        let moduleId, metadataSnapshot =
             use stream = File.OpenRead(outputPath)
             use peReader = new PEReader(stream)
             let metadataReader = peReader.GetMetadataReader()
             let moduleDef = metadataReader.GetModuleDefinition()
 
-            if moduleDef.Mvid.IsNil then
-                Guid.NewGuid()
-            else
-                metadataReader.GetGuid(moduleDef.Mvid)
+            let moduleId =
+                if moduleDef.Mvid.IsNil then
+                    Guid.NewGuid()
+                else
+                    metadataReader.GetGuid(moduleDef.Mvid)
+
+            moduleId, HotReloadBaseline.metadataSnapshotFromReader metadataReader
 
         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
 

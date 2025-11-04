@@ -3,10 +3,12 @@
 namespace FSharp.Compiler.ComponentTests.HotReload
 
 open System
+open System.Collections.Immutable
 open System.Diagnostics
 open System.IO
 open System.Reflection.PortableExecutable
 open System.Reflection.Metadata
+open System.Reflection.Metadata.Ecma335
 open Xunit
 open Xunit.Sdk
 open System
@@ -297,14 +299,15 @@ module MdvValidationTests =
               referenceAssemblySignatureHash = None
               pathMap = PathMap.empty }
 
-        let assemblyBytes, pdbBytesOpt, tokenMappings, metadataSnapshot =
+        let assemblyBytes, pdbBytesOpt, tokenMappings, _ =
             ILWriter.WriteILBinaryInMemoryWithArtifacts(writerOptions, ilModule, id)
 
-        let moduleId =
+        let moduleId, metadataSnapshot =
             use peReader = new System.Reflection.PortableExecutable.PEReader(new MemoryStream(assemblyBytes, false))
             let metadataReader = peReader.GetMetadataReader()
             let moduleDef = metadataReader.GetModuleDefinition()
-            if moduleDef.Mvid.IsNil then Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
+            let moduleId = if moduleDef.Mvid.IsNil then Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
+            moduleId, HotReloadBaseline.metadataSnapshotFromReader metadataReader
 
         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
 
@@ -604,7 +607,6 @@ module Target =
         let originalCwd = Directory.GetCurrentDirectory()
 
         try
-            Directory.SetCurrentDirectory(projectRoot)
             checker.InvalidateAll() |> ignore
             File.WriteAllText(fsPath, baselineSource)
             let commandLine = getFscCommandLine projectPath (Some "Debug") (Some "net10.0") |> ensureHotReloadOption
@@ -666,6 +668,8 @@ module Target =
             let baselineCopy = Path.Combine(projectRoot, "baseline.dll")
             File.Copy(outputPath, baselineCopy, true)
 
+            Directory.SetCurrentDirectory(originalCwd)
+
             match checker.StartHotReloadSession(projectOptions) |> Async.RunSynchronously with
             | Error error -> failwithf "StartHotReloadSession failed: %A" error
             | Ok () -> ()
@@ -687,6 +691,8 @@ module Target =
             compile false updatedCompileArgs
 
             Thread.Sleep 200
+
+            Directory.SetCurrentDirectory(originalCwd)
 
             match checker.EmitHotReloadDelta(projectOptions) |> Async.RunSynchronously with
             | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
@@ -768,12 +774,149 @@ module Demo =
                     "Expected metadata delta to contain updated integration literal."
                 )
 
+                let metadataBytes = ImmutableArray.CreateRange(delta.Metadata)
+                use metadataProvider = MetadataReaderProvider.FromMetadataImage(metadataBytes)
+                use baselineStream = File.OpenRead(baselineCopy)
+                use baselinePe = new PEReader(baselineStream)
+                let baselineReader = baselinePe.GetMetadataReader()
+                let deltaReader = metadataProvider.GetMetadataReader()
+
+                let dumpMetadata label (reader: MetadataReader) =
+                    let moduleDef = reader.GetModuleDefinition()
+                    let moduleName = reader.GetString(moduleDef.Name)
+                    printfn "[metadata-%s] Module=%s" label moduleName
+                    printfn "[metadata-%s] TypeDefs:" label
+                    for handle in reader.TypeDefinitions do
+                        let typeDef = reader.GetTypeDefinition(handle)
+                        let ns =
+                            if typeDef.Namespace.IsNil then ""
+                            else reader.GetString(typeDef.Namespace)
+                        let name = reader.GetString(typeDef.Name)
+                        printfn "  %s.%s" ns name
+                    printfn "[metadata-%s] MethodDefs:" label
+                    for handle in reader.MethodDefinitions do
+                        let methodDef = reader.GetMethodDefinition(handle)
+                        printfn "  %s" (reader.GetString(methodDef.Name))
+                    printfn "[metadata-%s] StringsHeapSize=%d UserStringHeapSize=%d" label (reader.GetHeapSize(HeapIndex.String)) (reader.GetHeapSize(HeapIndex.UserString))
+
+                dumpMetadata "baseline" baselineReader
+                try
+                    dumpMetadata "delta" deltaReader
+                with
+                | :? BadImageFormatException -> ()
+                | :? System.IndexOutOfRangeException -> ()
+
                 match runMdv baselineCopy metadataPath ilPath with
                 | Some output ->
+                    printfn "[mdv-output]%s%s" Environment.NewLine output
                     Assert.Contains("Generation 1", output)
                     assertGenerationContains output 1 "Integration updated message"
                 | None ->
                     printfn "mdv not available; skipping integration verification for simple method-body edit."
+        finally
+            try checker.InvalidateAll() with _ -> ()
+            try checker.EndHotReloadSession() with _ -> ()
+            try Directory.Delete(deltaDir, true) with _ -> ()
+            try Directory.Delete(projectDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``mdv validates consecutive method-body edits`` () =
+        let checker =
+            FSharpChecker.Create(
+                keepAssemblyContents = true,
+                enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                captureIdentifiersWhenParsing = false
+            )
+
+        let projectDir, fsPath, dllPath = createTempProject ()
+        let baselineSource =
+            """
+namespace MdVIntegration
+
+module Demo =
+    let GetMessage () = "Integration baseline message"
+"""
+
+        let firstUpdateSource =
+            """
+namespace MdVIntegration
+
+module Demo =
+    let GetMessage () = "Integration updated message v2"
+"""
+
+        let secondUpdateSource =
+            """
+namespace MdVIntegration
+
+module Demo =
+    let GetMessage () = "Integration updated message v3"
+"""
+
+        let deltaDir = Path.Combine(projectDir, "mdv-multi-delta")
+
+        try
+            Directory.CreateDirectory(deltaDir) |> ignore
+            let baselineOptions, _ = compileProject checker fsPath dllPath baselineSource
+            let baselineCopy = Path.Combine(projectDir, "baseline.dll")
+            File.Copy(dllPath, baselineCopy, true)
+
+            match checker.StartHotReloadSession(baselineOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "StartHotReloadSession failed: %A" error
+            | Ok () -> ()
+
+            // First edit
+            let updatedOptions1, _ = compileProject checker fsPath dllPath firstUpdateSource
+            let delta1 =
+                match checker.EmitHotReloadDelta(updatedOptions1) |> Async.RunSynchronously with
+                | Error error -> failwithf "EmitHotReloadDelta (generation 1) failed: %A" error
+                | Ok delta -> delta
+
+            let meta1Path = Path.Combine(deltaDir, "1.meta")
+            let il1Path = Path.Combine(deltaDir, "1.il")
+            File.WriteAllBytes(meta1Path, delta1.Metadata)
+            File.WriteAllBytes(il1Path, delta1.IL)
+
+            let expectedLiteral1 = Text.Encoding.Unicode.GetBytes("Integration updated message v2")
+            Assert.True(
+                containsSubsequence delta1.Metadata expectedLiteral1,
+                "Expected first-generation metadata to contain updated literal 'Integration updated message v2'."
+            )
+
+            // Second edit
+            File.WriteAllText(fsPath, secondUpdateSource)
+            let updatedOptions2, _ = compileProject checker fsPath dllPath secondUpdateSource
+            let delta2 =
+                match checker.EmitHotReloadDelta(updatedOptions2) |> Async.RunSynchronously with
+                | Error error -> failwithf "EmitHotReloadDelta (generation 2) failed: %A" error
+                | Ok delta -> delta
+
+            Assert.NotEqual(Guid.Empty, delta2.BaseGenerationId)
+            Assert.NotEqual(delta1.GenerationId, delta2.GenerationId)
+
+            let meta2Path = Path.Combine(deltaDir, "2.meta")
+            let il2Path = Path.Combine(deltaDir, "2.il")
+            File.WriteAllBytes(meta2Path, delta2.Metadata)
+            File.WriteAllBytes(il2Path, delta2.IL)
+
+            let expectedLiteral2 = Text.Encoding.Unicode.GetBytes("Integration updated message v3")
+            Assert.True(
+                containsSubsequence delta2.Metadata expectedLiteral2,
+                "Expected second-generation metadata to contain updated literal 'Integration updated message v3'."
+            )
+
+            match runMdv baselineCopy meta1Path il1Path with
+            | Some output ->
+                Assert.Contains("Generation 1", output)
+                assertGenerationContains output 1 "Integration updated message v2"
+            | None ->
+                printfn "mdv not available; skipping Generation 1 verification for multi-generation scenario."
+
+            match runMdv baselineCopy meta2Path il2Path with
+            | Some output ->
+                assertGenerationContains output 1 "Integration updated message v3"
+            | None ->
+                printfn "mdv not available; skipping Generation 2 verification for multi-generation scenario."
         finally
             try checker.InvalidateAll() with _ -> ()
             try checker.EndHotReloadSession() with _ -> ()

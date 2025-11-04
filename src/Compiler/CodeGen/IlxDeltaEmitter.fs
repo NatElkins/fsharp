@@ -405,15 +405,10 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let encBaseId = baseGenerationId
     let encId = Guid.NewGuid()
 
-    let getMethodToken key = request.Baseline.MethodTokens |> Map.tryFind key
-
-    builder.AddEncLogEntry(TableIndex.Module, 1, EditAndContinueOperation.Default)
-    builder.AddEncMapEntry(TableIndex.Module, 1)
-
-    let methodUpdates =
+    let methodUpdateInputs =
         resolvedMethods
         |> List.choose (fun (_, _, _, key) ->
-            match getMethodToken key with
+            match request.Baseline.MethodTokens |> Map.tryFind key with
             | None -> None
             | Some methodToken ->
                 let methodHandle = MetadataTokens.MethodDefinitionHandle methodToken
@@ -422,33 +417,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 else
                     let methodDef = metadataReader.GetMethodDefinition methodHandle
                     let body = peReader.GetMethodBody(methodDef.RelativeVirtualAddress)
-                    let ilBytes = rewriteMethodBody remapUserString remapEntityToken body
-                    let localSigToken =
-                        if body.LocalSignature.IsNil then
-                            0
-                        else
-                            let handle = EntityHandle.op_Implicit body.LocalSignature
-                            MetadataTokens.GetToken(handle)
-
-                    let bodyUpdate =
-                        builder.AddMethodBody(
-                            methodToken,
-                            localSigToken,
-                            ilBytes,
-                            body.MaxStack,
-                            body.LocalVariablesInitialized,
-                            body.ExceptionRegions,
-                            remapEntityToken
-                        )
-
-                    let rowId = methodToken &&& 0x00FFFFFF
-                    builder.AddEncLogEntry(TableIndex.MethodDef, rowId, EditAndContinueOperation.Default)
-                    builder.AddEncMapEntry(TableIndex.MethodDef, rowId)
-
-                    Some
-                        { MethodToken = methodToken
-                          MethodHandle = methodHandle
-                          Body = bodyUpdate })
+                    Some(struct (key, methodToken, methodHandle, methodDef, body)))
 
     let updatedTypeTokens =
         let methodTypeNames =
@@ -462,54 +431,91 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         |> List.choose (fun typeName -> request.Baseline.TypeTokens |> Map.tryFind typeName)
 
     let updatedMethodTokens =
-        resolvedMethods
-        |> List.choose (fun (_, _, _, key) -> request.Baseline.MethodTokens |> Map.tryFind key)
+        methodUpdateInputs
+        |> List.map (fun struct (_, methodToken, _, _, _) -> methodToken)
 
-    let metadataBuilder = builder.MetadataBuilder
+    if List.isEmpty methodUpdateInputs && List.isEmpty updatedTypeTokens then
+        emptyDelta
+    else
+        let metadataBuilder = builder.MetadataBuilder
 
-    metadataBuilder.SetCapacity(TableIndex.MethodDef, methodUpdates.Length)
+        builder.AddEncLogEntry(TableIndex.Module, 1, EditAndContinueOperation.Default)
+        builder.AddEncMapEntry(TableIndex.Module, 1)
 
-    methodUpdates
-    |> List.iter (fun update ->
-        let methodDef = metadataReader.GetMethodDefinition update.MethodHandle
-        let methodName = metadataReader.GetString methodDef.Name
-        let nameHandle = metadataBuilder.GetOrAddString methodName
-        let signatureBytes = metadataReader.GetBlobBytes methodDef.Signature
-        let signatureHandle = metadataBuilder.GetOrAddBlob signatureBytes
+        let methodUpdatesWithDefs =
+            methodUpdateInputs
+            |> List.map (fun struct (_, methodToken, methodHandle, methodDef, body) ->
+                let ilBytes = rewriteMethodBody remapUserString remapEntityToken body
+                let localSigToken =
+                    if body.LocalSignature.IsNil then
+                        0
+                    else
+                        let handle = EntityHandle.op_Implicit body.LocalSignature
+                        MetadataTokens.GetToken(handle)
 
-        metadataBuilder.AddMethodDefinition(
-            methodDef.Attributes,
-            methodDef.ImplAttributes,
-            nameHandle,
-            signatureHandle,
-            update.Body.CodeOffset,
-            ParameterHandle()
-        )
-        |> ignore)
+                let bodyUpdate =
+                    builder.AddMethodBody(
+                        methodToken,
+                        localSigToken,
+                        ilBytes,
+                        body.MaxStack,
+                        body.LocalVariablesInitialized,
+                        body.ExceptionRegions,
+                        remapEntityToken
+                    )
 
-    let streams = builder.Build(moduleName, moduleMvid, encId, Some encBaseId)
+                let rowId = methodToken &&& 0x00FFFFFF
+                builder.AddEncLogEntry(TableIndex.MethodDef, rowId, EditAndContinueOperation.Default)
+                builder.AddEncMapEntry(TableIndex.MethodDef, rowId)
 
-    let pdbDelta =
-        match pdbBytesOpt with
-        | None -> None
-        | Some pdbBytes -> HotReloadPdb.emitDelta request.Baseline pdbBytes updatedMethodTokens
+                ({ MethodToken = methodToken
+                   MethodHandle = methodHandle
+                   Body = bodyUpdate }, methodDef))
 
-    { emptyDelta with
-        Metadata = streams.Metadata
-        IL = streams.IL
-        UpdatedTypeTokens = updatedTypeTokens
-        UpdatedMethodTokens = updatedMethodTokens
-        EncLog = streams.EncLogEntries |> List.toArray
-        EncMap = streams.EncMapEntries |> List.toArray
-        MethodBodies = streams.MethodBodies
-        StandaloneSignatures = streams.StandaloneSignatures
-        Pdb = pdbDelta
-        GenerationId = encId
-        BaseGenerationId = encBaseId
-        UserStringUpdates = userStringUpdates |> Seq.toList
-    }
-    |> fun delta ->
-        if traceUserStringUpdates.Value then
-            for (original, updated, text) in delta.UserStringUpdates do
-                printfn "[fsharp-hotreload][userstring-summary] original=0x%08X new=0x%08X text=%s" original updated text
-        delta
+        let methodUpdates = methodUpdatesWithDefs |> List.map fst
+
+        metadataBuilder.SetCapacity(TableIndex.MethodDef, methodUpdates.Length)
+
+        methodUpdatesWithDefs
+        |> List.iter (fun (update, methodDef) ->
+            let methodName = metadataReader.GetString methodDef.Name
+            let nameHandle = metadataBuilder.GetOrAddString methodName
+            let signatureBytes = metadataReader.GetBlobBytes methodDef.Signature
+            let signatureHandle = metadataBuilder.GetOrAddBlob signatureBytes
+
+            metadataBuilder.AddMethodDefinition(
+                methodDef.Attributes,
+                methodDef.ImplAttributes,
+                nameHandle,
+                signatureHandle,
+                update.Body.CodeOffset,
+                ParameterHandle()
+            )
+            |> ignore)
+
+        let streams = builder.Build(moduleName, moduleMvid, encId, Some encBaseId)
+
+        let pdbDelta =
+            match pdbBytesOpt with
+            | None -> None
+            | Some pdbBytes -> HotReloadPdb.emitDelta request.Baseline pdbBytes updatedMethodTokens
+
+        { emptyDelta with
+            Metadata = streams.Metadata
+            IL = streams.IL
+            UpdatedTypeTokens = updatedTypeTokens
+            UpdatedMethodTokens = updatedMethodTokens
+            EncLog = streams.EncLogEntries |> List.toArray
+            EncMap = streams.EncMapEntries |> List.toArray
+            MethodBodies = streams.MethodBodies
+            StandaloneSignatures = streams.StandaloneSignatures
+            Pdb = pdbDelta
+            GenerationId = encId
+            BaseGenerationId = encBaseId
+            UserStringUpdates = userStringUpdates |> Seq.toList
+        }
+        |> fun delta ->
+            if traceUserStringUpdates.Value then
+                for (original, updated, text) in delta.UserStringUpdates do
+                    printfn "[fsharp-hotreload][userstring-summary] original=0x%08X new=0x%08X text=%s" original updated text
+            delta

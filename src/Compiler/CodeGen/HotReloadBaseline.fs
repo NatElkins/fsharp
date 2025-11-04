@@ -2,6 +2,8 @@ module internal FSharp.Compiler.HotReloadBaseline
 
 open System
 open System.Collections.Immutable
+open System.Reflection.Metadata
+open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.IlxGen
@@ -229,3 +231,19 @@ let createWithEnvironment
     (portablePdbSnapshot: PortablePdbSnapshot option)
     =
     createCore moduleId ilModule tokenMappings metadataSnapshot (Some ilxGenEnvironment) portablePdbSnapshot
+
+let metadataSnapshotFromReader (reader: MetadataReader) =
+    let heapSizes =
+        { StringHeapSize = reader.GetHeapSize(HeapIndex.String)
+          UserStringHeapSize = reader.GetHeapSize(HeapIndex.UserString)
+          BlobHeapSize = reader.GetHeapSize(HeapIndex.Blob)
+          GuidHeapSize = reader.GetHeapSize(HeapIndex.Guid) }
+
+    let tableCounts =
+        Array.init MetadataTokens.TableCount (fun i ->
+            let tableIndex = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte i)
+            reader.GetTableRowCount(tableIndex))
+
+    { HeapSizes = heapSizes
+      TableRowCounts = tableCounts
+      GuidHeapStart = heapSizes.GuidHeapSize }

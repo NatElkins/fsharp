@@ -149,14 +149,15 @@ type Type =
               referenceAssemblySignatureHash = None
               pathMap = PathMap.empty }
 
-        let assemblyBytes, pdbBytesOpt, tokenMappings, metadataSnapshot =
+        let assemblyBytes, pdbBytesOpt, tokenMappings, _ =
             FSharp.Compiler.AbstractIL.ILBinaryWriter.WriteILBinaryInMemoryWithArtifacts(writerOptions, ilModule, id)
 
-        let moduleId =
+        let moduleId, metadataSnapshot =
             use peReader = new System.Reflection.PortableExecutable.PEReader(new MemoryStream(assemblyBytes, false))
             let metadataReader = peReader.GetMetadataReader()
             let moduleDef = metadataReader.GetModuleDefinition()
-            if moduleDef.Mvid.IsNil then Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
+            let moduleId = if moduleDef.Mvid.IsNil then Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
+            moduleId, HotReloadBaseline.metadataSnapshotFromReader metadataReader
 
         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
 

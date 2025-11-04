@@ -2,6 +2,8 @@ module internal FSharp.Compiler.HotReloadBaseline
 
 open System
 open System.Collections.Immutable
+open System.Reflection.Metadata
+open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.IlxGen
@@ -73,3 +75,5 @@ val createWithEnvironment:
     moduleId: Guid ->
     portablePdbSnapshot: PortablePdbSnapshot option ->
         FSharpEmitBaseline
+
+val metadataSnapshotFromReader: reader: MetadataReader -> MetadataSnapshot
