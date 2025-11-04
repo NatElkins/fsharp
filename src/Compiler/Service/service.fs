@@ -40,7 +40,7 @@ open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.HotReload.DeltaBuilder
 open FSharp.Compiler.IlxDeltaEmitter
 open FSharp.Compiler.TypedTree
-open FSharp.Compiler.HotReloadNameMap
+open FSharp.Compiler.SynthesizedTypeMaps
 
 [<RequireQualifiedAccess>]
 type FSharpHotReloadError =
@@ -213,7 +213,7 @@ type FSharpChecker
 
     let hotReloadGate = obj()
 
-    let mutable currentHotReloadNameMap: HotReloadNameMap option = None
+    let mutable currentSynthesizedTypeMaps: FSharpSynthesizedTypeMaps option = None
 
     let mutable currentBaselineState: (FSharpEmitBaseline * CheckedAssemblyAfterOptimization) option = None
 
@@ -576,17 +576,17 @@ type FSharpChecker
                             let compilerState = tcGlobals.CompilerGlobalState.Value
 
                             let map =
-                                match currentHotReloadNameMap with
+                                match currentSynthesizedTypeMaps with
                                 | Some map ->
                                     map.BeginSession()
                                     map
                                 | None ->
-                                    let map = HotReloadNameMap()
+                                    let map = FSharpSynthesizedTypeMaps()
                                     map.BeginSession()
-                                    currentHotReloadNameMap <- Some map
+                                    currentSynthesizedTypeMaps <- Some map
                                     map
 
-                            compilerState.HotReloadNameMap <- Some map
+                            compilerState.SynthesizedTypeMaps <- Some map
 
                             FSharpEditAndContinueLanguageService.Instance.EndSession()
                             FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
@@ -632,8 +632,8 @@ type FSharpChecker
                             | Some(baseline, implementationFiles) ->
                                 let compilerState = tcGlobals.CompilerGlobalState.Value
 
-                                match currentHotReloadNameMap with
-                                | Some map -> compilerState.HotReloadNameMap <- Some map
+                                match currentSynthesizedTypeMaps with
+                                | Some map -> compilerState.SynthesizedTypeMaps <- Some map
                                 | None -> ()
 
                                 FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
@@ -656,8 +656,8 @@ type FSharpChecker
                         | Result.Error error -> return Result.Error error
                         | Ok ilModule ->
                             lock hotReloadGate (fun () ->
-                                match currentHotReloadNameMap with
-                                | Some map -> tcGlobals.CompilerGlobalState.Value.HotReloadNameMap <- Some map
+                                match currentSynthesizedTypeMaps with
+                                | Some map -> tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps <- Some map
                                 | None -> ())
 
                             match
@@ -673,7 +673,7 @@ type FSharpChecker
 
     member _.EndHotReloadSession() =
         lock hotReloadGate (fun () ->
-            currentHotReloadNameMap <- None
+            currentSynthesizedTypeMaps <- None
             currentBaselineState <- None
             FSharpEditAndContinueLanguageService.Instance.EndSession())
 

@@ -25,7 +25,7 @@ open FSharp.Compiler.AbstractIL.ILX
 open FSharp.Compiler.AbstractIL.ILX.Types
 open FSharp.Compiler.AttributeChecking
 open FSharp.Compiler.CompilerGlobalState
-open FSharp.Compiler.HotReloadNameMap
+open FSharp.Compiler.SynthesizedTypeMaps
 open FSharp.Compiler.DiagnosticsLogger
 open FSharp.Compiler.Features
 open FSharp.Compiler.Infos
@@ -52,7 +52,7 @@ let private hotReloadIlxName (g: TcGlobals) basicName m =
     let generator () =
         state.IlxGenNiceNameGenerator.FreshCompilerGeneratedName(basicName, m)
 
-    HotReloadNameMap.nextName state.HotReloadNameMap basicName generator
+    SynthesizedTypeMaps.nextName state.SynthesizedTypeMaps basicName generator
 
 let getEmptyStackGuard () = StackGuard("IlxAssemblyGenerator")
 

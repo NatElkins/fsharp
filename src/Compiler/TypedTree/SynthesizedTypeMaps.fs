@@ -1,4 +1,4 @@
-module internal FSharp.Compiler.HotReloadNameMap
+module internal FSharp.Compiler.SynthesizedTypeMaps
 
 open System.Collections.Concurrent
 open System.Collections.Generic
@@ -6,7 +6,7 @@ open System.Collections.Generic
 open FSharp.Compiler.Syntax.PrettyNaming
 
 /// <summary>Provides stable compiler-generated names across hot reload sessions.</summary>
-type HotReloadNameMap() =
+type FSharpSynthesizedTypeMaps() =
     let buckets = ConcurrentDictionary<string, ResizeArray<string>>()
     let ordinals = ConcurrentDictionary<string, int>()
 
@@ -43,5 +43,5 @@ type HotReloadNameMap() =
 /// <summary>Retrieves a stable compiler-generated name or falls back to the provided generator.</summary>
 let nextName mapOpt basicName generate =
     match mapOpt with
-    | Some(map: HotReloadNameMap) -> map.GetOrAddName basicName
+    | Some(map: FSharpSynthesizedTypeMaps) -> map.GetOrAddName basicName
     | None -> generate ()

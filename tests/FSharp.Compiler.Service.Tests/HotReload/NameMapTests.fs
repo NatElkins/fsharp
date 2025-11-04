@@ -3,13 +3,13 @@ namespace FSharp.Compiler.Service.Tests.HotReload
 open System
 open Xunit
 
-open FSharp.Compiler.HotReloadNameMap
+open FSharp.Compiler.SynthesizedTypeMaps
 
 module NameMapTests =
 
     [<Fact>]
     let ``name map replays recorded sequence`` () =
-        let map = HotReloadNameMap()
+        let map = FSharpSynthesizedTypeMaps()
         map.BeginSession()
 
         let first = map.GetOrAddName "lambda"
@@ -31,7 +31,7 @@ module NameMapTests =
 
     [<Fact>]
     let ``generated names avoid source line suffixes`` () =
-        let map = HotReloadNameMap()
+        let map = FSharpSynthesizedTypeMaps()
         map.BeginSession()
 
         let name = map.GetOrAddName "closure"

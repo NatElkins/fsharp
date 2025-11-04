@@ -9,7 +9,7 @@ open System.Collections.Concurrent
 open System.Threading
 open FSharp.Compiler.Syntax.PrettyNaming
 open FSharp.Compiler.Text
-open FSharp.Compiler.HotReloadNameMap
+open FSharp.Compiler.SynthesizedTypeMaps
 
 /// Generates compiler-generated names. Each name generated also includes the StartLine number of the range passed in
 /// at the point of first generation.
@@ -18,7 +18,7 @@ open FSharp.Compiler.HotReloadNameMap
 /// It is made concurrency-safe since a global instance of the type is allocated in tast.fs, and it is good
 /// policy to make all globally-allocated objects concurrency safe in case future versions of the compiler
 /// are used to host multiple concurrent instances of compilation.
-type NiceNameGenerator(getHotReloadMap: unit -> HotReloadNameMap option) =
+type NiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMaps option) =
     let basicNameCounts = ConcurrentDictionary<struct (string * int), int ref>(max Environment.ProcessorCount 1, 127)
     // Cache this as a delegate.
     let basicNameCountsAddDelegate = Func<struct (string * int), int ref>(fun _ -> ref 0)
@@ -33,7 +33,7 @@ type NiceNameGenerator(getHotReloadMap: unit -> HotReloadNameMap option) =
             let count = increment basicName m
             CompilerGeneratedNameSuffix basicName (string m.StartLine + (match (count - 1) with 0 -> "" | n -> "-" + string n))
 
-        match getHotReloadMap() with
+        match getSynthesizedMap() with
         | Some map ->
             // Maintain internal counters so we fall back consistently when hot reload is disabled.
             let _ = generateWithCounter()
@@ -53,10 +53,10 @@ type NiceNameGenerator(getHotReloadMap: unit -> HotReloadNameMap option) =
 ///
 /// This type may be accessed concurrently, though in practice it is only used from the compilation thread.
 /// It is made concurrency-safe since a global instance of the type is allocated in tast.fs.
-type StableNiceNameGenerator(getHotReloadMap: unit -> HotReloadNameMap option) =
+type StableNiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMaps option) =
 
     let niceNames = ConcurrentDictionary<string * int64, string>(max Environment.ProcessorCount 1, 127)
-    let innerGenerator = new NiceNameGenerator(getHotReloadMap)
+    let innerGenerator = new NiceNameGenerator(getSynthesizedMap)
 
     member x.GetUniqueCompilerGeneratedName (name, m: range, uniq) =
         let basicName = GetBasicNameOfPossibleCompilerGeneratedName name
@@ -67,17 +67,17 @@ type StableNiceNameGenerator(getHotReloadMap: unit -> HotReloadNameMap option) =
 
 type internal CompilerGlobalState () =
     /// A global generator of compiler generated names
-    let mutable hotReloadNameMap: HotReloadNameMap option = None
+    let mutable synthesizedTypeMaps: FSharpSynthesizedTypeMaps option = None
 
-    let getHotReloadMap () = hotReloadNameMap
+    let getSynthesizedMap () = synthesizedTypeMaps
 
-    let globalNng = NiceNameGenerator(getHotReloadMap)
+    let globalNng = NiceNameGenerator(getSynthesizedMap)
 
     /// A global generator of stable compiler generated names
-    let globalStableNameGenerator = StableNiceNameGenerator(getHotReloadMap)
+    let globalStableNameGenerator = StableNiceNameGenerator(getSynthesizedMap)
 
     /// A name generator used by IlxGen for static fields, some generated arguments and other things.
-    let ilxgenGlobalNng = NiceNameGenerator(getHotReloadMap)
+    let ilxgenGlobalNng = NiceNameGenerator(getSynthesizedMap)
 
     member _.NiceNameGenerator = globalNng
 
@@ -85,9 +85,9 @@ type internal CompilerGlobalState () =
 
     member _.IlxGenNiceNameGenerator = ilxgenGlobalNng
 
-    member _.HotReloadNameMap
-        with get () = hotReloadNameMap
-        and set value = hotReloadNameMap <- value
+    member _.SynthesizedTypeMaps
+        with get () = synthesizedTypeMaps
+        and set value = synthesizedTypeMaps <- value
 
 /// Unique name generator for stamps attached to lambdas and object expressions
 type Unique = int64

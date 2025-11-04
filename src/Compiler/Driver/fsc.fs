@@ -45,7 +45,7 @@ open FSharp.Compiler.DependencyManager
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.DiagnosticsLogger
 open FSharp.Compiler.Features
-open FSharp.Compiler.HotReloadNameMap
+open FSharp.Compiler.SynthesizedTypeMaps
 open FSharp.Compiler.IlxGen
 open FSharp.Compiler.InfoReader
 open FSharp.Compiler.IO
@@ -973,14 +973,14 @@ let main4
     let compilerGlobalState = tcGlobals.CompilerGlobalState.Value
 
     if tcConfig.hotReloadCapture then
-        match compilerGlobalState.HotReloadNameMap with
+        match compilerGlobalState.SynthesizedTypeMaps with
         | Some map -> map.BeginSession()
         | None ->
-            let map = HotReloadNameMap()
+            let map = FSharpSynthesizedTypeMaps()
             map.BeginSession()
-            compilerGlobalState.HotReloadNameMap <- Some map
+            compilerGlobalState.SynthesizedTypeMaps <- Some map
     else
-        compilerGlobalState.HotReloadNameMap <- None
+        compilerGlobalState.SynthesizedTypeMaps <- None
 
     // Create the Abstract IL generator
     let ilxGenerator =
@@ -1149,7 +1149,7 @@ let main6
     match dynamicAssemblyCreator with
     | None ->
         FSharpEditAndContinueLanguageService.Instance.EndSession()
-        tcGlobals.CompilerGlobalState.Value.HotReloadNameMap <- None
+        tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps <- None
 
         try
             match tcConfig.emitMetadataAssembly with
@@ -1257,7 +1257,7 @@ let main6
                                     portablePdbSnapshot
 
                         FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, optimizedImpls)
-                        match tcGlobals.CompilerGlobalState.Value.HotReloadNameMap with
+                        match tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps with
                         | Some map -> map.BeginSession()
                         | None -> ()
                 with Failure msg ->
@@ -1267,7 +1267,7 @@ let main6
             exiter.Exit 1
     | Some da ->
         FSharpEditAndContinueLanguageService.Instance.EndSession()
-        tcGlobals.CompilerGlobalState.Value.HotReloadNameMap <- None
+        tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps <- None
         da (tcConfig, tcGlobals, outfile, ilxMainModule)
 
     AbortOnError(diagnosticsLogger, exiter)

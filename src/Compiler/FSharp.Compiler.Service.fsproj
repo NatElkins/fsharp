@@ -326,8 +326,8 @@
     <Compile Include="TypedTree\TypeProviders.fs" />
     <Compile Include="TypedTree\QuotationPickler.fsi" />
     <Compile Include="TypedTree\QuotationPickler.fs" />
-    <Compile Include="TypedTree\HotReloadNameMap.fsi" />
-    <Compile Include="TypedTree\HotReloadNameMap.fs" />
+    <Compile Include="TypedTree\SynthesizedTypeMaps.fsi" />
+    <Compile Include="TypedTree\SynthesizedTypeMaps.fs" />
     <Compile Include="TypedTree\CompilerGlobalState.fsi" />
     <Compile Include="TypedTree\CompilerGlobalState.fs" />
     <Compile Include="TypedTree\TypedTree.fsi" />
@@ -435,6 +435,7 @@
     <Compile Include="CodeGen\FSharpSymbolChanges.fs" />
     <Compile Include="CodeGen\IlxDeltaStreams.fs" />
     <Compile Include="CodeGen\FSharpDeltaMetadataWriter.fs" />
+    <Compile Include="HotReload\FSharpMetadataAggregator.fs" />
     <Compile Include="HotReload\SymbolMatcher.fs" />
     <Compile Include="CodeGen\IlxDeltaEmitter.fs" />
     <Compile Include="HotReload\HotReloadState.fs" />
