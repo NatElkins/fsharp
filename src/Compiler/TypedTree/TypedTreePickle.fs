@@ -3320,6 +3320,9 @@ and u_ValData st =
                         val_declaring_entity = x13b
                         val_xmldocsig = x12
                         val_attribs = x9
+#if !NO_TYPEPROVIDERS
+                        val_provided_binding = None
+#endif
                     }
     }
 

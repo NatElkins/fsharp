@@ -1918,6 +1918,9 @@ type ValOptionalData =
         /// Custom attributes attached to the value. These contain references to other values (i.e. constructors in types). Mutable to fixup
         /// these value references after copying a collection of values.
         mutable val_attribs: Attribs
+#if !NO_TYPEPROVIDERS
+        mutable val_provided_binding: ProvidedMemberBinding option
+#endif
     }
 
     override ToString: unit -> string
@@ -2006,6 +2009,10 @@ type Val =
     member SetType: ty: TType -> unit
 
     member SetValDefn: val_defn: Expr -> unit
+#if !NO_TYPEPROVIDERS
+    member TryGetProvidedBinding: ProvidedMemberBinding option
+    member SetProvidedBinding: ProvidedMemberBinding option -> unit
+#endif
 
     member SetValRec: b: ValRecursiveScopeInfo -> unit
 

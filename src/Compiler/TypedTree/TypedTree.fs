@@ -2757,6 +2757,11 @@ type ValOptionalData =
       /// Custom attributes attached to the value. These contain references to other values (i.e. constructors in types). Mutable to fixup  
       /// these value references after copying a collection of values. 
       mutable val_attribs: Attribs
+
+#if !NO_TYPEPROVIDERS
+      /// Optional binding information for provider-generated members.
+      mutable val_provided_binding: ProvidedMemberBinding option
+#endif
     }
 
     [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
@@ -2799,7 +2804,11 @@ type Val =
           val_member_info = None
           val_declaring_entity = ParentNone
           val_xmldocsig = String.Empty
-          val_attribs = [] }
+          val_attribs = []
+#if !NO_TYPEPROVIDERS
+          val_provided_binding = None
+#endif
+          }
 
     /// Range of the definition (implementation) of the value, used by Visual Studio 
     member x.DefinitionRange = 
@@ -3307,6 +3316,25 @@ type Val =
         | Some optData -> optData.val_defn <- Some val_defn
         | _ -> x.val_opt_data <- Some { Val.NewEmptyValOptData() with val_defn = Some val_defn }
 
+#if !NO_TYPEPROVIDERS
+    member x.TryGetProvidedBinding =
+        match x.val_opt_data with
+        | Some optData -> optData.val_provided_binding
+        | None -> None
+
+    member x.SetProvidedBinding binding =
+        match binding with
+        | None -> ()
+        | Some _ ->
+            match x.val_opt_data with
+            | Some optData -> optData.val_provided_binding <- binding
+            | None ->
+                x.val_opt_data <-
+                    Some
+                        { Val.NewEmptyValOptData() with
+                            val_provided_binding = binding }
+#endif
+
     /// Create a new value with empty, unlinked data. Only used during unpickling of F# metadata.
     static member NewUnlinked() : Val = 
         { val_logical_name = Unchecked.defaultof<_>
@@ -3346,7 +3374,11 @@ type Val =
                        val_member_info = tg.val_member_info
                        val_declaring_entity = tg.val_declaring_entity
                        val_xmldocsig = tg.val_xmldocsig
-                       val_attribs = tg.val_attribs }
+                       val_attribs = tg.val_attribs
+#if !NO_TYPEPROVIDERS
+                       val_provided_binding = tg.val_provided_binding
+#endif
+                     }
         | None -> ()
 
     /// Indicates if a value is linked to backing data yet. Only used during unpickling of F# metadata.

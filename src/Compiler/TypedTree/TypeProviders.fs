@@ -23,6 +23,18 @@ open FSharp.Compiler.Text.Range
 
 type TypeProviderDesignation = TypeProviderDesignation of string
 type 'a ProvidedArray= ('a[]) MaybeNull
+
+type ProvidedMemberBinding =
+    {
+        Provider: Tainted<ITypeProvider>
+        Member: Tainted<ProvidedMemberInfo>
+        Parameters: ProvidedParameterInfo ProvidedArray option
+        ReturnParameter: ProvidedParameterInfo MaybeNull
+        ResultType: ProvidedType MaybeNull
+        InvokerExpression: Tainted<ProvidedExpr MaybeNull> option
+        DefinitionLocation: range option
+    }
+
 module ProvidedArray =
     let map f (arr:_ ProvidedArray) : _ ProvidedArray = 
         match arr with

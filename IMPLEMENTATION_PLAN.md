@@ -23,51 +23,51 @@ File paths are given relative to repository root unless stated otherwise.
 - `TypeProviderDependencyInvalidationTests` continues to fail with `MethodDefNotFound: Fs1023Consumer.Provided::get_Value` (and, when the provider supplies attribute constructors, the missing `TypeProviderEditorHideMethodsAttribute`). The generated DLL snapshots contain only provider infrastructure helpers, confirming we must synthesise the consumer-facing members inside the compiler.
 - Phases 3–8 have not started; TPSDK updates, provider samples, rollout activities, and documentation remain to-do.
 
-Progress now depends on fixing the reflection fidelity regressions uncovered during recent debugging; until those issues are resolved we should not advance to SDK integration or wider test coverage.
+Progress now depends on tackling the provider infrastructure debt described in the architecture proposal. Rather than layering more System.Type special cases, the recommended next step is to refactor the pipeline around a dedicated `ProvidedMemberBinding` before continuing with FS‑1023.
 
-### Latest session notes (2025-11-03)
+### Hybrid refactor (foundation)
 
-- Generated assembly snapshots are written to `/var/folders/.../fs1023-generated-*.dll` on each test run. Inspection via `System.Reflection.Metadata` shows only `Fs1023.Fs1023Provider` plus `<StartupCode$…>` helpers.
-- Because the provider does not emit `Fs1023Consumer.Provided`, `tycon.MembersOfFSharpTyconSorted` and `tcaug_adhoc_list` stay empty. Publishing concrete `Val` records (with `ProvidedExpr` bodies) is now the top priority.
-- Next focus: wire `ProvidedMethodInfo`/`ProvidedPropertyInfo` into `PublishValueDefnMaybeInclCompilerGenerated`, translate provider invoker expressions into IL via `convertProvidedExpressionToExprAndWitness`, and ensure `InfoReader` surfaces those members so static linking no longer fabricates placeholder classes.
+1. **Stage the scaffolding now**
+   - Add a `ProvidedMemberBinding` field (and helpers) to `ValOptionalData` while leaving existing behaviour untouched. Commit this groundwork so it can be re-used regardless of future direction.
 
-### Recent debugging findings
+2. **Get buy-in (in progress)**
+   - Share the architectural note (hybrid option) with core compiler maintainers. Pending feedback, either continue fleshing out the binding or revert the scaffolding if they prefer the minimal spike.
 
-1. **Parameter metadata gap** — `ParameterInfo` returned by the proxy does not surface `[<ParamArray>]` or `[<OptionalArgument>]`, so provider logic treats the variadic `rest` argument as normal and optional parameters lose default values. Root cause: `ParameterInfo.IsDefined` relies on `attributeType.IsAssignableFrom(proxyType)` which fails for proxy instances; we must compare by the underlying `TyconRef` identity or fully qualified name instead.
-2. **Custom attribute projection** — metadata-defined attributes (`System.ParamArrayAttribute`, `TypeProviderEditorHideMethodsAttribute`) trigger `ReflectTypeSymbol: GetConstructorImpl` because attribute constructors for IL types aren’t implemented in the proxy wrappers. The existing TastReflect prototype handled this via explicit constructor/method overrides that we need to port.
-3. **Indexer/property binding** — `GetPropertyImpl` fails to match the `Item` indexer (even though the property list shows `Item[]:Int32`) because parameter-type comparison uses proxy equality; the provider’s `GetProperty("Item", ..., returnType = typeof<int>, types = [| typeof<int> |])` returns `null`.
-4. **Generated IL absence** — the provider-produced assembly (`Fs1023Provider`) currently exposes only the provider infrastructure types (e.g., `Fs1023.Fs1023Provider`, `<StartupCode$...>`). The generated surface `Fs1023.Provided` never materialises, so static linking fabricates an empty placeholder and the compiler never publishes val specs for `Value`/`Map`/`Optional`. This manifests as `tycon.MembersOfFSharpTyconSorted = []`, `tcaug_adhoc_list = []`, and the downstream “MethodDefNotFound: Fs1023Consumer.Provided::get_Value” emit failure.
+3. **Introduce `ProvidedMemberBinding` fully**
+   - Extend `ValOptionalData` (or add an accessor) with an optional binding payload capturing provider metadata (provider handle, `ProvidedMethodInfo`/`ProvidedPropertyInfo`, parameter shapes, invoker expression/IL, definition location).
+   - Provide helpers `Val.SetProvidedBinding` / `Val.TryGetProvidedBinding` to hide storage details.
 
-The failing `TypeProviderDependencyInvalidationTests.reflection proxy surfaces parameter metadata` test captures all three regressions. These should be addressed before expanding Phase 1 work items.
+4. **Populate bindings in the checker**
+   - In `TcTyconDefnCore_Phase1C_EstablishDeclarationForGeneratedSetOfTypes`, when synthesising members for generative types, construct the binding and attach it to each `Val` before publishing.
+   - Preserve existing behaviour for static parameter application and experimental logging, but route metadata through the binding.
 
-### Immediate remediation plan
+5. **Update consumers**
+   - **InfoReader / reflection builder:** replace ad hoc `TProvidedTypeRepr` checks with `match vref.ProvidedBinding` to surface metadata. Ensure existing reflection tests stay green.
+   - **IlxGen:** generate IL from the binding (whether it holds a quotation or explicit IL). Fall back to existing logic for non-provider members.
+   - **Static linking / dependencies:** record provider-generated roots and dependencies via the binding instead of scanning the entire typed tree.
+   - **FCS symbol layers / tooling:** expose richer metadata (e.g., XML docs, definition locations) via the binding; remove duplicate provider checks.
 
-1. **Parameter metadata parity**
-   - Update `ReflectParameterInfo.IsDefined` and related helpers to compare attribute identities using `TyconRef` full names instead of proxy reference equality.
-   - Ensure `HasDefaultValue`/`RawDefaultValue` round-trip by threading constant values through `ParameterData`.
-   - Verify via `dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj --filter "TypeProviderDependencyInvalidationTests"`.
-2. **IL attribute constructor projection**
-   - Port TastReflect overrides for `GetConstructorImpl`, `GetMethodImpl`, and `InvokeMember` into `ReflectTypeSymbol`.
-   - Add targeted regression in `tests/FSharp.Compiler.Service.Tests/TypeProviderTests.fs` that reflects `System.ParamArrayAttribute` and asserts constructor availability.
-3. **Indexer binder alignment**
-   - Normalise proxy parameter types before equality checks in `ReflectTypeDefinition.GetPropertyImpl`/`GetMethodImpl`.
-   - Extend the FS-1023 sample provider to retrieve `Item` with explicit binder flags and validate via component tests.
-4. **Publish provided members into the TAST** *(in progress)*
-   - In `TcTyconDefnCore_Phase1C_EstablishDeclarationForGeneratedSetOfTypes`, translate `ProvidedMethodInfo`/`ProvidedPropertyInfo` into `Val`/`MemberInfo` records and push them through `PublishValueDefnMaybeInclCompilerGenerated`.
-   - Ensure the resulting `Val`s carry a `ProvidedMemberBinding` that allows `IlxGen` to reuse the provider’s generated IL (or synthesized IL when no provider definition exists). Where the SDK supplies `ProvidedExpr` invoker code, pipe it through `convertProvidedExpressionToExprAndWitness` so the expression tree becomes concrete IL.
-   - Audit static-link map emission so the generated IL type surfaces in `ProviderGeneratedTypeRoots` once members are published.
-5. **Instrumentation cleanup**
-   - Remove temporary logging in `TastReflection.fs` once the above tests pass; keep only structured debug output behind `TRACE` symbols.
-   - Re-run `dotnet build src/Compiler/FSharp.Compiler.Service.fsproj -c Release -p:TargetFramework=netstandard2.0` to confirm the compiler build completes without warnings.
-6. **Perf sanity sweep**
-   - Capture baseline timings with `./build.sh Test` on `main` vs. `fs-1023` for the provider test bucket.
-   - Record findings in `artifacts/fs-1023/perf-notes.md` and flag regressions >3% for follow-up.
-7. **Regression guard rails**
-   - Extend `TypeProviderDependencyInvalidationTests` with:
-     - A reflection sanity check against `TcImports.GetTypeReflectionBuilder` (`Type.GetProperty("Value")`) before code emission.
-     - A typed-tree validation that `TyconRef` for `Fs1023Consumer.Provided` includes `Vals` named `get_Value`/`Map` after publishing.
-     - A follow-up IL smoke test that disassembles the generated assembly and asserts `get_Value` is emitted once IlxGen wiring lands.
-   - Keep the existing end-to-end test (loading the compiled assembly) green; add structured logging of `tcaug_adhoc_list` on failure to accelerate debugging.
+5. **Regression tests**
+   - Port existing provider tests to exercise the new path; add assertions for the new typed-tree test (`provided type publishes members into the TAST`).
+   - Ensure the reflection sanity and IL smoke tests stay skipped until FS‑1023 wiring lands, but keep them in the suite for when code generation returns.
+
+6. **Follow-up: FS‑1023 feature work**
+   - Once the binding refactor is in place, resume the FS‑1023 implementation (publish members, translate `ProvidedExpr`, update IlxGen) using the binding instead of scattered special cases.
+
+### Status (2025-11-04)
+
+- Reflection proxy gaps (param metadata, constructor/method resolution, indexer comparison) have been patched.
+- A TAST regression guard (`provided type publishes members into the TAST`) is in place (currently skipped until publication is implemented).
+- Architecture and plan documents updated to capture the hybrid refactor.
+
+### Open work after refactor
+
+Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
+
+1. Publish provided members (with bindings) into `tcaug_adhoc_list`.
+2. Emit IL for generated members via IlxGen using the binding.
+3. Enable the IL smoke and end-to-end tests; ensure Map/Optional/indexer parity.
+4. Clean up debug instrumentation and capture perf baselines.
 
 ---
 

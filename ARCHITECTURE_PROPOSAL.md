@@ -6,15 +6,59 @@ The remainder of this document records the data structures that must change, the
 
 ---
 
-## Status Update — 2025-11-03
+## Architectural Status — 2025-11-03
 
-- `TcImports.GetProvidedAssemblyInfo` now refreshes provider metadata using the type provider’s `GetManifestModuleContents` hook. This guarantees we observe the provider-generated IL when a previously-non-generated reference becomes generative.
-- Diagnostic snapshots of the emitted DLL confirm the provider currently ships only infrastructure helpers (`Fs1023.Fs1023Provider`, `<StartupCode$…>`). The consumer-facing type `Fs1023Consumer.Provided` never appears, so the compiler must synthesise the method/property surface during `TcTyconDefnCore_Phase1C`.
-- `TypeProviderDependencyInvalidationTests` still fail with `MethodDefNotFound: Fs1023Consumer.Provided::get_Value`. We therefore remain blocked on publishing `Val` metadata for provider members and on translating provider invoker expressions into IL.
-- Upcoming focus: (1) ingest `ProvidedMethodInfo`/`ProvidedPropertyInfo` objects and create real `Val` + `ValMemberInfo` entries backed by `ProvidedExpr`, (2) plug those `Val`s into `InfoReader` so that reflection/projection paths recognise the generated surface, and (3) keep the richer logging behind a conditional flag once the pipeline succeeds.
-- Test plan: add targeted component tests that (a) interrogate the reflection builder (`Type.GetProperty("Value")`), (b) assert the generated `Tycon` publishes `get_Value`/`Map` before emission, and (c) disassemble the produced IL so any regression in IlxGen shows up before the end-to-end assembly load fails.
+- `TcImports.GetProvidedAssemblyInfo` now refreshes provider metadata using the provider’s `GetManifestModuleContents` hook, so we observe the in-memory IL for generated assemblies.
+- Diagnostic traces confirm the sample provider only supplies infrastructure types (`Fs1023.Fs1023Provider`, `<StartupCode$…>`). The consumer-facing type `Fs1023Consumer.Provided` never materialises, so the compiler must synthesise those members.
+- `TypeProviderDependencyInvalidationTests` still fail with `MethodDefNotFound: Fs1023Consumer.Provided::get_Value`; publishing provider-supplied members and IL is the outstanding blocker.
+- Immediate focus: (1) ingest `ProvidedMethodInfo`/`ProvidedPropertyInfo`, (2) translate `ProvidedExpr` invokers into the typed tree, (3) teach IlxGen to emit the resulting members, and (4) keep the reflection logging behind a flag once green.
+- Regression plan: add targeted component tests that (a) interrogate the reflection builder (`Type.GetProperty("Value")`), (b) assert the generated `Tycon` publishes `get_Value`/`Map` pre-emission, and (c) inspect the generated IL to catch regressions before the end-to-end assembly load.
 
-Key lesson: relying on the provider to bake the generated type into its assembly is not enough—the current SDK sample emits only helper classes. We must treat the provider’s invoker expressions as the source of truth and ensure they flow all the way into IlxGen.
+Key lesson: relying on the provider to bake the generated type into its DLL is insufficient; the compiler must consume the provider’s invoker expressions as the source of truth and ensure they flow through to IlxGen.
+
+## Architectural options
+
+### 1. “Colin Bull redux” (current branch)
+
+- **Idea:** project `TyconRef`/`TType` into `System.Type` proxies, mine `ProvidedMethodInfo`/`ProvidedPropertyInfo`, create synthetic `Val`s with `ValMemberInfo`, translate `ProvidedExpr` into real bodies, and let IlxGen emit IL.
+- **Pros:** maximum compatibility. Providers see real reflection objects, reuse existing reflection-heavy code, and the compiler changes fit into the existing type-provider contract. Matches what Colin Bull’s prototype achieved.
+- **Cons:** large surface area. We must emulate the whole System.Type/MethodInfo/PropertyInfo API pre-emit, thread provider-specific cases through the checker and IlxGen, and keep that code in sync with future reflection changes. Hard to maintain and reason about.
+
+### 2. Custom “shape” API instead of System.Type
+
+- **Idea:** don’t give providers `System.Type` at design time. Instead expose a purpose-built `ITypeShape` abstraction (much like Roslyn’s `ITypeSymbol`), covering fields, methods, generics, attributes, etc. The compiler would implement it directly over the typed tree.
+- **Pros:** much simpler compiler implementation (no TastReflect proxies), safer (we control the surface area), and more future-proof.
+- **Cons:** providers can only inspect what we expose; no arbitrary reflection. They must port existing reflection code to the new shape API. We’d have to design and version that interface carefully.
+- **Parity with source generators:** Roslyn source generators already work this way (they get `ISymbol`/`ITypeSymbol`, not `System.Type`). As long as our shape API is as expressive, this route keeps parity with C# generators. We can still hand back `System.Type` for compiled assemblies if needed.
+
+### 3. Provider-supplied IL
+
+- **Idea:** require providers to emit IL (via `ProvidedAssembly` or similar) for the generated members. The compiler loads and relocates that IL during static linking; no translation of `ProvidedExpr` is needed.
+- **Pros:** the compiler mostly treats generated code like extra DLLs; no need for tastefully translating quotations.
+- **Cons:** puts the burden on providers to generate IL (difficult) and still requires a way to inspect the consuming project’s types (we’d still need TastReflect or a shape API). Harder provider authoring experience.
+
+### 4. Hybrid—shape or System.Type externally, dedicated binding internally
+
+- **Idea:** keep giving providers the familiar view (System.Type proxies or a shape API) but encapsulate provider members explicitly in the typed tree (e.g., `ProvidedMemberBinding`). Checker, InfoReader, and IlxGen would consult that binding rather than treating provider members as ordinary `Val`s.
+- **Pros:** isolates provider-specific logic, reduces invasiveness of special cases, still compatible with existing provider expectations.
+- **Cons:** still requires us to translate `ProvidedExpr` into TAST/IL, but with cleaner boundary; more internal refactor than architectural change.
+- **Current mess:** the existing implementation scatter-guns provider checks through the compiler. Examples include `CheckDeclarations.fs`, `CheckExpressions.fs`, `NameResolution.fs` (pattern matching on `TProvidedTypeRepr`/`ProvidedMeth`/`ProvidedProp`), `TypedTree.fs`/`TypedTreeOps.fs` (numerous `IsProvided` branches), `IlxGen.fs` (special `ProvidedMeth` cases), static-linking (`StaticLinking.fs`, `CompilerImports.fs`: `ProviderGeneratedType` remapping), and `TastReflection.fs` (reconstructing reflection info). Every pass rediscovering “this member came from a provider” increases maintenance cost and makes new features harder to layer on.
+- **Refactor plan:** introduce a dedicated `ProvidedMemberBinding` carried alongside the `Val`. The checker (e.g., `TcTyconDefnCore_Phase1C`) populates it; consumers (`InfoReader`, `IlxGen`, static linker, reflection builder, FCS symbol layer) pivot to `match vspec.ProvidedBinding` rather than re-deriving provider metadata. This brings all provider-specific behaviour under one roof and makes the pipeline extensible (e.g., translating `ProvidedExpr` to IL once, recording static dependencies once, etc.).
+- **Risk/profile:** the refactor touches core files but it’s mechanical—coalescing existing code. With the existing provider test suite and the new regression tests, it’s a manageable change that reduces long-term maintenance burden.
+
+### Reflection vs shape API—trade-offs
+
+- Giving providers `System.Type` (or proxies) is powerful and aligns with current expectations, but forces us to emulate the reflection API and carry provider-specific special cases throughout the compiler.
+- A custom shape API would reduce compiler complexity and mirror the Roslyn source generator experience, but asks providers to adopt a new abstraction. Because FS-1023 is new, we *could* introduce such an API without breaking existing providers—but it’s a conceptual shift and requires a comprehensive, well-designed surface.
+- Hybrid designs let us keep compatibility while reducing the compiler diff by encapsulating provider metadata in dedicated bindings.
+
+### Bottom line
+
+- The branch currently follows the “Colin Bull redux” path. We’ve already ported the reflection builder (`TastReflection.fs`), and the remaining work is synthesising provider members and emitting IL.
+- If we were starting from scratch, a hybrid or shape-based approach might be cleaner, but the current branch has sunk cost in the reflection route. Finishing it keeps provider authors on the familiar reflection contract.
+- Regardless of the path, introducing explicit regression tests (reflection builder parity, TAST publication, IL emission) is critical to make the solution maintainable.
+
+**Next step:** even while waiting on core-team feedback, land the scaffolding for the `ProvidedMemberBinding` refactor in a low-risk way—add the binding field/accessors, keep existing behaviour intact, and commit the change as groundwork. Once feedback arrives we can either proceed with the full refactor or revert the scaffolding if the team prefers the minimal spike.
 
 ---
 

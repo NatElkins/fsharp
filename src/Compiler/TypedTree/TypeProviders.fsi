@@ -17,6 +17,18 @@ open FSharp.Compiler.Text
 type TypeProviderDesignation = TypeProviderDesignation of string
 type 'a ProvidedArray = ('a[]) MaybeNull
 
+/// Captures metadata needed to rehydrate provider-generated members inside the typed tree.
+type ProvidedMemberBinding =
+    {
+        Provider: Tainted<ITypeProvider>
+        Member: Tainted<ProvidedMemberInfo>
+        Parameters: ProvidedParameterInfo ProvidedArray option
+        ReturnParameter: ProvidedParameterInfo MaybeNull
+        ResultType: ProvidedType MaybeNull
+        InvokerExpression: Tainted<ProvidedExpr MaybeNull> option
+        DefinitionLocation: range option
+    }
+
 /// Raised when a type provider has thrown an exception.
 exception ProvidedTypeResolution of range * exn
 

@@ -14,6 +14,16 @@ open FSharp.Compiler.Symbols
 
 module TypeProviderDependencyInvalidationTests =
 
+    [<Fact>]
+    let ``provided binding defaults to None`` () =
+        let optData = FSharp.Compiler.TypedTree.Val.NewEmptyValOptData()
+#if !NO_TYPEPROVIDERS
+        Assert.True(optData.val_provided_binding.IsNone)
+#else
+        Assert.True(true)
+#endif
+
+
     let private providedTypesAssembly = typeof<ProviderImplementation.ProvidedTypes.ProvidedTypeDefinition>.Assembly.Location
 
     let private providerSource = """
