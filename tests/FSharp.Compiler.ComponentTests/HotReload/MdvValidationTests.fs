@@ -714,4 +714,70 @@ module Target =
             try Directory.SetCurrentDirectory(originalCwd) with _ -> ()
             cleanup ()
 
+    [<Fact>]
+    let ``mdv validates simple method-body edit`` () =
+        let checker =
+            FSharpChecker.Create(
+                keepAssemblyContents = true,
+                enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                captureIdentifiersWhenParsing = false
+            )
+
+        let projectDir, fsPath, dllPath = createTempProject ()
+        let baselineSource =
+            """
+namespace MdVIntegration
+
+module Demo =
+    let GetMessage () = "Integration baseline message"
+"""
+
+        let updatedSource =
+            """
+namespace MdVIntegration
+
+module Demo =
+    let GetMessage () = "Integration updated message"
+"""
+
+        let deltaDir = Path.Combine(projectDir, "mdv-integration-delta")
+
+        try
+            let baselineOptions, _ = compileProject checker fsPath dllPath baselineSource
+            let baselineCopy = Path.Combine(projectDir, "baseline.dll")
+            File.Copy(dllPath, baselineCopy, true)
+
+            match checker.StartHotReloadSession(baselineOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "StartHotReloadSession failed: %A" error
+            | Ok () -> ()
+
+            let updatedOptions, _ = compileProject checker fsPath dllPath updatedSource
+
+            match checker.EmitHotReloadDelta(updatedOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
+            | Ok delta ->
+                Directory.CreateDirectory(deltaDir) |> ignore
+                let metadataPath = Path.Combine(deltaDir, "1.meta")
+                let ilPath = Path.Combine(deltaDir, "1.il")
+                File.WriteAllBytes(metadataPath, delta.Metadata)
+                File.WriteAllBytes(ilPath, delta.IL)
+
+                let expectedLiteral = Text.Encoding.Unicode.GetBytes("Integration updated message")
+                Assert.True(
+                    containsSubsequence delta.Metadata expectedLiteral,
+                    "Expected metadata delta to contain updated integration literal."
+                )
+
+                match runMdv baselineCopy metadataPath ilPath with
+                | Some output ->
+                    Assert.Contains("Generation 1", output)
+                    assertGenerationContains output 1 "Integration updated message"
+                | None ->
+                    printfn "mdv not available; skipping integration verification for simple method-body edit."
+        finally
+            try checker.InvalidateAll() with _ -> ()
+            try checker.EndHotReloadSession() with _ -> ()
+            try Directory.Delete(deltaDir, true) with _ -> ()
+            try Directory.Delete(projectDir, true) with _ -> ()
+
     
