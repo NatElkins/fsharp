@@ -3,17 +3,21 @@ module internal FSharp.Compiler.SynthesizedTypeMaps
 open System.Collections.Concurrent
 open System.Collections.Generic
 
-open FSharp.Compiler.Syntax.PrettyNaming
+open FSharp.Compiler.GeneratedNames
 
 /// <summary>Provides stable compiler-generated names across hot reload sessions.</summary>
 type FSharpSynthesizedTypeMaps() =
     let buckets = ConcurrentDictionary<string, ResizeArray<string>>()
     let ordinals = ConcurrentDictionary<string, int>()
 
-    let computeName basicName index =
-        let suffix = if index = 0 then "hotreload" else $"hotreload-{index}"
+    let createBucket (names: string[]) =
+        let bucket = ResizeArray<string>()
+        for name in names do
+            bucket.Add(name)
+        bucket
 
-        CompilerGeneratedNameSuffix basicName suffix
+    let computeName basicName index =
+        makeHotReloadName basicName index
 
     member _.GetOrAddName(basicName: string) =
         let bucket = buckets.GetOrAdd(basicName, fun _ -> ResizeArray())
@@ -39,6 +43,16 @@ type FSharpSynthesizedTypeMaps() =
             for KeyValue(key, bucket) in buckets do
                 yield key, bucket.ToArray()
         }
+
+    /// <summary>Loads a previously captured snapshot, replacing any existing allocation state.</summary>
+    member _.LoadSnapshot(snapshot: seq<string * string[]>) =
+        buckets.Clear()
+        ordinals.Clear()
+
+        for (basicName, names) in snapshot do
+            let bucket = createBucket names
+            buckets[basicName] <- bucket
+            ordinals[basicName] <- 0
 
 /// <summary>Retrieves a stable compiler-generated name or falls back to the provided generator.</summary>
 let nextName mapOpt basicName generate =

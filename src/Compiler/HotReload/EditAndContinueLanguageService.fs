@@ -9,6 +9,7 @@ open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaEmitter
 open FSharp.Compiler.HotReload.DeltaBuilder
 open FSharp.Compiler.TypedTree
+open FSharp.Compiler.SynthesizedTypeMaps
 
 /// <summary>
 /// Entry point mirroring Roslyn's <c>EditAndContinueLanguageService</c>. It centralises session lifecycle
@@ -18,6 +19,11 @@ type internal FSharpEditAndContinueLanguageService private () =
 
     static let lazyInstance = lazy FSharpEditAndContinueLanguageService()
     static let mutable lastBaselineState : (FSharpEmitBaseline * CheckedAssemblyAfterOptimization) option = None
+    static let createSynthesizedMapFromSnapshot (snapshot: Map<string, string[]>) =
+        let map = FSharpSynthesizedTypeMaps()
+        map.LoadSnapshot(snapshot |> Map.toSeq)
+        map.BeginSession()
+        map
 
     /// <summary>Singleton instance consumed by CLI and IDE hosts.</summary>
     static member Instance = lazyInstance.Value
@@ -72,6 +78,8 @@ type internal FSharpEditAndContinueLanguageService private () =
                     Activity.Tags.project, session.Baseline.ModuleId.ToString()
                 |]
             try
+                let synthesizedMap = createSynthesizedMapFromSnapshot session.Baseline.SynthesizedNameSnapshot
+
                 let deltaRequest =
                     { IlxDeltaRequest.Baseline = session.Baseline
                       UpdatedTypes = request.UpdatedTypes
@@ -79,7 +87,8 @@ type internal FSharpEditAndContinueLanguageService private () =
                       Module = request.IlModule
                       SymbolChanges = request.SymbolChanges
                       CurrentGeneration = session.CurrentGeneration
-                      PreviousGenerationId = session.PreviousGenerationId }
+                      PreviousGenerationId = session.PreviousGenerationId
+                      SynthesizedNames = Some synthesizedMap }
 
                 let delta = FSharp.Compiler.IlxDeltaEmitter.emitDelta deltaRequest
                 Ok { Delta = delta }

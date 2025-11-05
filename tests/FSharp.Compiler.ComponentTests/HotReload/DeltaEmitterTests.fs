@@ -342,7 +342,8 @@ module DeltaEmitterTests =
               Module = updatedModule
               SymbolChanges = None
               CurrentGeneration = 1
-              PreviousGenerationId = None }
+              PreviousGenerationId = None
+              SynthesizedNames = None }
 
         let delta = emitDelta request
 
@@ -370,6 +371,7 @@ module DeltaEmitterTests =
                 SymbolChanges = None
                 CurrentGeneration = 1
                 PreviousGenerationId = None
+                SynthesizedNames = None
             }
 
         let delta = emitDelta request
@@ -427,6 +429,7 @@ module DeltaEmitterTests =
                 SymbolChanges = None
                 CurrentGeneration = 1
                 PreviousGenerationId = None
+                SynthesizedNames = None
             }
 
         let delta = emitDelta request
@@ -450,6 +453,7 @@ module DeltaEmitterTests =
                 SymbolChanges = None
                 CurrentGeneration = 1
                 PreviousGenerationId = None
+                SynthesizedNames = None
             }
 
         let ex = Assert.Throws<HotReloadUnsupportedEditException>(fun () -> emitDelta request |> ignore)
@@ -472,6 +476,7 @@ module DeltaEmitterTests =
                 SymbolChanges = None
                 CurrentGeneration = 1
                 PreviousGenerationId = None
+                SynthesizedNames = None
             }
 
         let delta = emitDelta request
@@ -512,6 +517,7 @@ module DeltaEmitterTests =
                 SymbolChanges = None
                 CurrentGeneration = 1
                 PreviousGenerationId = None
+                SynthesizedNames = None
             }
 
         let delta = emitDelta request
@@ -557,6 +563,7 @@ module DeltaEmitterTests =
                 SymbolChanges = None
                 CurrentGeneration = 1
                 PreviousGenerationId = None
+                SynthesizedNames = None
             }
 
         let delta = emitDelta request
@@ -604,6 +611,7 @@ module DeltaEmitterTests =
                 SymbolChanges = None
                 CurrentGeneration = session0.CurrentGeneration
                 PreviousGenerationId = session0.PreviousGenerationId
+                SynthesizedNames = None
             }
 
         let delta1 = emitDelta requestGen1
@@ -630,6 +638,7 @@ module DeltaEmitterTests =
                 SymbolChanges = None
                 CurrentGeneration = session1.CurrentGeneration
                 PreviousGenerationId = session1.PreviousGenerationId
+                SynthesizedNames = None
             }
 
         let delta2 = emitDelta requestGen2

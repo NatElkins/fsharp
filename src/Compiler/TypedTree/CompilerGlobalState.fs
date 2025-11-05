@@ -10,6 +10,7 @@ open System.Threading
 open FSharp.Compiler.Syntax.PrettyNaming
 open FSharp.Compiler.Text
 open FSharp.Compiler.SynthesizedTypeMaps
+open FSharp.Compiler.GeneratedNames
 
 /// Generates compiler-generated names. Each name generated also includes the StartLine number of the range passed in
 /// at the point of first generation.
@@ -23,27 +24,26 @@ type NiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMaps opti
     // Cache this as a delegate.
     let basicNameCountsAddDelegate = Func<struct (string * int), int ref>(fun _ -> ref 0)
 
-    let increment basicName (m: range) =
+    let ensureOrdinal basicName (m: range) =
         let key = struct (basicName, m.FileIndex)
         let countCell = basicNameCounts.GetOrAdd(key, basicNameCountsAddDelegate)
-        Interlocked.Increment(countCell)
+        let count = Interlocked.Increment(countCell)
+        count - 1
 
     member _.FreshCompilerGeneratedNameOfBasicName (basicName, m: range) =
-        let generateWithCounter () =
-            let count = increment basicName m
-            CompilerGeneratedNameSuffix basicName (string m.StartLine + (match (count - 1) with 0 -> "" | n -> "-" + string n))
-
         match getSynthesizedMap() with
         | Some map ->
             // Maintain internal counters so we fall back consistently when hot reload is disabled.
-            let _ = generateWithCounter()
+            let _ = ensureOrdinal basicName m
             map.GetOrAddName basicName
-        | None -> generateWithCounter()
+        | None ->
+            let ordinal = ensureOrdinal basicName m
+            makeHotReloadName basicName ordinal
 
     member this.FreshCompilerGeneratedName (name, m: range) =
         this.FreshCompilerGeneratedNameOfBasicName (GetBasicNameOfPossibleCompilerGeneratedName name, m)
 
-    member _.IncrementOnly(name: string, m: range) = increment name m
+    member _.IncrementOnly(name: string, m: range) = ensureOrdinal name m |> ignore
 
     new () = NiceNameGenerator(fun () -> None)
 

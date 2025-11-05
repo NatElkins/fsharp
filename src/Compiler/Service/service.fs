@@ -574,17 +574,20 @@ type FSharpChecker
                     | Ok(baseline, implementationFiles) ->
                         lock hotReloadGate (fun () ->
                             let compilerState = tcGlobals.CompilerGlobalState.Value
-
                             let map =
-                                match currentSynthesizedTypeMaps with
-                                | Some map ->
-                                    map.BeginSession()
-                                    map
-                                | None ->
-                                    let map = FSharpSynthesizedTypeMaps()
-                                    map.BeginSession()
-                                    currentSynthesizedTypeMaps <- Some map
-                                    map
+                                let targetMap =
+                                    match currentSynthesizedTypeMaps with
+                                    | Some existing -> existing
+                                    | None ->
+                                        let created = FSharpSynthesizedTypeMaps()
+                                        currentSynthesizedTypeMaps <- Some created
+                                        created
+
+                                baseline.SynthesizedNameSnapshot
+                                |> Map.toSeq
+                                |> targetMap.LoadSnapshot
+                                targetMap.BeginSession()
+                                targetMap
 
                             compilerState.SynthesizedTypeMaps <- Some map
 
@@ -632,9 +635,19 @@ type FSharpChecker
                             | Some(baseline, implementationFiles) ->
                                 let compilerState = tcGlobals.CompilerGlobalState.Value
 
-                                match currentSynthesizedTypeMaps with
-                                | Some map -> compilerState.SynthesizedTypeMaps <- Some map
-                                | None -> ()
+                                let map =
+                                    match currentSynthesizedTypeMaps with
+                                    | Some existing -> existing
+                                    | None ->
+                                        let created = FSharpSynthesizedTypeMaps()
+                                        baseline.SynthesizedNameSnapshot
+                                        |> Map.toSeq
+                                        |> created.LoadSnapshot
+                                        currentSynthesizedTypeMaps <- Some created
+                                        created
+
+                                map.BeginSession()
+                                compilerState.SynthesizedTypeMaps <- Some map
 
                                 FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
                             | None -> ())
@@ -657,7 +670,9 @@ type FSharpChecker
                         | Ok ilModule ->
                             lock hotReloadGate (fun () ->
                                 match currentSynthesizedTypeMaps with
-                                | Some map -> tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps <- Some map
+                                | Some map ->
+                                    map.BeginSession()
+                                    tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps <- Some map
                                 | None -> ())
 
                             match

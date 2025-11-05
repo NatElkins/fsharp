@@ -39,3 +39,23 @@ module NameMapTests =
 
         Assert.False(hasLineNumberSuffix name, $"Expected '{name}' to avoid line-number suffixes.")
         Assert.False(hasLineNumberSuffix another, $"Expected '{another}' to avoid line-number suffixes.")
+
+    [<Fact>]
+    let ``snapshot reload restores recorded names`` () =
+        let map = FSharpSynthesizedTypeMaps()
+        map.BeginSession()
+
+        let first = map.GetOrAddName "anon"
+        let second = map.GetOrAddName "anon"
+
+        let snapshot = map.Snapshot |> Seq.toArray
+
+        let replay = FSharpSynthesizedTypeMaps()
+        replay.LoadSnapshot snapshot
+        replay.BeginSession()
+
+        let replayFirst = replay.GetOrAddName "anon"
+        let replaySecond = replay.GetOrAddName "anon"
+
+        Assert.Equal<string>(first, replayFirst)
+        Assert.Equal<string>(second, replaySecond)

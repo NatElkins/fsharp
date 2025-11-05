@@ -129,7 +129,8 @@ module PdbTests =
               Module = updatedModule
               SymbolChanges = None
               CurrentGeneration = 1
-              PreviousGenerationId = None }
+              PreviousGenerationId = None
+              SynthesizedNames = None }
 
         let delta = emitDelta request
 

@@ -18,6 +18,8 @@ open FSharp.Compiler.HotReload.SymbolMatcher
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.HotReloadPdb
 open FSharp.Compiler.IlxDeltaStreams
+open FSharp.Compiler.SynthesizedTypeMaps
+open FSharp.Compiler.Syntax.PrettyNaming
 open Internal.Utilities
 
 exception HotReloadUnsupportedEditException of string
@@ -63,6 +65,7 @@ type IlxDeltaRequest =
         SymbolChanges: FSharpSymbolChanges option
         CurrentGeneration: int
         PreviousGenerationId: Guid option
+        SynthesizedNames: FSharpSynthesizedTypeMaps option
     }
 
 /// Helper that produces an empty delta payload.
@@ -211,7 +214,17 @@ let private rewriteMethodBody (remapUserString: int -> int) (remapEntityToken: i
 /// while leaving the raw metadata/IL/PDB payload empty; future work will replace the placeholders
 /// with fully emitted heaps.
 let emitDelta (request: IlxDeltaRequest) : IlxDelta =
-    let symbolMatcher = FSharpSymbolMatcher.create request.Module
+    let synthesizedBuckets =
+        request.SynthesizedNames
+        |> Option.map (fun map ->
+            map.Snapshot
+            |> Seq.map (fun (basic, names) -> basic, names)
+            |> dict)
+
+    let symbolMatcher =
+        match request.SynthesizedNames with
+        | Some map -> FSharpSymbolMatcher.createWithSynthesizedNames request.Module map
+        | None -> FSharpSymbolMatcher.create request.Module
 
     let resolvedMethods =
         request.UpdatedMethods
@@ -227,6 +240,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         |> List.map (fun symbol -> symbol.QualifiedName)
 
     let builder = IlDeltaStreamBuilder(Some request.Baseline.Metadata)
+
+    let baselineTypeTokens = request.Baseline.TypeTokens
 
     let primaryScopeRef =
         match request.Module.Manifest with
@@ -254,6 +269,22 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let traceUserStringUpdates =
         lazy (
             match System.Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_STRINGS") with
+            | null -> false
+            | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+            | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+            | _ -> false
+        )
+    let traceSynthesizedMappings =
+        lazy (
+            match System.Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_SYNTHESIZED") with
+            | null -> false
+            | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+            | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+            | _ -> false
+        )
+    let traceMethodUpdates =
+        lazy (
+            match System.Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METHODS") with
             | null -> false
             | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
             | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
@@ -311,6 +342,120 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let methodTokenMap = Dictionary<int, int>()
     let propertyTokenMap = Dictionary<int, int>()
     let eventTokenMap = Dictionary<int, int>()
+    let baselineTypeNameByNew = Dictionary<string, string>(StringComparer.Ordinal)
+
+    let getAliasCandidates (typeName: string) =
+        match synthesizedBuckets with
+        | Some buckets when IsCompilerGeneratedName typeName ->
+            let basicName = GetBasicNameOfPossibleCompilerGeneratedName typeName
+            match buckets.TryGetValue basicName with
+            | true, aliases when aliases.Length > 0 ->
+                if aliases |> Array.exists (fun alias -> alias = typeName) then
+                    aliases
+                else
+                    Array.append [| typeName |] aliases
+            | _ -> [| typeName |]
+        | _ -> [| typeName |]
+
+    let resolveBaselineTypeFullName (enclosing: ILTypeDef list) (typeDef: ILTypeDef) =
+        let typeRef = mkRefForNestedILTypeDef ILScopeRef.Local (enclosing, typeDef)
+        let newFullName = typeRef.FullName
+
+        let parentBaselinePrefixOpt =
+            match enclosing with
+            | [] -> None
+            | _ ->
+                let parentType = List.last enclosing
+                let parentEnclosing = enclosing |> List.take (List.length enclosing - 1)
+                let parentRef = mkRefForNestedILTypeDef ILScopeRef.Local (parentEnclosing, parentType)
+                let parentBaseline =
+                    match baselineTypeNameByNew.TryGetValue parentRef.FullName with
+                    | true, baselineParent -> baselineParent
+                    | _ -> parentRef.FullName
+                Some(parentBaseline + "+")
+
+        let basePrefix =
+            match parentBaselinePrefixOpt with
+            | Some prefix -> prefix
+            | None ->
+                let lastDot = newFullName.LastIndexOf('.')
+                if lastDot >= 0 then
+                    newFullName.Substring(0, lastDot + 1)
+                else
+                    ""
+
+        let candidateNames =
+            let aliases = getAliasCandidates typeDef.Name
+            let prefixes =
+                if basePrefix.EndsWith("+", StringComparison.Ordinal) then
+                    let withoutPlus = basePrefix.Substring(0, basePrefix.Length - 1)
+                    let dotPrefix = if String.IsNullOrEmpty withoutPlus then "" else withoutPlus + "."
+                    [| basePrefix; dotPrefix |]
+                else
+                    [| basePrefix |]
+
+            let projected =
+                prefixes
+                |> Array.collect (fun prefix ->
+                    aliases
+                    |> Array.map (fun alias ->
+                        if prefix.EndsWith("+", StringComparison.Ordinal) || prefix.EndsWith(".", StringComparison.Ordinal) then
+                            prefix + alias
+                        elif prefix = "" then
+                            alias
+                        else
+                            prefix + alias))
+
+            Array.concat
+                [| projected
+                   prefixes
+                   |> Array.collect (fun prefix ->
+                       [|
+                           if prefix.EndsWith("+", StringComparison.Ordinal) || prefix.EndsWith(".", StringComparison.Ordinal) then
+                               yield prefix + typeDef.Name
+                           elif prefix = "" then
+                               yield typeDef.Name
+                           else
+                               yield prefix + typeDef.Name
+                       |])
+                   [| newFullName |] |]
+            |> Array.filter (fun name -> not (String.IsNullOrWhiteSpace name))
+            |> Array.distinct
+
+        let baselineNameOpt =
+            candidateNames
+            |> Array.tryPick (fun candidate ->
+                match request.Baseline.TypeTokens |> Map.tryFind candidate with
+                | Some token -> Some(candidate, token)
+                | None -> None)
+
+        if traceSynthesizedMappings.Value then
+            match baselineNameOpt with
+            | Some (baselineName, _) when not (String.Equals(newFullName, baselineName, StringComparison.Ordinal)) ->
+                printfn "[fsharp-hotreload][synthesized-map] %s -> %s" newFullName baselineName
+            | None ->
+                printfn "[fsharp-hotreload][synthesized-map] no baseline match for %s candidates=%A" newFullName candidateNames
+            | _ -> ()
+
+        let baselineName, baselineTokenOpt =
+            match baselineNameOpt with
+            | Some (baseline, token) -> baseline, Some token
+            | None -> newFullName, None
+
+        baselineTypeNameByNew[newFullName] <- baselineName
+        if traceSynthesizedMappings.Value then
+            printfn "[fsharp-hotreload][synthesized-map] stored %s -> %s" newFullName baselineName
+        baselineName, baselineTokenOpt
+
+    let tryGetBaselineTypeName fullName =
+        match baselineTypeNameByNew.TryGetValue fullName with
+        | true, baseline -> baseline
+        | _ -> fullName
+
+    let tryGetBaselineTypeToken (enclosing: ILTypeDef list) (typeDef: ILTypeDef) =
+        let typeRef = mkRefForNestedILTypeDef ILScopeRef.Local (enclosing, typeDef)
+        let baselineName = tryGetBaselineTypeName typeRef.FullName
+        baselineTypeTokens |> Map.tryFind baselineName
 
     let addMapping (dict: Dictionary<int, int>) newToken baselineToken =
         if newToken <> 0 && baselineToken <> 0 && newToken <> baselineToken then
@@ -318,14 +463,25 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let rec collectTypeMappings (enclosing: ILTypeDef list) (typeDef: ILTypeDef) =
         let newTypeToken = emittedTokenMappings.TypeDefTokenMap(enclosing, typeDef)
-        let baselineTypeToken = request.Baseline.TokenMappings.TypeDefTokenMap(enclosing, typeDef)
+        if traceSynthesizedMappings.Value then
+            let typeRef = mkRefForNestedILTypeDef ILScopeRef.Local (enclosing, typeDef)
+            printfn "[fsharp-hotreload][synthesized-map] visiting %s" typeRef.FullName
+        let _, baselineTokenOpt = resolveBaselineTypeFullName enclosing typeDef
+        let baselineTypeToken =
+            match baselineTokenOpt with
+            | Some token -> token
+            | None ->
+                match tryGetBaselineTypeToken enclosing typeDef with
+                | Some token -> token
+                | None -> request.Baseline.TokenMappings.TypeDefTokenMap(enclosing, typeDef)
         addMapping typeTokenMap newTypeToken baselineTypeToken
 
         typeDef.Fields.AsList()
         |> List.iter (fun fieldDef ->
             let declaringTypeRef = mkRefForNestedILTypeDef ILScopeRef.Local (enclosing, typeDef)
+            let baselineDeclaringType = tryGetBaselineTypeName declaringTypeRef.FullName
             let fieldKey: FieldDefinitionKey =
-                { DeclaringType = declaringTypeRef.FullName
+                { DeclaringType = baselineDeclaringType
                   Name = fieldDef.Name
                   FieldType = fieldDef.FieldType }
 
@@ -336,7 +492,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     let sanitizedTarget = normalizeGeneratedFieldName fieldDef.Name
                     request.Baseline.FieldTokens
                     |> Map.tryPick (fun key token ->
-                        if key.DeclaringType = declaringTypeRef.FullName && key.FieldType = fieldDef.FieldType then
+                        if key.DeclaringType = baselineDeclaringType && key.FieldType = fieldDef.FieldType then
                             if normalizeGeneratedFieldName key.Name = sanitizedTarget then
                                 Some token
                             else
@@ -348,6 +504,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             | Some baselineFieldToken ->
                 let newFieldToken = emittedTokenMappings.FieldDefTokenMap(enclosing, typeDef) fieldDef
                 addMapping fieldTokenMap newFieldToken baselineFieldToken
+            | None when synthesizedBuckets.IsSome && IsCompilerGeneratedName typeDef.Name -> ()
             | None ->
                 let fieldDisplay = $"{declaringTypeRef.FullName}::{fieldDef.Name}"
                 let message =
@@ -357,20 +514,65 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         typeDef.Methods.AsList()
         |> List.iter (fun methodDef ->
             let newMethodToken = emittedTokenMappings.MethodDefTokenMap(enclosing, typeDef) methodDef
-            let baselineMethodToken = request.Baseline.TokenMappings.MethodDefTokenMap(enclosing, typeDef) methodDef
-            addMapping methodTokenMap newMethodToken baselineMethodToken)
+            let declaringTypeRef = mkRefForNestedILTypeDef ILScopeRef.Local (enclosing, typeDef)
+            let baselineDeclaringType = tryGetBaselineTypeName declaringTypeRef.FullName
+            let methodKey: MethodDefinitionKey =
+                { DeclaringType = baselineDeclaringType
+                  Name = methodDef.Name
+                  GenericArity = methodDef.GenericParams.Length
+                  ParameterTypes = methodDef.ParameterTypes
+                  ReturnType = methodDef.Return.Type }
+
+            match request.Baseline.MethodTokens |> Map.tryFind methodKey with
+            | Some baselineMethodToken ->
+                addMapping methodTokenMap newMethodToken baselineMethodToken
+            | None when synthesizedBuckets.IsSome && IsCompilerGeneratedName typeDef.Name -> ()
+            | None ->
+                let methodDisplay = $"{baselineDeclaringType}::{methodDef.Name}"
+                let message =
+                    $"Edit adds method '{methodDisplay}'. Hot reload currently supports method-body changes only; please rebuild."
+                raise (HotReloadUnsupportedEditException message))
 
         typeDef.Properties.AsList()
         |> List.iter (fun propertyDef ->
             let newPropertyToken = emittedTokenMappings.PropertyTokenMap(enclosing, typeDef) propertyDef
-            let baselinePropertyToken = request.Baseline.TokenMappings.PropertyTokenMap(enclosing, typeDef) propertyDef
-            addMapping propertyTokenMap newPropertyToken baselinePropertyToken)
+            let declaringTypeRef = mkRefForNestedILTypeDef ILScopeRef.Local (enclosing, typeDef)
+            let baselineDeclaringType = tryGetBaselineTypeName declaringTypeRef.FullName
+            let propertyKey: PropertyDefinitionKey =
+                { DeclaringType = baselineDeclaringType
+                  Name = propertyDef.Name
+                  PropertyType = propertyDef.PropertyType
+                  IndexParameterTypes = List.ofSeq propertyDef.Args }
+
+            match request.Baseline.PropertyTokens |> Map.tryFind propertyKey with
+            | Some baselinePropertyToken ->
+                addMapping propertyTokenMap newPropertyToken baselinePropertyToken
+            | None when synthesizedBuckets.IsSome && IsCompilerGeneratedName typeDef.Name -> ()
+            | None ->
+                let propertyDisplay = $"{baselineDeclaringType}::{propertyDef.Name}"
+                let message =
+                    $"Edit adds property '{propertyDisplay}'. Hot reload currently supports method-body changes only; please rebuild."
+                raise (HotReloadUnsupportedEditException message))
 
         typeDef.Events.AsList()
         |> List.iter (fun eventDef ->
             let newEventToken = emittedTokenMappings.EventTokenMap(enclosing, typeDef) eventDef
-            let baselineEventToken = request.Baseline.TokenMappings.EventTokenMap(enclosing, typeDef) eventDef
-            addMapping eventTokenMap newEventToken baselineEventToken)
+            let declaringTypeRef = mkRefForNestedILTypeDef ILScopeRef.Local (enclosing, typeDef)
+            let baselineDeclaringType = tryGetBaselineTypeName declaringTypeRef.FullName
+            let eventKey: EventDefinitionKey =
+                { DeclaringType = baselineDeclaringType
+                  Name = eventDef.Name
+                  EventType = eventDef.EventType }
+
+            match request.Baseline.EventTokens |> Map.tryFind eventKey with
+            | Some baselineEventToken ->
+                addMapping eventTokenMap newEventToken baselineEventToken
+            | None when synthesizedBuckets.IsSome && IsCompilerGeneratedName typeDef.Name -> ()
+            | None ->
+                let eventDisplay = $"{baselineDeclaringType}::{eventDef.Name}"
+                let message =
+                    $"Edit adds event '{eventDisplay}'. Hot reload currently supports method-body changes only; please rebuild."
+                raise (HotReloadUnsupportedEditException message))
 
         typeDef.NestedTypes.AsList()
         |> List.iter (fun nested -> collectTypeMappings (enclosing @ [ typeDef ]) nested)
@@ -417,6 +619,12 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 else
                     let methodDef = metadataReader.GetMethodDefinition methodHandle
                     let body = peReader.GetMethodBody(methodDef.RelativeVirtualAddress)
+                    if traceMethodUpdates.Value then
+                        printfn
+                            "[fsharp-hotreload][method-update] %s::%s token=0x%08X"
+                            key.DeclaringType
+                            key.Name
+                            methodToken
                     Some(struct (key, methodToken, methodHandle, methodDef, body)))
 
     let updatedTypeTokens =
@@ -424,9 +632,10 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             resolvedMethods
             |> List.map (fun (enclosing, typeDef, _, _) ->
                 let typeRef = mkRefForNestedILTypeDef ILScopeRef.Local (enclosing, typeDef)
-                typeRef.FullName)
+                tryGetBaselineTypeName typeRef.FullName)
 
         (request.UpdatedTypes @ symbolChangeTypeNames @ methodTypeNames)
+        |> List.map tryGetBaselineTypeName
         |> List.distinct
         |> List.choose (fun typeName -> request.Baseline.TypeTokens |> Map.tryFind typeName)
 

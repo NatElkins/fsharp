@@ -24,6 +24,8 @@ open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryReader
 open FSharp.Compiler.AbstractIL.ILPdbWriter
 open FSharp.Compiler.TypedTree
+open FSharp.Compiler.Syntax.PrettyNaming
+open FSharp.Compiler.Syntax.PrettyNaming
 open FSharp.Test
 open Internal.Utilities
 
@@ -53,6 +55,46 @@ module MdvValidationTests =
         let fsPath = Path.Combine(root, "Library.fs")
         let dllPath = Path.Combine(root, "Library.dll")
         root, fsPath, dllPath
+
+    let private readIlModule path =
+        let options : ILReaderOptions =
+            { pdbDirPath = None
+              reduceMemoryUsage = ReduceMemoryFlag.Yes
+              metadataOnly = MetadataOnlyFlag.No
+              tryGetMetadataSnapshot = fun _ -> None }
+
+        use reader = OpenILModuleReader path options
+        reader.ILModuleDef
+
+    let private collectCompilerGeneratedTypeNames (moduleDef: ILModuleDef) =
+        let names = ResizeArray<string>()
+
+        let rec collect (typeDef: ILTypeDef) =
+            if IsCompilerGeneratedName typeDef.Name then
+                names.Add typeDef.Name
+
+            typeDef.NestedTypes.AsList()
+            |> List.iter collect
+
+        moduleDef.TypeDefs.AsList()
+        |> List.iter collect
+
+        names.ToArray()
+
+    let private logSynthesizedNameDifferences baselineModule updatedModule =
+        let baselineNames =
+            collectCompilerGeneratedTypeNames baselineModule
+            |> Set.ofArray
+
+        let updatedNames =
+            collectCompilerGeneratedTypeNames updatedModule
+            |> Set.ofArray
+
+        let unexpected = Set.difference updatedNames baselineNames
+        let unexpectedList = unexpected |> Seq.toArray
+        if unexpectedList.Length > 0 then
+            let message = String.Join(", ", unexpectedList)
+            printfn "[mdv][synthesized] updated helpers introduced: %s" message
 
     type private TemporaryDirectory() =
         let path = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-build", Guid.NewGuid().ToString("N"))
@@ -856,37 +898,124 @@ module Demo =
         let deltaDir = Path.Combine(projectDir, "mdv-closure-delta")
 
         try
+            Directory.CreateDirectory(deltaDir) |> ignore
             let baselineOptions, _ = compileProject checker fsPath dllPath baselineSource
             let baselineCopy = Path.Combine(projectDir, "baseline.dll")
             File.Copy(dllPath, baselineCopy, true)
+            let baselineModule = readIlModule baselineCopy
 
             match checker.StartHotReloadSession(baselineOptions) |> Async.RunSynchronously with
             | Error error -> failwithf "StartHotReloadSession failed: %A" error
             | Ok () -> ()
 
             let updatedOptions, _ = compileProject checker fsPath dllPath updatedSource
+            let updatedModule = readIlModule dllPath
 
-            match checker.EmitHotReloadDelta(updatedOptions) |> Async.RunSynchronously with
-            | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
-            | Ok delta ->
-                Directory.CreateDirectory(deltaDir) |> ignore
-                let metadataPath = Path.Combine(deltaDir, "1.meta")
-                let ilPath = Path.Combine(deltaDir, "1.il")
-                File.WriteAllBytes(metadataPath, delta.Metadata)
-                File.WriteAllBytes(ilPath, delta.IL)
+            logSynthesizedNameDifferences baselineModule updatedModule
 
-                let expectedLiteral = Text.Encoding.Unicode.GetBytes("Integration closure updated")
-                Assert.True(
-                    containsSubsequence delta.Metadata expectedLiteral,
-                    "Expected closure scenario metadata delta to contain updated literal."
-                )
+            let delta =
+                match checker.EmitHotReloadDelta(updatedOptions) |> Async.RunSynchronously with
+                | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
+                | Ok delta -> delta
 
-                match runMdv baselineCopy metadataPath ilPath with
-                | Some output ->
-                    Assert.Contains("Generation 1", output)
-                    assertGenerationContains output 1 "Integration closure updated"
-                | None ->
-                    printfn "mdv not available; skipping closure verification."
+            let metadataPath = Path.Combine(deltaDir, "1.meta")
+            let ilPath = Path.Combine(deltaDir, "1.il")
+            File.WriteAllBytes(metadataPath, delta.Metadata)
+            File.WriteAllBytes(ilPath, delta.IL)
+
+            let expectedLiteral = Text.Encoding.Unicode.GetBytes("Integration closure updated")
+            Assert.True(
+                containsSubsequence delta.Metadata expectedLiteral,
+                "Expected closure scenario metadata delta to contain updated literal."
+            )
+
+            match runMdv baselineCopy metadataPath ilPath with
+            | Some output ->
+                Assert.Contains("Generation 1", output)
+                assertGenerationContains output 1 "Integration closure updated"
+            | None ->
+                printfn "mdv not available; skipping closure verification."
+        finally
+            try checker.InvalidateAll() with _ -> ()
+            try checker.EndHotReloadSession() with _ -> ()
+            try Directory.Delete(deltaDir, true) with _ -> ()
+            try Directory.Delete(projectDir, true) with _ -> ()
+
+
+    [<Fact>]
+    let ``mdv validates method-body edit with async state machine`` () =
+        let checker =
+            FSharpChecker.Create(
+                keepAssemblyContents = true,
+                enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                captureIdentifiersWhenParsing = false
+            )
+
+        let projectDir, fsPath, dllPath = createTempProject ()
+        let baselineSource =
+            """
+namespace MdVAsync
+
+open System
+
+module Demo =
+    let GetMessage () =
+        async {
+            do! Async.Sleep 1
+            return "Integration async baseline"
+        }
+"""
+
+        let updatedSource =
+            """
+namespace MdVAsync
+
+open System
+
+module Demo =
+    let GetMessage () =
+        async {
+            do! Async.Sleep 1
+            let suffix = "updated"
+            return "Integration async " + suffix
+        }
+"""
+
+        let deltaDir = Path.Combine(projectDir, "mdv-async-delta")
+
+        try
+            Directory.CreateDirectory(deltaDir) |> ignore
+            let baselineOptions, _ = compileProject checker fsPath dllPath baselineSource
+            let baselineCopy = Path.Combine(projectDir, "baseline.dll")
+            File.Copy(dllPath, baselineCopy, true)
+            let baselineModule = readIlModule baselineCopy
+
+            match checker.StartHotReloadSession(baselineOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "StartHotReloadSession failed: %A" error
+            | Ok () -> ()
+
+            let updatedOptions, _ = compileProject checker fsPath dllPath updatedSource
+            let updatedModule = readIlModule dllPath
+
+            logSynthesizedNameDifferences baselineModule updatedModule
+
+            let delta =
+                match checker.EmitHotReloadDelta(updatedOptions) |> Async.RunSynchronously with
+                | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
+                | Ok delta -> delta
+
+            let metadataPath = Path.Combine(deltaDir, "1.meta")
+            let ilPath = Path.Combine(deltaDir, "1.il")
+            File.WriteAllBytes(metadataPath, delta.Metadata)
+            File.WriteAllBytes(ilPath, delta.IL)
+
+            match runMdv baselineCopy metadataPath ilPath with
+            | Some output ->
+                Assert.Contains("Generation 1", output)
+                assertGenerationContains output 1 "Integration async "
+                assertGenerationContains output 1 "updated"
+            | None ->
+                printfn "mdv not available; skipping async verification."
         finally
             try checker.InvalidateAll() with _ -> ()
             try checker.EndHotReloadSession() with _ -> ()

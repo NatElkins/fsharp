@@ -55,7 +55,8 @@ type FSharpEmitBaseline =
       PropertyTokens: Map<PropertyDefinitionKey, int>
       EventTokens: Map<EventDefinitionKey, int>
       IlxGenEnvironment: IlxGenEnvSnapshot option
-      PortablePdb: PortablePdbSnapshot option }
+      PortablePdb: PortablePdbSnapshot option
+      SynthesizedNameSnapshot: Map<string, string[]> }
 
 /// <summary>Create a baseline record for the supplied IL module and token mappings.</summary>
 val create:

@@ -2,11 +2,13 @@ module internal FSharp.Compiler.HotReloadBaseline
 
 open System
 open System.Collections.Immutable
+open System.Collections.Generic
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.IlxGen
+open FSharp.Compiler.Syntax.PrettyNaming
 
 /// <summary>Stable identifier for a method definition used when correlating baseline tokens.</summary>
 type MethodDefinitionKey =
@@ -67,6 +69,7 @@ type FSharpEmitBaseline =
         EventTokens: Map<EventDefinitionKey, int>
         IlxGenEnvironment: IlxGenEnvSnapshot option
         PortablePdb: PortablePdbSnapshot option
+        SynthesizedNameSnapshot: Map<string, string[]>
     }
 
 type private BaselineMaps =
@@ -86,6 +89,49 @@ let private emptyMaps =
         PropertyTokens = Map.empty
         EventTokens = Map.empty
     }
+
+let private collectSynthesizedNameSnapshot (ilModule: ILModuleDef) =
+    let buckets = Dictionary<string, ResizeArray<string>>(StringComparer.Ordinal)
+
+    let recordName (name: string) =
+        if not (String.IsNullOrWhiteSpace name) && IsCompilerGeneratedName name then
+            let basicName = GetBasicNameOfPossibleCompilerGeneratedName name
+            if not (String.IsNullOrWhiteSpace basicName) then
+                let bucket =
+                    match buckets.TryGetValue basicName with
+                    | true, existing -> existing
+                    | _ ->
+                        let created = ResizeArray<string>()
+                        buckets[basicName] <- created
+                        created
+
+                if not (bucket.Contains name) then
+                    bucket.Add(name)
+
+    let rec collectTypeDef (typeDef: ILTypeDef) =
+        recordName typeDef.Name
+
+        typeDef.Fields.AsList()
+        |> List.iter (fun fieldDef -> recordName fieldDef.Name)
+
+        typeDef.Methods.AsList()
+        |> List.iter (fun methodDef -> recordName methodDef.Name)
+
+        typeDef.Properties.AsList()
+        |> List.iter (fun propertyDef -> recordName propertyDef.Name)
+
+        typeDef.Events.AsList()
+        |> List.iter (fun eventDef -> recordName eventDef.Name)
+
+        typeDef.NestedTypes.AsList()
+        |> List.iter collectTypeDef
+
+    ilModule.TypeDefs.AsList()
+    |> List.iter collectTypeDef
+
+    buckets
+    |> Seq.map (fun (KeyValue(key, bucket)) -> key, bucket.ToArray())
+    |> Map.ofSeq
 
 /// <summary>
 /// Populate the baseline token maps by walking type definitions and their nested members.
@@ -198,6 +244,8 @@ let private createCore
         ilModule.TypeDefs.AsList()
         |> List.fold (collectType tokenMappings scope []) emptyMaps
 
+    let synthesizedNames = collectSynthesizedNameSnapshot ilModule
+
     {
         ModuleId = moduleId
         Metadata = metadataSnapshot
@@ -209,6 +257,7 @@ let private createCore
         EventTokens = maps.EventTokens
         IlxGenEnvironment = ilxGenEnvironment
         PortablePdb = portablePdbSnapshot
+        SynthesizedNameSnapshot = synthesizedNames
     }
 
 /// <summary>Create an <see cref="FSharpEmitBaseline"/> without capturing the ILX environment snapshot.</summary>
