@@ -684,3 +684,40 @@ module DeltaEmitterTests =
             Assert.True(false, sprintf "EmitDelta failed: %A" error)
 
         service.EndSession()
+
+    [<Fact>]
+    let ``IlDeltaStreamBuilder records method body payload`` () =
+        let ilBytes = [| 0x02uy; 0x28uy; 0x00uy; 0x00uy; 0x00uy; 0x0Auy; 0x2Auy |]
+        let builder = IlDeltaStreamBuilder(None)
+
+        let update =
+            builder.AddMethodBody(
+                0x06000001,
+                0x11000001,
+                ilBytes,
+                8,
+                false,
+                ImmutableArray<ExceptionRegion>.Empty,
+                id
+            )
+
+        Assert.Equal(0x06000001, update.MethodToken)
+        let streams = builder.Build()
+        Assert.True(streams.IL.Length >= ilBytes.Length)
+        let single = Assert.Single(streams.MethodBodies)
+        Assert.Equal(update.MethodToken, single.MethodToken)
+        Assert.Equal(update.LocalSignatureToken, single.LocalSignatureToken)
+        Assert.Equal(update.CodeLength, single.CodeLength)
+
+    [<Fact>]
+    let ``IlDeltaStreamBuilder captures standalone signatures`` () =
+        let signature = [| 0x07uy; 0x02uy |]
+        let builder = IlDeltaStreamBuilder(None)
+        let token = builder.AddStandaloneSignature(signature)
+        Assert.NotEqual(0, token)
+
+        let streams = builder.Build()
+        let standalone = Assert.Single(streams.StandaloneSignatures)
+        let expected = MetadataTokens.GetToken(EntityHandle.op_Implicit standalone.Handle)
+        Assert.Equal(expected, token)
+        Assert.Equal<byte[]>(signature, standalone.Blob)
