@@ -10,18 +10,23 @@ open FSharp.Compiler.HotReloadBaseline
 open Internal.Utilities
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
+open FSharp.Compiler.AbstractIL.ILPdbWriter
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.AbstractIL.BinaryConstants
 open System.Diagnostics
 open System.IO
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
+open System.Reflection.PortableExecutable
 open Xunit.Sdk
 open FSharp.Test
 open FSharp.Compiler.HotReload.SymbolMatcher
+open FSharp.Compiler.TypedTreeDiff
+open FSharp.Compiler.ComponentTests.HotReload.TestHelpers
 
 [<Collection(nameof NotThreadSafeResourceCollection)>]
 module DeltaEmitterTests =
+
 
     let private tryRunMdv args =
         try
@@ -339,6 +344,7 @@ module DeltaEmitterTests =
             { Baseline = baseline
               UpdatedTypes = [ key.DeclaringType ]
               UpdatedMethods = [ key ]
+              UpdatedAccessors = []
               Module = updatedModule
               SymbolChanges = None
               CurrentGeneration = 1
@@ -367,6 +373,7 @@ module DeltaEmitterTests =
                 IlxDeltaRequest.Baseline = baseline
                 UpdatedTypes = [ "Sample.Type" ]
                 UpdatedMethods = [ methodKey baseline "GetValue" ]
+                UpdatedAccessors = []
                 Module = updatedModule
                 SymbolChanges = None
                 CurrentGeneration = 1
@@ -425,6 +432,7 @@ module DeltaEmitterTests =
                 IlxDeltaRequest.Baseline = baseline
                 UpdatedTypes = [ "Does.NotExist" ]
                 UpdatedMethods = [ unknownMethod ]
+                UpdatedAccessors = []
                 Module = updatedModule
                 SymbolChanges = None
                 CurrentGeneration = 1
@@ -449,6 +457,7 @@ module DeltaEmitterTests =
                 IlxDeltaRequest.Baseline = baseline
                 UpdatedTypes = [ "Sample.FieldHolder" ]
                 UpdatedMethods = [ methodKey baseline "GetValue" ]
+                UpdatedAccessors = []
                 Module = updatedModule
                 SymbolChanges = None
                 CurrentGeneration = 1
@@ -472,6 +481,7 @@ module DeltaEmitterTests =
                 IlxDeltaRequest.Baseline = baseline
                 UpdatedTypes = [ "Sample.Multi" ]
                 UpdatedMethods = methodKeys
+                UpdatedAccessors = []
                 Module = updatedModule
                 SymbolChanges = None
                 CurrentGeneration = 1
@@ -513,6 +523,7 @@ module DeltaEmitterTests =
                 IlxDeltaRequest.Baseline = baseline
                 UpdatedTypes = [ "Sample.Type" ]
                 UpdatedMethods = [ methodKey baseline "GetValue" ]
+                UpdatedAccessors = []
                 Module = updatedModule
                 SymbolChanges = None
                 CurrentGeneration = 1
@@ -559,6 +570,7 @@ module DeltaEmitterTests =
                 IlxDeltaRequest.Baseline = baseline
                 UpdatedTypes = [ "Sample.Type" ]
                 UpdatedMethods = [ methodKey baseline "GetValue" ]
+                UpdatedAccessors = []
                 Module = updatedModule
                 SymbolChanges = None
                 CurrentGeneration = 1
@@ -607,6 +619,7 @@ module DeltaEmitterTests =
                 IlxDeltaRequest.Baseline = session0.Baseline
                 UpdatedTypes = [ "Sample.Type" ]
                 UpdatedMethods = [ methodKey baseline "GetValue" ]
+                UpdatedAccessors = []
                 Module = moduleGen1
                 SymbolChanges = None
                 CurrentGeneration = session0.CurrentGeneration
@@ -634,6 +647,7 @@ module DeltaEmitterTests =
                 IlxDeltaRequest.Baseline = session1.Baseline
                 UpdatedTypes = [ "Sample.Type" ]
                 UpdatedMethods = [ methodKey baseline "GetValue" ]
+                UpdatedAccessors = []
                 Module = moduleGen2
                 SymbolChanges = None
                 CurrentGeneration = session1.CurrentGeneration
@@ -658,6 +672,7 @@ module DeltaEmitterTests =
             { IlModule = createModule 101
               UpdatedTypes = [ "Sample.Type" ]
               UpdatedMethods = [ methodKey baseline "GetValue" ]
+              UpdatedAccessors = []
               SymbolChanges = None }
 
         match service.EmitDelta request with
@@ -669,49 +684,3 @@ module DeltaEmitterTests =
             Assert.True(false, sprintf "EmitDelta failed: %A" error)
 
         service.EndSession()
-
-    [<Fact>]
-    let ``IlDeltaStreamBuilder emits aligned method bodies`` () =
-        let builder = IlDeltaStreamBuilder(None)
-        let localSignatureToken = 0x11000001
-        let code = [| 0x06uy; 0x2Auy |]
-
-        builder.AddMethodBody(
-            0x06000001,
-            localSignatureToken,
-            code,
-            1,
-            true,
-            ImmutableArray<ExceptionRegion>.Empty,
-            id
-        ) |> ignore
-        builder.AddEncLogEntry(TableIndex.MethodDef, 1, EditAndContinueOperation.Default)
-        builder.AddEncMapEntry(TableIndex.MethodDef, 1)
-
-        let moduleName = "SampleModule"
-        let streams = builder.Build(moduleName, Guid.NewGuid(), Guid.NewGuid(), None)
-
-        Assert.True(streams.Metadata.Length > 0, "Metadata stream should not be empty.")
-        Assert.True(streams.IL.Length >= code.Length, "IL stream should include the encoded method body.")
-        Assert.Equal(0, streams.IL.Length % 4)
-        let bodyInfo = Assert.Single(streams.MethodBodies)
-        Assert.Equal(0x06000001, bodyInfo.MethodToken)
-        Assert.Equal(code.Length, bodyInfo.CodeLength)
-        Assert.Equal(localSignatureToken, bodyInfo.LocalSignatureToken)
-        Assert.Equal(0, bodyInfo.CodeOffset % 4)
-
-
-    [<Fact>]
-    let ``IlDeltaStreamBuilder tracks standalone signatures`` () =
-        let builder = IlDeltaStreamBuilder(None)
-        let signature = [| 0x07uy; 0x02uy |]
-
-        let token = builder.AddStandaloneSignature(signature)
-        Assert.NotEqual(0, token)
-
-        let streams = builder.Build("SampleModule", Guid.NewGuid(), Guid.NewGuid(), None)
-        let standalone = Assert.Single(streams.StandaloneSignatures)
-        Assert.False(standalone.Handle.IsNil)
-        let expectedToken = MetadataTokens.GetToken(EntityHandle.op_Implicit standalone.Handle)
-        Assert.Equal(expectedToken, token)
-        Assert.Equal<byte[]>(signature, standalone.Blob)

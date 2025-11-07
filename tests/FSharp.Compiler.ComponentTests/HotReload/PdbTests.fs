@@ -11,6 +11,8 @@ open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaEmitter
 open FSharp.Compiler.IlxDeltaStreams
+open FSharp.Compiler.ComponentTests.HotReload.TestHelpers
+open FSharp.Compiler.TypedTreeDiff
 open FSharp.Test
 
 [<Collection(nameof NotThreadSafeResourceCollection)>]
@@ -126,6 +128,7 @@ module PdbTests =
             { Baseline = baseline
               UpdatedTypes = [ "Sample.Type" ]
               UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
               Module = updatedModule
               SymbolChanges = None
               CurrentGeneration = 1
