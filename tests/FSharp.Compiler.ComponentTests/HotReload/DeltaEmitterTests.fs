@@ -210,6 +210,56 @@ module DeltaEmitterTests =
             (mkILExportedTypes [])
             "v4.0.30319"
 
+    let private createEventHostBaselineModule () =
+        let ilg = PrimaryAssemblyILGlobals
+        let voidType = ILType.Void
+        let handlerType = ilg.typ_Object
+
+        let methodBody =
+            mkMethodBody (
+                false,
+                [],
+                1,
+                nonBranchingInstrsToCode [ I_ldstr "Baseline"; AI_pop; I_ret ],
+                None,
+                None)
+
+        let methodDef =
+            mkILNonGenericInstanceMethod(
+                "Invoke",
+                ILMemberAccess.Public,
+                [ mkILParamNamed("handler", handlerType) ],
+                mkILReturn voidType,
+                methodBody)
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    "Sample.EventDemo",
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ methodDef ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField
+                )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
     let private createModuleWithParameterizedMethod () =
         let ilg = PrimaryAssemblyILGlobals
         let baseMethod = createMethod ilg "GetValue" 1
@@ -756,6 +806,69 @@ module DeltaEmitterTests =
 
             Assert.True(updatedBaseline.PropertyTokens.ContainsKey propertyKey, "Updated baseline missing property token.")
             Assert.True(updatedBaseline.PropertyMapEntries.ContainsKey "Sample.PropertyDemo", "Updated baseline missing property map entry.")
+        | None ->
+            Assert.True(false, "Updated baseline missing.")
+
+    [<Fact>]
+    let ``emitDelta adds event metadata rows for new event`` () =
+        let baselineArtifacts =
+            TestHelpers.createBaselineFromModule (createEventHostBaselineModule ())
+        let updatedModule = TestHelpers.createEventModule "Event addition payload"
+
+        let addKey =
+            { MethodDefinitionKey.DeclaringType = "Sample.EventDemo"
+              Name = "add_OnChanged"
+              GenericArity = 0
+              ParameterTypes = [ PrimaryAssemblyILGlobals.typ_Object ]
+              ReturnType = ILType.Void }
+
+        let accessorUpdate =
+            TestHelpers.mkAccessorUpdate "Sample.EventDemo" (SymbolMemberKind.EventAdd "OnChanged") addKey
+
+        let request =
+            {
+                IlxDeltaRequest.Baseline = baselineArtifacts.Baseline
+                UpdatedTypes = [ "Sample.EventDemo" ]
+                UpdatedMethods = []
+                UpdatedAccessors = [ accessorUpdate ]
+                Module = updatedModule
+                SymbolChanges = None
+                CurrentGeneration = 1
+                PreviousGenerationId = None
+                SynthesizedNames = None
+            }
+
+        let delta = emitDelta request
+
+        let baselineEventCount = baselineArtifacts.Baseline.Metadata.TableRowCounts.[int TableIndex.Event]
+
+        let eventAdds =
+            delta.EncLog
+            |> Array.filter (fun (table, _, op) -> table = TableIndex.Event && op = EditAndContinueOperation.AddEvent)
+
+        let eventMapAdds =
+            delta.EncLog
+            |> Array.filter (fun (table, _, op) -> table = TableIndex.EventMap && op = EditAndContinueOperation.AddEvent)
+
+        Assert.Single eventAdds |> ignore
+        Assert.Single eventMapAdds |> ignore
+
+        let eventRowId =
+            eventAdds
+            |> Array.exactlyOne
+            |> fun (_, row, _) -> row
+
+        Assert.Equal(baselineEventCount + 1, eventRowId)
+
+        match delta.UpdatedBaseline with
+        | Some updatedBaseline ->
+            let eventKey =
+                { EventDefinitionKey.DeclaringType = "Sample.EventDemo"
+                  Name = "OnChanged"
+                  EventType = Some PrimaryAssemblyILGlobals.typ_Object }
+
+            Assert.True(updatedBaseline.EventTokens.ContainsKey eventKey, "Updated baseline missing event token.")
+            Assert.True(updatedBaseline.EventMapEntries.ContainsKey "Sample.EventDemo", "Updated baseline missing event map entry.")
         | None ->
             Assert.True(false, "Updated baseline missing.")
 

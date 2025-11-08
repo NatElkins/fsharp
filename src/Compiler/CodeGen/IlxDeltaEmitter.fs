@@ -331,6 +331,11 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let eventTokenMap = Dictionary<int, int>()
     let addedMethodTokens = Dictionary<MethodDefinitionKey, int>(HashIdentity.Structural)
     let addedPropertyTokens = Dictionary<PropertyDefinitionKey, int>(HashIdentity.Structural)
+    let addedEventTokens = Dictionary<EventDefinitionKey, int>(HashIdentity.Structural)
+    let addedPropertyTokenLookup = Dictionary<int, PropertyDefinitionKey>()
+    let addedEventTokenLookup = Dictionary<int, EventDefinitionKey>()
+    let propertyHandleLookup = Dictionary<PropertyDefinitionKey, PropertyDefinitionHandle>()
+    let eventHandleLookup = Dictionary<EventDefinitionKey, EventDefinitionHandle>()
     let baselineTypeNameByNew = Dictionary<string, string>(StringComparer.Ordinal)
 
     let getAliasCandidates (typeName: string) =
@@ -537,7 +542,10 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             | None when synthesizedBuckets.IsSome && IsCompilerGeneratedName typeDef.Name -> ()
             | None ->
                 if not (addedPropertyTokens.ContainsKey propertyKey) then
-                    addedPropertyTokens[propertyKey] <- newPropertyToken)
+                    addedPropertyTokens[propertyKey] <- newPropertyToken
+                    addedPropertyTokenLookup[newPropertyToken] <- propertyKey
+                    let handleRow = newPropertyToken &&& 0x00FFFFFF
+                    propertyHandleLookup[propertyKey] <- MetadataTokens.PropertyDefinitionHandle handleRow)
 
         typeDef.Events.AsList()
         |> List.iter (fun eventDef ->
@@ -554,10 +562,11 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 addMapping eventTokenMap newEventToken baselineEventToken
             | None when synthesizedBuckets.IsSome && IsCompilerGeneratedName typeDef.Name -> ()
             | None ->
-                let eventDisplay = $"{baselineDeclaringType}::{eventDef.Name}"
-                let message =
-                    $"Edit adds event '{eventDisplay}'. Hot reload currently supports method-body changes only; please rebuild."
-                raise (HotReloadUnsupportedEditException message))
+                if not (addedEventTokens.ContainsKey eventKey) then
+                    addedEventTokens[eventKey] <- newEventToken
+                    addedEventTokenLookup[newEventToken] <- eventKey
+                    let handleRow = newEventToken &&& 0x00FFFFFF
+                    eventHandleLookup[eventKey] <- MetadataTokens.EventDefinitionHandle handleRow)
 
         typeDef.NestedTypes.AsList()
         |> List.iter (fun nested -> collectTypeMappings (enclosing @ [ typeDef ]) nested)
@@ -697,6 +706,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             dict[token] <- key
         dict
 
+    for KeyValue(token, key) in addedPropertyTokenLookup do
+        propertyTokenToKey[token] <- key
+
     let baselinePropertyLookup =
         let dict = Dictionary<string * string, PropertyDefinitionKey * int>()
         for KeyValue(key, token) in request.Baseline.PropertyTokens do
@@ -708,6 +720,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         for KeyValue(key, token) in request.Baseline.EventTokens do
             dict[token] <- key
         dict
+
+    for KeyValue(token, key) in addedEventTokenLookup do
+        eventTokenToKey[token] <- key
 
     let baselineEventLookup =
         let dict = Dictionary<string * string, EventDefinitionKey * int>()
@@ -736,7 +751,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let lastPropertyRowId = baselineTableRowCounts.[int TableIndex.Property]
     let propertyDefinitionIndex = DefinitionIndex<PropertyDefinitionKey>(propertyRowLookup, lastPropertyRowId)
     let processedPropertyKeys = HashSet<PropertyDefinitionKey>()
-    let propertyHandleLookup = Dictionary<PropertyDefinitionKey, PropertyDefinitionHandle>()
     let addedPropertyDeltaTokens = Dictionary<PropertyDefinitionKey, int>(HashIdentity.Structural)
 
     for KeyValue(key, newToken) in addedPropertyTokens do
@@ -752,7 +766,18 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let lastEventRowId = baselineTableRowCounts.[int TableIndex.Event]
     let eventDefinitionIndex = DefinitionIndex<EventDefinitionKey>(eventRowLookup, lastEventRowId)
     let processedEventKeys = HashSet<EventDefinitionKey>()
-    let eventHandleLookup = Dictionary<EventDefinitionKey, EventDefinitionHandle>()
+
+    let addedEventDeltaTokens = Dictionary<EventDefinitionKey, int>(HashIdentity.Structural)
+
+    for KeyValue(key, newToken) in addedEventTokens do
+        if not (eventDefinitionIndex.IsAdded key) then
+            let rowId = eventDefinitionIndex.Add key
+            let deltaToken = 0x14000000 ||| rowId
+            addedEventDeltaTokens[key] <- deltaToken
+            addMapping eventTokenMap newToken deltaToken
+
+    for KeyValue(key, token) in addedEventDeltaTokens do
+        eventTokenToKey[token] <- key
 
     for struct (key, _, _, _, _) in methodUpdateInputs do
         if processedMethodKeys.Add key then
@@ -842,7 +867,10 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let registerEventDefinition key handle =
         if processedEventKeys.Add key then
-            eventDefinitionIndex.AddExisting key
+            if eventDefinitionIndex.IsAdded key then
+                ()
+            else
+                eventDefinitionIndex.AddExisting key
         eventHandleLookup[key] <- handle
 
     let tryResolveAccessor methodToken =
@@ -1280,10 +1308,15 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             addedPropertyDeltaTokens
             |> Seq.fold (fun acc (KeyValue(key, token)) -> acc |> Map.add key token) updatedBaselineCore.PropertyTokens
 
+        let updatedEventTokenMap =
+            addedEventDeltaTokens
+            |> Seq.fold (fun acc (KeyValue(key, token)) -> acc |> Map.add key token) updatedBaselineCore.EventTokens
+
         let updatedBaseline =
             { updatedBaselineCore with
                 MethodTokens = updatedMethodTokenMap
                 PropertyTokens = updatedPropertyTokenMap
+                EventTokens = updatedEventTokenMap
                 PropertyMapEntries = updatedPropertyMapEntries
                 EventMapEntries = updatedEventMapEntries
                 MethodSemanticsEntries = updatedMethodSemanticsEntries }
