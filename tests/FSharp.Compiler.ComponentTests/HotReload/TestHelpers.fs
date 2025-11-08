@@ -200,14 +200,16 @@ module internal TestHelpers =
         let ilg = PrimaryAssemblyILGlobals
         let stringType = ilg.typ_String
         let typeName = "Sample.MethodDemo"
+        let document = ILSourceDocument.Create(None, None, None, "MethodDemo.fs")
+        let debugPoint = ILDebugPoint.Create(document, 1, 1, 1, 20)
 
         let body =
             mkMethodBody(
                 false,
                 [],
                 2,
-                nonBranchingInstrsToCode [ I_ldstr message; I_ret ],
-                None,
+                nonBranchingInstrsToCode [ I_seqpoint debugPoint; I_ldstr message; I_ret ],
+                Some debugPoint,
                 None)
 
         let methodDef =

@@ -19,6 +19,13 @@ open FSharp.Test
 [<Collection(nameof NotThreadSafeResourceCollection)>]
 module PdbTests =
 
+    let private keepArtifacts () =
+        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_KEEP_TEST_OUTPUT") with
+        | null -> false
+        | value when value.Equals("1", StringComparison.OrdinalIgnoreCase) -> true
+        | value when value.Equals("true", StringComparison.OrdinalIgnoreCase) -> true
+        | _ -> false
+
     let private createMethodWithSeqPoint (ilg: ILGlobals) name returnValue sourceFile =
         let document = ILSourceDocument.Create(None, None, None, sourceFile)
         let debugPoint = ILDebugPoint.Create(document, 1, 1, 1, 20)
@@ -116,6 +123,17 @@ module PdbTests =
         |> Map.toSeq
         |> Seq.map fst
         |> Seq.find (fun key -> key.Name = methodName)
+
+    let private assertPdbContainsMethodToken (pdbBytes: byte[]) (methodToken: int) =
+        use provider = MetadataReaderProvider.FromPortablePdbImage(ImmutableArray.CreateRange pdbBytes)
+        let reader = provider.GetMetadataReader()
+        let hasMethod =
+            reader.MethodDebugInformation
+            |> Seq.exists (fun handle ->
+                let definitionHandle = handle.ToDefinitionHandle()
+                let definitionEntity: EntityHandle = MethodDefinitionHandle.op_Implicit definitionHandle
+                MetadataTokens.GetToken definitionEntity = methodToken)
+        Assert.True(hasMethod, "Expected portable PDB to reference the edited method token.")
 
     [<Fact>]
     let ``emitDelta emits portable PDB delta with sequence points`` () =
@@ -368,6 +386,61 @@ module PdbTests =
                 let points = info.GetSequencePoints() |> Seq.toArray
                 Assert.NotEmpty(points))
         finally
+            if File.Exists(artifacts.AssemblyPath) then File.Delete(artifacts.AssemblyPath)
+            match artifacts.PdbPath with
+            | Some path when File.Exists(path) -> File.Delete(path)
+            | _ -> ()
+
+    [<Fact>]
+    let ``emitDelta emits portable PDB deltas across method generations`` () =
+        let artifacts = TestHelpers.createBaselineFromModule (TestHelpers.createMethodModule "Method helper baseline message")
+        let typeName = "Sample.MethodDemo"
+        let methodKey = TestHelpers.methodKey typeName "GetMessage" [] PrimaryAssemblyILGlobals.typ_String
+        let methodToken = artifacts.Baseline.MethodTokens[methodKey]
+
+        let emitAndAssert request =
+            let delta = emitDelta request
+            let pdbBytes =
+                match delta.Pdb with
+                | Some bytes -> bytes
+                | None -> failwith "Expected portable PDB delta for method edit."
+            assertPdbContainsMethodToken pdbBytes methodToken
+            delta
+
+        let request1 : IlxDeltaRequest =
+            { Baseline = artifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = TestHelpers.createMethodModule "Method helper generation 1"
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta1 = emitAndAssert request1
+
+        let baseline2 =
+            match delta1.UpdatedBaseline with
+            | Some b -> b
+            | None -> failwith "Generation 1 delta did not expose an updated baseline."
+
+        let request2 : IlxDeltaRequest =
+            { Baseline = baseline2
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = TestHelpers.createMethodModule "Method helper generation 2"
+              SymbolChanges = None
+              CurrentGeneration = 2
+              PreviousGenerationId = Some delta1.GenerationId
+              SynthesizedNames = None }
+
+        let delta2 = emitAndAssert request2
+        Assert.NotEqual(Guid.Empty, delta2.BaseGenerationId)
+        Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
+
+        if not (keepArtifacts ()) then
             if File.Exists(artifacts.AssemblyPath) then File.Delete(artifacts.AssemblyPath)
             match artifacts.PdbPath with
             | Some path when File.Exists(path) -> File.Delete(path)
