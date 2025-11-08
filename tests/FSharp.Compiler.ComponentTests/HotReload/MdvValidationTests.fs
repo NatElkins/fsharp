@@ -9,6 +9,7 @@ open System.IO
 open System.Reflection.PortableExecutable
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
+open System
 open Xunit
 open Xunit.Sdk
 open System
@@ -19,20 +20,30 @@ open FSharp.Compiler
 open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.HotReload
 open FSharp.Compiler.HotReloadBaseline
+open FSharp.Compiler.IlxDeltaEmitter
 open FSharp.Compiler.Text
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryReader
 open FSharp.Compiler.AbstractIL.ILPdbWriter
 open FSharp.Compiler.TypedTree
+open FSharp.Compiler.TypedTreeDiff
 open FSharp.Compiler.Syntax.PrettyNaming
 open FSharp.Compiler.Syntax.PrettyNaming
 open FSharp.Test
 open Internal.Utilities
+open FSharp.Compiler.ComponentTests.HotReload.TestHelpers
 
 module ILWriter = FSharp.Compiler.AbstractIL.ILBinaryWriter
 
 [<Collection(nameof NotThreadSafeResourceCollection)>]
 module MdvValidationTests =
+
+    let private keepArtifacts () =
+        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_KEEP_TEST_OUTPUT") with
+        | null -> false
+        | value when value.Equals("1", StringComparison.OrdinalIgnoreCase) -> true
+        | value when value.Equals("true", StringComparison.OrdinalIgnoreCase) -> true
+        | _ -> false
 
     let private assertGenerationContains (output: string) (generation: int) (expectedSubstring: string) =
         let marker = $">>> Generation {generation}:"
@@ -427,6 +438,7 @@ type Greeter =
 """
 
         let service = FSharpEditAndContinueLanguageService.Instance
+        printfn "[mdv-test] service assembly=%s" (typeof<FSharpEditAndContinueLanguageService>.Assembly.Location)
 
         try
             // Baseline compilation + session
@@ -644,7 +656,8 @@ module Target =
         let cleanup () =
             try checker.EndHotReloadSession() with _ -> ()
             try checker.InvalidateAll() with _ -> ()
-            try Directory.Delete(projectRoot, true) with _ -> ()
+            if not (keepArtifacts ()) then
+                try Directory.Delete(projectRoot, true) with _ -> ()
 
         let originalCwd = Directory.GetCurrentDirectory()
 
@@ -858,8 +871,367 @@ module Demo =
         finally
             try checker.InvalidateAll() with _ -> ()
             try checker.EndHotReloadSession() with _ -> ()
-            try Directory.Delete(deltaDir, true) with _ -> ()
-            try Directory.Delete(projectDir, true) with _ -> ()
+            if not (keepArtifacts ()) then
+                try Directory.Delete(deltaDir, true) with _ -> ()
+                try Directory.Delete(projectDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``mdv validates property getter edit`` () =
+        let checker =
+            FSharpChecker.Create(
+                keepAssemblyContents = true,
+                enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                captureIdentifiersWhenParsing = false
+            )
+
+        let projectDir, fsPath, dllPath = createTempProject ()
+        let baselineSource =
+            """
+namespace MdVIntegration
+
+type PropertyDemo() =
+    member _.Message = "Property baseline message"
+"""
+
+        let updatedSource =
+            """
+namespace MdVIntegration
+
+type PropertyDemo() =
+    member _.Message = "Property updated message"
+"""
+
+        let deltaDir = Path.Combine(projectDir, "mdv-property-delta")
+
+        try
+            let baselineOptions, _ = compileProject checker fsPath dllPath baselineSource
+            let baselineCopy = Path.Combine(projectDir, "baseline.dll")
+            File.Copy(dllPath, baselineCopy, true)
+
+            match checker.StartHotReloadSession(baselineOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "StartHotReloadSession failed: %A" error
+            | Ok () -> ()
+
+            let updatedOptions, _ = compileProject checker fsPath dllPath updatedSource
+
+            match checker.EmitHotReloadDelta(updatedOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
+            | Ok delta ->
+                Directory.CreateDirectory(deltaDir) |> ignore
+                let metadataPath = Path.Combine(deltaDir, "1.meta")
+                let ilPath = Path.Combine(deltaDir, "1.il")
+                File.WriteAllBytes(metadataPath, delta.Metadata)
+                File.WriteAllBytes(ilPath, delta.IL)
+
+                let expectedLiteral = Text.Encoding.Unicode.GetBytes("Property updated message")
+                Assert.True(
+                    containsSubsequence delta.Metadata expectedLiteral,
+                    "Expected metadata delta to contain updated property literal."
+                )
+
+                match runMdv baselineCopy metadataPath ilPath with
+                | Some output ->
+                    Assert.Contains("Generation 1", output)
+                    assertGenerationContains output 1 "Property updated message"
+                | None ->
+                    printfn "mdv not available; skipping Generation 1 verification for property getter edit."
+        finally
+            try checker.InvalidateAll() with _ -> ()
+            try checker.EndHotReloadSession() with _ -> ()
+            if not (keepArtifacts ()) then
+                try Directory.Delete(deltaDir, true) with _ -> ()
+                try Directory.Delete(projectDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``mdv validates custom event add edit`` () =
+        let checker =
+            FSharpChecker.Create(
+                keepAssemblyContents = true,
+                enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                captureIdentifiersWhenParsing = false
+            )
+
+        let projectDir, fsPath, dllPath = createTempProject ()
+        let baselineSource =
+            """
+namespace MdVIntegration
+
+open System
+
+type EventDemo() =
+    let messageChanged = Event<string>()
+
+    member _.InvokeAll payload =
+        printfn "Event baseline payload %s" payload
+        messageChanged.Trigger payload
+
+    [<CLIEvent>]
+    member _.MessageChanged =
+        messageChanged.Publish
+"""
+
+        let updatedSource =
+            """
+namespace MdVIntegration
+
+open System
+
+type EventDemo() =
+    let messageChanged = Event<string>()
+
+    member _.InvokeAll payload =
+        printfn "Event updated payload %s" payload
+        messageChanged.Trigger payload
+
+    [<CLIEvent>]
+    member _.MessageChanged =
+        messageChanged.Publish
+"""
+
+        let deltaDir = Path.Combine(projectDir, "mdv-event-delta")
+
+        try
+            let baselineOptions, _ = compileProject checker fsPath dllPath baselineSource
+            let baselineCopy = Path.Combine(projectDir, "baseline.dll")
+            File.Copy(dllPath, baselineCopy, true)
+
+            match checker.StartHotReloadSession(baselineOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "StartHotReloadSession failed: %A" error
+            | Ok () -> ()
+
+            let updatedOptions, _ = compileProject checker fsPath dllPath updatedSource
+
+            match checker.EmitHotReloadDelta(updatedOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
+            | Ok delta ->
+                Directory.CreateDirectory(deltaDir) |> ignore
+                let metadataPath = Path.Combine(deltaDir, "1.meta")
+                let ilPath = Path.Combine(deltaDir, "1.il")
+                File.WriteAllBytes(metadataPath, delta.Metadata)
+                File.WriteAllBytes(ilPath, delta.IL)
+
+                let expectedLiteral = Text.Encoding.Unicode.GetBytes("Event updated payload")
+                Assert.True(
+                    containsSubsequence delta.Metadata expectedLiteral,
+                    "Expected metadata delta to contain updated event literal."
+                )
+
+                match runMdv baselineCopy metadataPath ilPath with
+                | Some output ->
+                    Assert.Contains("Generation 1", output)
+                    assertGenerationContains output 1 "Event updated payload"
+                | None ->
+                    printfn "mdv not available; skipping Generation 1 verification for custom event edit."
+        finally
+            try checker.InvalidateAll() with _ -> ()
+            try checker.EndHotReloadSession() with _ -> ()
+            if not (keepArtifacts ()) then
+                try Directory.Delete(deltaDir, true) with _ -> ()
+                try Directory.Delete(projectDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``mdv helper validates property accessor metadata`` () =
+        let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createPropertyModule "Property helper baseline message")
+        let updatedModule = TestHelpers.createPropertyModule "Property helper updated message"
+        let typeName = "Sample.PropertyDemo"
+        let accessorName = "Message"
+        let methodKey = TestHelpers.methodKeyByName baselineArtifacts.Baseline typeName "get_Message"
+        let methodToken = baselineArtifacts.Baseline.MethodTokens[methodKey]
+        let accessorUpdate =
+            TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.PropertyGet accessorName) methodKey
+
+        let request : IlxDeltaRequest =
+            { Baseline = baselineArtifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = [ accessorUpdate ]
+              Module = updatedModule
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        use deltaDir = new TemporaryDirectory()
+        let metadataPath = Path.Combine(deltaDir.Path, "1.meta")
+        let ilPath = Path.Combine(deltaDir.Path, "1.il")
+
+        try
+            let delta = emitDelta request
+            File.WriteAllBytes(metadataPath, delta.Metadata)
+            File.WriteAllBytes(ilPath, delta.IL)
+
+            let expectedLiteral = Text.Encoding.Unicode.GetBytes("Property helper updated message")
+            Assert.True(
+                containsSubsequence delta.Metadata expectedLiteral,
+                "Expected metadata delta to contain updated property literal."
+            )
+
+            Assert.Contains(methodToken, delta.UpdatedMethodTokens)
+            let hasMethodInfo =
+                delta.AddedOrChangedMethods
+                |> List.exists (fun info -> info.MethodToken = methodToken)
+            Assert.True(hasMethodInfo, "Expected property accessor delta to track method body info.")
+
+            match runMdv baselineArtifacts.AssemblyPath metadataPath ilPath with
+            | Some output ->
+                Assert.Contains("Generation 1", output)
+                assertGenerationContains output 1 "Property helper updated message"
+                assertGenerationContains output 1 "PropertyDemo"
+            | None ->
+                printfn "mdv not available; skipping helper verification for property accessor edit."
+        finally
+            if not (keepArtifacts ()) then
+                try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
+                match baselineArtifacts.PdbPath with
+                | Some path -> try File.Delete(path) with _ -> ()
+                | None -> ()
+
+    [<Fact>]
+    let ``mdv helper validates added property metadata`` () =
+        let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createPropertyHostBaselineModule ())
+        let updatedModule = TestHelpers.createPropertyModule "Property helper added message"
+        let typeName = "Sample.PropertyDemo"
+        let getterKey = TestHelpers.methodKey typeName "get_Message" [] PrimaryAssemblyILGlobals.typ_String
+        let accessorUpdate =
+            TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.PropertyGet "Message") getterKey
+
+        let request : IlxDeltaRequest =
+            { Baseline = baselineArtifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ getterKey ]
+              UpdatedAccessors = [ accessorUpdate ]
+              Module = updatedModule
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        use deltaDir = new TemporaryDirectory()
+        let metadataPath = Path.Combine(deltaDir.Path, "1.meta")
+        let ilPath = Path.Combine(deltaDir.Path, "1.il")
+
+        try
+            let delta = emitDelta request
+            File.WriteAllBytes(metadataPath, delta.Metadata)
+            File.WriteAllBytes(ilPath, delta.IL)
+
+            let expectedLiteral = Text.Encoding.Unicode.GetBytes "Property helper added message"
+            Assert.True(containsSubsequence delta.Metadata expectedLiteral, "Expected metadata delta to contain added property literal.")
+
+            match runMdv baselineArtifacts.AssemblyPath metadataPath ilPath with
+            | Some output ->
+                Assert.Contains("Generation 1", output)
+                assertGenerationContains output 1 "Property helper added message"
+            | None ->
+                printfn "mdv not available; skipping helper verification for added property metadata."
+        finally
+            if not (keepArtifacts ()) then
+                try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
+                match baselineArtifacts.PdbPath with
+                | Some path -> try File.Delete(path) with _ -> ()
+                | None -> ()
+
+    [<Fact>]
+    let ``mdv helper validates custom event accessor metadata`` () =
+        let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createEventModule "Event helper baseline payload")
+        let updatedModule = TestHelpers.createEventModule "Event helper updated payload"
+        let typeName = "Sample.EventDemo"
+        let methodKey = TestHelpers.methodKeyByName baselineArtifacts.Baseline typeName "add_OnChanged"
+        let methodToken = baselineArtifacts.Baseline.MethodTokens[methodKey]
+        let accessorUpdate =
+            TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.EventAdd "OnChanged") methodKey
+
+        let request : IlxDeltaRequest =
+            { Baseline = baselineArtifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = [ accessorUpdate ]
+              Module = updatedModule
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        use deltaDir = new TemporaryDirectory()
+        let metadataPath = Path.Combine(deltaDir.Path, "1.meta")
+        let ilPath = Path.Combine(deltaDir.Path, "1.il")
+
+        try
+            let delta = emitDelta request
+            File.WriteAllBytes(metadataPath, delta.Metadata)
+            File.WriteAllBytes(ilPath, delta.IL)
+
+            let expectedLiteral = Text.Encoding.Unicode.GetBytes("Event helper updated payload")
+            Assert.True(
+                containsSubsequence delta.Metadata expectedLiteral,
+                "Expected metadata delta to contain updated event literal."
+            )
+
+            Assert.Contains(methodToken, delta.UpdatedMethodTokens)
+            let hasMethodInfo =
+                delta.AddedOrChangedMethods
+                |> List.exists (fun info -> info.MethodToken = methodToken)
+            Assert.True(hasMethodInfo, "Expected event accessor delta to track method body info.")
+
+            match runMdv baselineArtifacts.AssemblyPath metadataPath ilPath with
+            | Some output ->
+                Assert.Contains("Generation 1", output)
+                assertGenerationContains output 1 "Event helper updated payload"
+            | None ->
+                printfn "mdv not available; skipping helper verification for event accessor edit."
+        finally
+            if not (keepArtifacts ()) then
+                try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
+                match baselineArtifacts.PdbPath with
+                | Some path -> try File.Delete(path) with _ -> ()
+                | None -> ()
+
+    [<Fact>]
+    let ``mdv helper validates added event metadata`` () =
+        let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createEventHostBaselineModule ())
+        let updatedModule = TestHelpers.createEventModule "Event helper added payload"
+        let typeName = "Sample.EventDemo"
+        let addKey = TestHelpers.methodKey typeName "add_OnChanged" [ PrimaryAssemblyILGlobals.typ_Object ] ILType.Void
+        let removeKey = TestHelpers.methodKey typeName "remove_OnChanged" [ PrimaryAssemblyILGlobals.typ_Object ] ILType.Void
+        let accessorUpdates =
+            [ TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.EventAdd "OnChanged") addKey
+              TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.EventRemove "OnChanged") removeKey ]
+
+        let request : IlxDeltaRequest =
+            { Baseline = baselineArtifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ addKey; removeKey ]
+              UpdatedAccessors = accessorUpdates
+              Module = updatedModule
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        use deltaDir = new TemporaryDirectory()
+        let metadataPath = Path.Combine(deltaDir.Path, "1.meta")
+        let ilPath = Path.Combine(deltaDir.Path, "1.il")
+
+        try
+            let delta = emitDelta request
+            File.WriteAllBytes(metadataPath, delta.Metadata)
+            File.WriteAllBytes(ilPath, delta.IL)
+
+            let expectedLiteral = Text.Encoding.Unicode.GetBytes "Event helper added payload"
+            Assert.True(containsSubsequence delta.Metadata expectedLiteral, "Expected metadata delta to contain added event literal.")
+
+            match runMdv baselineArtifacts.AssemblyPath metadataPath ilPath with
+            | Some output ->
+                Assert.Contains("Generation 1", output)
+                assertGenerationContains output 1 "Event helper added payload"
+            | None ->
+                printfn "mdv not available; skipping helper verification for added event metadata."
+        finally
+            if not (keepArtifacts ()) then
+                try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
+                match baselineArtifacts.PdbPath with
+                | Some path -> try File.Delete(path) with _ -> ()
+                | None -> ()
 
     [<Fact>]
     let ``mdv validates method-body edit with closure`` () =
@@ -922,6 +1294,13 @@ module Demo =
             let ilPath = Path.Combine(deltaDir, "1.il")
             File.WriteAllBytes(metadataPath, delta.Metadata)
             File.WriteAllBytes(ilPath, delta.IL)
+
+            let infoTokens =
+                delta.AddedOrChangedMethods
+                |> List.map (fun info -> info.MethodToken)
+                |> List.sort
+            Assert.Equal<List<int>>(delta.UpdatedMethods |> List.sort, infoTokens)
+            Assert.NotEmpty(delta.AddedOrChangedMethods)
 
             let expectedLiteral = Text.Encoding.Unicode.GetBytes("Integration closure updated")
             Assert.True(
@@ -1008,6 +1387,13 @@ module Demo =
             let ilPath = Path.Combine(deltaDir, "1.il")
             File.WriteAllBytes(metadataPath, delta.Metadata)
             File.WriteAllBytes(ilPath, delta.IL)
+
+            let infoTokens =
+                delta.AddedOrChangedMethods
+                |> List.map (fun info -> info.MethodToken)
+                |> List.sort
+            Assert.Equal<List<int>>(delta.UpdatedMethods |> List.sort, infoTokens)
+            Assert.NotEmpty(delta.AddedOrChangedMethods)
 
             match runMdv baselineCopy metadataPath ilPath with
             | Some output ->
