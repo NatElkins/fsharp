@@ -164,6 +164,70 @@ module FSharpDeltaMetadataWriterTests =
             (mkILExportedTypes [])
             "v4.0.30319"
 
+    let private createEventModule () =
+        let ilg = ilGlobals
+        let typeName = "Sample.EventHost"
+        let typeRef = mkILTyRef(ILScopeRef.Local, typeName)
+
+        let accessorBody =
+            mkMethodBody(
+                false,
+                [],
+                2,
+                nonBranchingInstrsToCode [ I_ret ],
+                None,
+                None)
+
+        let makeAccessor name =
+            mkILNonGenericInstanceMethod(
+                name,
+                ILMemberAccess.Public,
+                [],
+                mkILReturn ILType.Void,
+                accessorBody)
+            |> fun methodDef -> methodDef.WithSpecialName.WithHideBySig(true)
+
+        let addMethod = makeAccessor "add_OnChanged"
+        let removeMethod = makeAccessor "remove_OnChanged"
+
+        let eventDef =
+            ILEventDef(
+                Some ilg.typ_Object,
+                "OnChanged",
+                EventAttributes.None,
+                mkILMethRef(typeRef, ILCallingConv.Instance, "add_OnChanged", 0, [], ILType.Void),
+                mkILMethRef(typeRef, ILCallingConv.Instance, "remove_OnChanged", 0, [], ILType.Void),
+                None,
+                [],
+                emptyILCustomAttrs)
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    typeName,
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ addMethod; removeMethod ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [ eventDef ],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
     [<Fact>]
     let ``metadata writer emits property rows`` () =
         let moduleDef = createPropertyModule ()
@@ -247,3 +311,96 @@ module FSharpDeltaMetadataWriterTests =
         Assert.True(hasEncEntry TableIndex.Property, "Expected EncLog entry for Property table")
         Assert.True(hasEncEntry TableIndex.PropertyMap, "Expected EncLog entry for PropertyMap table")
         Assert.True(metadataDelta.Metadata.Length > 0)
+
+    [<Fact>]
+    let ``metadata writer emits event and method semantics rows`` () =
+        let moduleDef = createEventModule ()
+        let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
+        use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+
+        let typeHandle =
+            metadataReader.TypeDefinitions
+            |> Seq.find (fun handle -> metadataReader.GetString(metadataReader.GetTypeDefinition(handle).Name) = "EventHost")
+
+        let addHandle =
+            metadataReader.MethodDefinitions
+            |> Seq.find (fun handle -> metadataReader.GetString(metadataReader.GetMethodDefinition(handle).Name) = "add_OnChanged")
+
+        let eventHandle =
+            metadataReader.EventDefinitions
+            |> Seq.find (fun handle -> metadataReader.GetString(metadataReader.GetEventDefinition(handle).Name) = "OnChanged")
+
+        let builder = IlDeltaStreamBuilder None
+
+        let methodKey = methodKey "Sample.EventHost" "add_OnChanged" ILType.Void
+
+        let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
+            [ { Key = methodKey; RowId = 1; IsAdded = true } ]
+
+        let updates: DeltaWriter.MethodMetadataUpdate list =
+            [ { MethodKey = methodKey
+                MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit addHandle)
+                MethodHandle = addHandle
+                Body =
+                    { MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit addHandle)
+                      LocalSignatureToken = 0
+                      CodeOffset = 0
+                      CodeLength = 1 } } ]
+
+        let eventKey =
+            { DeclaringType = "Sample.EventHost"
+              Name = "OnChanged"
+              EventType = Some ilGlobals.typ_Object }
+
+        let eventRows: DeltaWriter.EventMetadataUpdate list =
+            [ { Key = eventKey
+                RowId = 1
+                IsAdded = true
+                Handle = eventHandle } ]
+
+        let eventMapRows: DeltaWriter.EventMapRowInfo list =
+            [ { DeclaringType = "Sample.EventHost"
+                RowId = 1
+                TypeDefRowId = MetadataTokens.GetRowNumber typeHandle
+                FirstEventRowId = Some 1
+                IsAdded = true } ]
+
+        let associationHandle = MetadataTokens.EntityHandle(TableIndex.Event, 1)
+
+        let methodSemanticsRows: DeltaWriter.MethodSemanticsMetadataUpdate list =
+            [ { RowId = 1
+                Association = associationHandle
+                MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit addHandle)
+                Attributes = MethodSemanticsAttributes.Adder
+                IsAdded = true
+                AssociationInfo = Some(MethodSemanticsAssociation.EventAssociation(eventKey, 1)) } ]
+
+        let metadataDelta =
+            DeltaWriter.emit
+                builder.MetadataBuilder
+                metadataReader
+                (Guid.NewGuid())
+                (Guid.NewGuid())
+                (Guid.NewGuid())
+                methodDefinitionRows
+                []
+                []
+                eventRows
+                []
+                eventMapRows
+                methodSemanticsRows
+                updates
+
+        let tableCount index = metadataDelta.TableRowCounts.[int index]
+        Assert.Equal(1, tableCount TableIndex.Event)
+        Assert.Equal(1, tableCount TableIndex.EventMap)
+        Assert.Equal(1, tableCount TableIndex.MethodSemantics)
+
+        let hasEncEntry table operation =
+            metadataDelta.EncLog
+            |> Array.exists (fun (encTable, _, encOp) -> encTable = table && encOp = operation)
+
+        Assert.True(hasEncEntry TableIndex.Event EditAndContinueOperation.AddEvent, "Expected EncLog entry for Event table")
+        Assert.True(hasEncEntry TableIndex.EventMap EditAndContinueOperation.AddEvent, "Expected EncLog entry for EventMap table")
+        Assert.True(hasEncEntry TableIndex.MethodSemantics EditAndContinueOperation.AddMethod, "Expected EncLog entry for MethodSemantics table")
