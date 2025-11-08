@@ -247,6 +247,57 @@ module internal TestHelpers =
             (mkILExportedTypes [])
             "v4.0.30319"
 
+    let createClosureModule (message: string) : ILModuleDef =
+        let ilg = PrimaryAssemblyILGlobals
+        let stringType = ilg.typ_String
+        let typeName = "Sample.ClosureDemo"
+        let document = ILSourceDocument.Create(None, None, None, "ClosureDemo.fs")
+        let debugPoint = ILDebugPoint.Create(document, 1, 1, 1, 40)
+
+        let body =
+            mkMethodBody(
+                false,
+                [],
+                2,
+                nonBranchingInstrsToCode [ I_seqpoint debugPoint; I_ldstr message; I_ret ],
+                Some debugPoint,
+                None)
+
+        let methodDef =
+            mkILNonGenericStaticMethod(
+                "Invoke",
+                ILMemberAccess.Public,
+                [],
+                mkILReturn stringType,
+                body)
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    typeName,
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ methodDef ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField )
+
+        mkILSimpleModule
+            "SampleClosureAssembly"
+            "SampleClosureModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
     let createPropertyHostBaselineModule () : ILModuleDef =
         let ilg = PrimaryAssemblyILGlobals
         let typeName = "Sample.PropertyDemo"
