@@ -873,6 +873,14 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 eventDefinitionIndex.AddExisting key
         eventHandleLookup[key] <- handle
 
+    let tryGetMethodToken key =
+        match request.Baseline.MethodTokens |> Map.tryFind key with
+        | Some token -> Some token
+        | None ->
+            match addedMethodDeltaTokens.TryGetValue key with
+            | true, token -> Some token
+            | _ -> None
+
     let tryResolveAccessor methodToken =
         let methodHandle = MetadataTokens.MethodDefinitionHandle methodToken
         match propertyAccessorLookup.TryGetValue methodHandle with
@@ -903,12 +911,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     for accessor in request.UpdatedAccessors do
         match accessor.Method with
         | Some methodKey ->
-            match request.Baseline.MethodTokens |> Map.tryFind methodKey with
+            match tryGetMethodToken methodKey with
             | Some methodToken -> tryResolveAccessor methodToken
-            | None ->
-                match addedMethodTokens.TryGetValue methodKey with
-                | true, methodToken -> tryResolveAccessor methodToken
-                | _ -> ()
+            | None -> ()
         | None -> ()
 
     let updatedTypeTokens =
@@ -1160,47 +1165,49 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             |> List.choose (fun accessor ->
                 match accessor.Method with
                 | None -> None
-                | Some methodKey when not (request.Baseline.MethodTokens.ContainsKey methodKey) -> None
                 | Some methodKey ->
-                    let typeName = accessor.ContainingType
-                    let attrs = semanticsAttributeForMemberKind accessor.MemberKind
-                    match accessor.MemberKind, accessorName accessor.MemberKind with
-                    | (SymbolMemberKind.PropertyGet _
-                      | SymbolMemberKind.PropertySet _), Some propertyName when missingPropertyMapTypes.Contains typeName ->
-                        match tryGetPropertyAssociation typeName propertyName with
-                        | Some(propertyRowId, propertyKey) ->
-                            nextMethodSemanticsRowId <- nextMethodSemanticsRowId + 1
-                            Some
-                                { MethodSemanticsMetadataUpdate.RowId = nextMethodSemanticsRowId
-                                  Association =
-                                    MetadataTokens.PropertyDefinitionHandle propertyRowId
-                                    |> PropertyDefinitionHandle.op_Implicit
-                                  MethodToken = request.Baseline.MethodTokens[methodKey]
-                                  Attributes = attrs
-                                  IsAdded = true
-                                  AssociationInfo =
-                                    MethodSemanticsAssociation.PropertyAssociation(propertyKey, propertyRowId)
-                                    |> Some }
-                        | None -> None
-                    | (SymbolMemberKind.EventAdd _
-                      | SymbolMemberKind.EventRemove _
-                      | SymbolMemberKind.EventInvoke _), Some eventName when missingEventMapTypes.Contains typeName ->
-                        match tryGetEventAssociation typeName eventName with
-                        | Some(eventRowId, eventKey) ->
-                            nextMethodSemanticsRowId <- nextMethodSemanticsRowId + 1
-                            Some
-                                { MethodSemanticsMetadataUpdate.RowId = nextMethodSemanticsRowId
-                                  Association =
-                                    MetadataTokens.EventDefinitionHandle eventRowId
-                                    |> EventDefinitionHandle.op_Implicit
-                                  MethodToken = request.Baseline.MethodTokens[methodKey]
-                                  Attributes = attrs
-                                  IsAdded = true
-                                  AssociationInfo =
-                                    MethodSemanticsAssociation.EventAssociation(eventKey, eventRowId)
-                                    |> Some }
-                        | None -> None
-                    | _ -> None)
+                    match tryGetMethodToken methodKey with
+                    | None -> None
+                    | Some methodToken ->
+                        let typeName = accessor.ContainingType
+                        let attrs = semanticsAttributeForMemberKind accessor.MemberKind
+                        match accessor.MemberKind, accessorName accessor.MemberKind with
+                        | (SymbolMemberKind.PropertyGet _
+                          | SymbolMemberKind.PropertySet _), Some propertyName when missingPropertyMapTypes.Contains typeName ->
+                            match tryGetPropertyAssociation typeName propertyName with
+                            | Some(propertyRowId, propertyKey) ->
+                                nextMethodSemanticsRowId <- nextMethodSemanticsRowId + 1
+                                Some
+                                    { MethodSemanticsMetadataUpdate.RowId = nextMethodSemanticsRowId
+                                      Association =
+                                        MetadataTokens.PropertyDefinitionHandle propertyRowId
+                                        |> PropertyDefinitionHandle.op_Implicit
+                                      MethodToken = methodToken
+                                      Attributes = attrs
+                                      IsAdded = true
+                                      AssociationInfo =
+                                        MethodSemanticsAssociation.PropertyAssociation(propertyKey, propertyRowId)
+                                        |> Some }
+                            | None -> None
+                        | (SymbolMemberKind.EventAdd _
+                          | SymbolMemberKind.EventRemove _
+                          | SymbolMemberKind.EventInvoke _), Some eventName when missingEventMapTypes.Contains typeName ->
+                            match tryGetEventAssociation typeName eventName with
+                            | Some(eventRowId, eventKey) ->
+                                nextMethodSemanticsRowId <- nextMethodSemanticsRowId + 1
+                                Some
+                                    { MethodSemanticsMetadataUpdate.RowId = nextMethodSemanticsRowId
+                                      Association =
+                                        MetadataTokens.EventDefinitionHandle eventRowId
+                                        |> EventDefinitionHandle.op_Implicit
+                                      MethodToken = methodToken
+                                      Attributes = attrs
+                                      IsAdded = true
+                                      AssociationInfo =
+                                        MethodSemanticsAssociation.EventAssociation(eventKey, eventRowId)
+                                        |> Some }
+                            | None -> None
+                        | _ -> None)
 
         let methodUpdates = methodUpdatesWithDefs |> List.map fst
 

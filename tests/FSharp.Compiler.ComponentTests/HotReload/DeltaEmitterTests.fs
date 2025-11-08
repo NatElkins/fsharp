@@ -786,8 +786,13 @@ module DeltaEmitterTests =
             delta.EncLog
             |> Array.filter (fun (table, _, op) -> table = TableIndex.PropertyMap && op = EditAndContinueOperation.AddProperty)
 
+        let semanticsAdds =
+            delta.EncLog
+            |> Array.filter (fun (table, _, op) -> table = TableIndex.MethodSemantics && op = EditAndContinueOperation.AddMethod)
+
         Assert.Single propertyAdds |> ignore
         Assert.Single propertyMapAdds |> ignore
+        Assert.Single semanticsAdds |> ignore
 
         let propertyRowId =
             propertyAdds
@@ -850,8 +855,13 @@ module DeltaEmitterTests =
             delta.EncLog
             |> Array.filter (fun (table, _, op) -> table = TableIndex.EventMap && op = EditAndContinueOperation.AddEvent)
 
+        let semanticsAdds =
+            delta.EncLog
+            |> Array.filter (fun (table, _, op) -> table = TableIndex.MethodSemantics && op = EditAndContinueOperation.AddMethod)
+
         Assert.Single eventAdds |> ignore
         Assert.Single eventMapAdds |> ignore
+        Assert.Single semanticsAdds |> ignore
 
         let eventRowId =
             eventAdds
