@@ -60,6 +60,13 @@ module MdvValidationTests =
             let patternSpan = ReadOnlySpan(pattern)
             MemoryExtensions.IndexOf(sourceSpan, patternSpan) >= 0
 
+    let private withMetadataReader (metadata: byte[]) (action: MetadataReader -> 'T) : 'T =
+        use provider =
+            MetadataReaderProvider.FromMetadataImage(
+                ImmutableArray.CreateRange metadata)
+        let reader = provider.GetMetadataReader()
+        action reader
+
     let private createTempProject () =
         let root = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-tests", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(root) |> ignore
@@ -1118,6 +1125,20 @@ type EventDemo() =
             let expectedLiteral = Text.Encoding.Unicode.GetBytes "Property helper added message"
             Assert.True(containsSubsequence delta.Metadata expectedLiteral, "Expected metadata delta to contain added property literal.")
 
+            withMetadataReader delta.Metadata (fun reader ->
+                Assert.Equal(1, reader.GetTableRowCount TableIndex.Property)
+                Assert.Equal(1, reader.GetTableRowCount TableIndex.PropertyMap))
+
+            let hasPropertyLog =
+                delta.EncLog
+                |> Array.exists (fun (table, _, op) -> table = TableIndex.Property && op = EditAndContinueOperation.AddProperty)
+            Assert.True(hasPropertyLog, "Expected EncLog entry for added property definition")
+
+            let hasPropertyMapLog =
+                delta.EncLog
+                |> Array.exists (fun (table, _, op) -> table = TableIndex.PropertyMap && op = EditAndContinueOperation.AddProperty)
+            Assert.True(hasPropertyMapLog, "Expected EncLog entry for added property map")
+
             match runMdv baselineArtifacts.AssemblyPath metadataPath ilPath with
             | Some output ->
                 Assert.Contains("Generation 1", output)
@@ -1219,6 +1240,20 @@ type EventDemo() =
 
             let expectedLiteral = Text.Encoding.Unicode.GetBytes "Event helper added payload"
             Assert.True(containsSubsequence delta.Metadata expectedLiteral, "Expected metadata delta to contain added event literal.")
+
+            withMetadataReader delta.Metadata (fun reader ->
+                Assert.Equal(1, reader.GetTableRowCount TableIndex.Event)
+                Assert.Equal(1, reader.GetTableRowCount TableIndex.EventMap))
+
+            let hasEventLog =
+                delta.EncLog
+                |> Array.exists (fun (table, _, op) -> table = TableIndex.Event && op = EditAndContinueOperation.AddEvent)
+            Assert.True(hasEventLog, "Expected EncLog entry for added event definition")
+
+            let hasEventMapLog =
+                delta.EncLog
+                |> Array.exists (fun (table, _, op) -> table = TableIndex.EventMap && op = EditAndContinueOperation.AddEvent)
+            Assert.True(hasEventMapLog, "Expected EncLog entry for added event map")
 
             match runMdv baselineArtifacts.AssemblyPath metadataPath ilPath with
             | Some output ->
