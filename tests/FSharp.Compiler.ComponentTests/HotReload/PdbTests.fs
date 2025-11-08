@@ -434,3 +434,65 @@ module PdbTests =
             match artifacts.PdbPath with
             | Some path when File.Exists(path) -> File.Delete(path)
             | _ -> ()
+
+
+    [<Fact>]
+    let ``emitDelta emits portable PDB deltas across property getter generations`` () =
+        let artifacts = TestHelpers.createBaselineFromModule (TestHelpers.createPropertyModule "Property helper baseline message")
+        let typeName = "Sample.PropertyDemo"
+        let methodKey = TestHelpers.methodKeyByName artifacts.Baseline typeName "get_Message"
+        let methodToken = artifacts.Baseline.MethodTokens[methodKey]
+
+        let emitAndAssert request =
+            let delta = emitDelta request
+            let pdbBytes =
+                match delta.Pdb with
+                | Some bytes -> bytes
+                | None -> failwith "Expected portable PDB delta for property getter edit."
+            assertPdbContainsMethodToken pdbBytes methodToken
+            delta
+
+        let accessorUpdate =
+            TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.PropertyGet "Message") methodKey
+
+        let request1 : IlxDeltaRequest =
+            { Baseline = artifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = [ accessorUpdate ]
+              Module = TestHelpers.createPropertyModule "Property helper generation 1"
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta1 = emitAndAssert request1
+
+        let baseline2 =
+            match delta1.UpdatedBaseline with
+            | Some b -> b
+            | None -> failwith "Generation 1 delta did not expose an updated baseline."
+
+        let accessorUpdate2 =
+            TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.PropertyGet "Message") methodKey
+
+        let request2 : IlxDeltaRequest =
+            { Baseline = baseline2
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = [ accessorUpdate2 ]
+              Module = TestHelpers.createPropertyModule "Property helper generation 2"
+              SymbolChanges = None
+              CurrentGeneration = 2
+              PreviousGenerationId = Some delta1.GenerationId
+              SynthesizedNames = None }
+
+        let delta2 = emitAndAssert request2
+        Assert.NotEqual(Guid.Empty, delta2.BaseGenerationId)
+        Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
+
+        if not (keepArtifacts ()) then
+            if File.Exists(artifacts.AssemblyPath) then File.Delete(artifacts.AssemblyPath)
+            match artifacts.PdbPath with
+            | Some path when File.Exists(path) -> File.Delete(path)
+            | _ -> ()
