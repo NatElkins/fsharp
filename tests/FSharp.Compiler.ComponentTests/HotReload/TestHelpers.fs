@@ -196,6 +196,55 @@ module internal TestHelpers =
             (mkILExportedTypes [])
             "v4.0.30319"
 
+    let createMethodModule (message: string) : ILModuleDef =
+        let ilg = PrimaryAssemblyILGlobals
+        let stringType = ilg.typ_String
+        let typeName = "Sample.MethodDemo"
+
+        let body =
+            mkMethodBody(
+                false,
+                [],
+                2,
+                nonBranchingInstrsToCode [ I_ldstr message; I_ret ],
+                None,
+                None)
+
+        let methodDef =
+            mkILNonGenericStaticMethod(
+                "GetMessage",
+                ILMemberAccess.Public,
+                [],
+                mkILReturn stringType,
+                body)
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    typeName,
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ methodDef ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
     let createPropertyHostBaselineModule () : ILModuleDef =
         let ilg = PrimaryAssemblyILGlobals
         let typeName = "Sample.PropertyDemo"

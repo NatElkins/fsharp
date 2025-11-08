@@ -67,6 +67,23 @@ module MdvValidationTests =
         let reader = provider.GetMetadataReader()
         action reader
 
+    let private methodRowIdFromToken (methodToken: int) = methodToken &&& 0x00FFFFFF
+
+    let private assertMethodEncLog (delta: IlxDelta) (methodToken: int) =
+        let methodRowId = methodRowIdFromToken methodToken
+        let moduleEntry =
+            delta.EncLog
+            |> Array.exists (fun (table, _, _) -> table = TableIndex.Module)
+        Assert.True(moduleEntry, "Expected EncLog entry for Module table")
+
+        let methodEntry =
+            delta.EncLog
+            |> Array.exists (fun (table, row, op) ->
+                table = TableIndex.MethodDef
+                && row = methodRowId
+                && op = EditAndContinueOperation.Default)
+        Assert.True(methodEntry, "Expected EncLog entry for updated method definition")
+
     let private createTempProject () =
         let root = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-tests", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(root) |> ignore
@@ -1267,6 +1284,68 @@ type EventDemo() =
                 match baselineArtifacts.PdbPath with
                 | Some path -> try File.Delete(path) with _ -> ()
                 | None -> ()
+
+    [<Fact>]
+    let ``mdv helper validates multi-generation method metadata`` () =
+        let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createMethodModule "Baseline helper message")
+        let typeName = "Sample.MethodDemo"
+        let methodKey = TestHelpers.methodKey typeName "GetMessage" [] PrimaryAssemblyILGlobals.typ_String
+        let methodToken = baselineArtifacts.Baseline.MethodTokens[methodKey]
+
+        use deltaDir = new TemporaryDirectory()
+        let meta1Path = Path.Combine(deltaDir.Path, "1.meta")
+        let meta2Path = Path.Combine(deltaDir.Path, "2.meta")
+
+        try
+            let request1 : IlxDeltaRequest =
+                { Baseline = baselineArtifacts.Baseline
+                  UpdatedTypes = [ typeName ]
+                  UpdatedMethods = [ methodKey ]
+                  UpdatedAccessors = []
+                  Module = TestHelpers.createMethodModule "Generation 1 helper message"
+                  SymbolChanges = None
+                  CurrentGeneration = 1
+                  PreviousGenerationId = None
+                  SynthesizedNames = None }
+
+            let delta1 = emitDelta request1
+            File.WriteAllBytes(meta1Path, delta1.Metadata)
+            let expectedLiteral1 = Text.Encoding.Unicode.GetBytes "Generation 1 helper message"
+            Assert.True(containsSubsequence delta1.Metadata expectedLiteral1, "Expected generation 1 metadata to contain updated literal.")
+            assertMethodEncLog delta1 methodToken
+
+            let baseline2 =
+                match delta1.UpdatedBaseline with
+                | Some b -> b
+                | None -> failwith "First delta did not provide an updated baseline."
+
+            let request2 : IlxDeltaRequest =
+                { Baseline = baseline2
+                  UpdatedTypes = [ typeName ]
+                  UpdatedMethods = [ methodKey ]
+                  UpdatedAccessors = []
+                  Module = TestHelpers.createMethodModule "Generation 2 helper message"
+                  SymbolChanges = None
+                  CurrentGeneration = 2
+                  PreviousGenerationId = Some delta1.GenerationId
+                  SynthesizedNames = None }
+
+            let delta2 = emitDelta request2
+            File.WriteAllBytes(meta2Path, delta2.Metadata)
+            let expectedLiteral2 = Text.Encoding.Unicode.GetBytes "Generation 2 helper message"
+            Assert.True(containsSubsequence delta2.Metadata expectedLiteral2, "Expected generation 2 metadata to contain updated literal.")
+            assertMethodEncLog delta2 methodToken
+            Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
+        finally
+            if not (keepArtifacts ()) then
+                try File.Delete(meta1Path) with _ -> ()
+                try File.Delete(meta2Path) with _ -> ()
+
+        if not (keepArtifacts ()) then
+            try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
+            match baselineArtifacts.PdbPath with
+            | Some path -> try File.Delete(path) with _ -> ()
+            | None -> ()
 
     [<Fact>]
     let ``mdv validates method-body edit with closure`` () =
