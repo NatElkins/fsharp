@@ -159,107 +159,6 @@ module DeltaEmitterTests =
             (mkILExportedTypes [])
             "v4.0.30319"
 
-    let private createPropertyHostBaselineModule () =
-        let ilg = PrimaryAssemblyILGlobals
-        let stringType = ilg.typ_String
-        let document = ILSourceDocument.Create(None, None, None, "PropertyBaseline.fs")
-        let debugPoint = ILDebugPoint.Create(document, 1, 1, 1, 40)
-
-        let methodBody =
-            mkMethodBody(
-                false,
-                [],
-                2,
-                nonBranchingInstrsToCode [ I_seqpoint debugPoint; I_ldstr "Baseline host" ; I_ret ],
-                Some debugPoint,
-                None)
-
-        let methodDef =
-            mkILNonGenericInstanceMethod(
-                "GetMessage",
-                ILMemberAccess.Public,
-                [],
-                mkILReturn stringType,
-                methodBody)
-
-        let typeDef =
-            mkILSimpleClass
-                ilg
-                (
-                    "Sample.PropertyDemo",
-                    ILTypeDefAccess.Public,
-                    mkILMethods [ methodDef ],
-                    mkILFields [],
-                    emptyILTypeDefs,
-                    mkILProperties [],
-                    mkILEvents [],
-                    emptyILCustomAttrs,
-                    ILTypeInit.BeforeField
-                )
-
-        mkILSimpleModule
-            "SampleAssembly"
-            "SampleModule"
-            true
-            (4, 0)
-            false
-            (mkILTypeDefs [ typeDef ])
-            None
-            None
-            0
-            (mkILExportedTypes [])
-            "v4.0.30319"
-
-    let private createEventHostBaselineModule () =
-        let ilg = PrimaryAssemblyILGlobals
-        let voidType = ILType.Void
-        let handlerType = ilg.typ_Object
-
-        let methodBody =
-            mkMethodBody (
-                false,
-                [],
-                1,
-                nonBranchingInstrsToCode [ I_ldstr "Baseline"; AI_pop; I_ret ],
-                None,
-                None)
-
-        let methodDef =
-            mkILNonGenericInstanceMethod(
-                "Invoke",
-                ILMemberAccess.Public,
-                [ mkILParamNamed("handler", handlerType) ],
-                mkILReturn voidType,
-                methodBody)
-
-        let typeDef =
-            mkILSimpleClass
-                ilg
-                (
-                    "Sample.EventDemo",
-                    ILTypeDefAccess.Public,
-                    mkILMethods [ methodDef ],
-                    mkILFields [],
-                    emptyILTypeDefs,
-                    mkILProperties [],
-                    mkILEvents [],
-                    emptyILCustomAttrs,
-                    ILTypeInit.BeforeField
-                )
-
-        mkILSimpleModule
-            "SampleAssembly"
-            "SampleModule"
-            true
-            (4, 0)
-            false
-            (mkILTypeDefs [ typeDef ])
-            None
-            None
-            0
-            (mkILExportedTypes [])
-            "v4.0.30319"
-
     let private createModuleWithParameterizedMethod () =
         let ilg = PrimaryAssemblyILGlobals
         let baseMethod = createMethod ilg "GetValue" 1
@@ -748,15 +647,11 @@ module DeltaEmitterTests =
     [<Fact>]
     let ``emitDelta adds property metadata rows for new property`` () =
         let baselineArtifacts =
-            TestHelpers.createBaselineFromModule (createPropertyHostBaselineModule ())
+            TestHelpers.createBaselineFromModule (TestHelpers.createPropertyHostBaselineModule ())
         let updatedModule = TestHelpers.createPropertyModule "Property addition message"
 
         let getterKey =
-            { MethodDefinitionKey.DeclaringType = "Sample.PropertyDemo"
-              Name = "get_Message"
-              GenericArity = 0
-              ParameterTypes = []
-              ReturnType = PrimaryAssemblyILGlobals.typ_String }
+            TestHelpers.methodKey "Sample.PropertyDemo" "get_Message" [] PrimaryAssemblyILGlobals.typ_String
 
         let accessorUpdate =
             TestHelpers.mkAccessorUpdate "Sample.PropertyDemo" (SymbolMemberKind.PropertyGet "Message") getterKey
@@ -817,15 +712,11 @@ module DeltaEmitterTests =
     [<Fact>]
     let ``emitDelta adds event metadata rows for new event`` () =
         let baselineArtifacts =
-            TestHelpers.createBaselineFromModule (createEventHostBaselineModule ())
+            TestHelpers.createBaselineFromModule (TestHelpers.createEventHostBaselineModule ())
         let updatedModule = TestHelpers.createEventModule "Event addition payload"
 
         let addKey =
-            { MethodDefinitionKey.DeclaringType = "Sample.EventDemo"
-              Name = "add_OnChanged"
-              GenericArity = 0
-              ParameterTypes = [ PrimaryAssemblyILGlobals.typ_Object ]
-              ReturnType = ILType.Void }
+            TestHelpers.methodKey "Sample.EventDemo" "add_OnChanged" [ PrimaryAssemblyILGlobals.typ_Object ] ILType.Void
 
         let accessorUpdate =
             TestHelpers.mkAccessorUpdate "Sample.EventDemo" (SymbolMemberKind.EventAdd "OnChanged") addKey

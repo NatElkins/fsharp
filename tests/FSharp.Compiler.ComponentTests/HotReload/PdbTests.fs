@@ -2,6 +2,7 @@ namespace FSharp.Compiler.ComponentTests.HotReload
 
 open System
 open System.Collections.Immutable
+open System.IO
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open Xunit
@@ -154,3 +155,220 @@ module PdbTests =
 
         let _methodInfo = reader.GetMethodDebugInformation handle
         ()
+
+    [<Fact>]
+    let ``emitDelta emits portable PDB delta for property accessor edits`` () =
+        let artifacts = TestHelpers.createBaselineFromModule (TestHelpers.createPropertyModule "Property helper baseline message")
+        let typeName = "Sample.PropertyDemo"
+        let methodKey = TestHelpers.methodKeyByName artifacts.Baseline typeName "get_Message"
+        let methodToken = artifacts.Baseline.MethodTokens[methodKey]
+        let accessorUpdate =
+            TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.PropertyGet "Message") methodKey
+
+        let request : IlxDeltaRequest =
+            { Baseline = artifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = [ accessorUpdate ]
+              Module = TestHelpers.createPropertyModule "Property helper updated message"
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        try
+            let delta = emitDelta request
+            let pdbBytes =
+                match delta.Pdb with
+                | Some bytes -> bytes
+                | None -> failwith "Expected portable PDB delta for property accessor edit."
+
+            TestHelpers.assertBaselineDocument artifacts.PdbPath "PropertyDemo.fs"
+
+            use provider = MetadataReaderProvider.FromPortablePdbImage(ImmutableArray.CreateRange(pdbBytes))
+            let reader = provider.GetMetadataReader()
+            let matchingHandle =
+                reader.MethodDebugInformation
+                |> Seq.tryPick (fun handle ->
+                    let definitionHandle = handle.ToDefinitionHandle()
+                    let definitionEntity: EntityHandle = MethodDefinitionHandle.op_Implicit definitionHandle
+                    let definitionToken = MetadataTokens.GetToken definitionEntity
+                    if definitionToken = methodToken then
+                        Some(handle)
+                    else
+                        None)
+            match matchingHandle with
+            | None -> failwithf "Expected method token 0x%08X in portable PDB delta." methodToken
+            | Some handle ->
+                let definitionHandle = handle.ToDefinitionHandle()
+                let definitionEntity: EntityHandle = MethodDefinitionHandle.op_Implicit definitionHandle
+                let definitionToken = MetadataTokens.GetToken definitionEntity
+                Assert.Equal(methodToken, definitionToken)
+
+                let info = reader.GetMethodDebugInformation handle
+                Assert.False(info.Document.IsNil, "Expected property accessor to reference a source document.")
+
+                let sequencePoints = info.GetSequencePoints() |> Seq.toArray
+                Assert.NotEmpty(sequencePoints)
+                let firstPoint = sequencePoints[0]
+                Assert.Equal(1, firstPoint.StartLine)
+                Assert.Equal(1, firstPoint.StartColumn)
+        finally
+            if File.Exists(artifacts.AssemblyPath) then File.Delete(artifacts.AssemblyPath)
+            match artifacts.PdbPath with
+            | Some path when File.Exists(path) -> File.Delete(path)
+            | _ -> ()
+
+    [<Fact>]
+    let ``emitDelta emits portable PDB delta for event accessor edits`` () =
+        let artifacts = TestHelpers.createBaselineFromModule (TestHelpers.createEventModule "Event helper baseline payload")
+        let typeName = "Sample.EventDemo"
+        let methodKey = TestHelpers.methodKeyByName artifacts.Baseline typeName "add_OnChanged"
+        let methodToken = artifacts.Baseline.MethodTokens[methodKey]
+        let accessorUpdate =
+            TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.EventAdd "OnChanged") methodKey
+
+        let request : IlxDeltaRequest =
+            { Baseline = artifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = [ accessorUpdate ]
+              Module = TestHelpers.createEventModule "Event helper updated payload"
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        try
+            let delta = emitDelta request
+            let pdbBytes =
+                match delta.Pdb with
+                | Some bytes -> bytes
+                | None -> failwith "Expected portable PDB delta for event accessor edit."
+
+            TestHelpers.assertBaselineDocument artifacts.PdbPath "EventDemo.fs"
+
+            use provider = MetadataReaderProvider.FromPortablePdbImage(ImmutableArray.CreateRange(pdbBytes))
+            let reader = provider.GetMetadataReader()
+            let matchingHandle =
+                reader.MethodDebugInformation
+                |> Seq.tryPick (fun handle ->
+                    let definitionHandle = handle.ToDefinitionHandle()
+                    let definitionEntity: EntityHandle = MethodDefinitionHandle.op_Implicit definitionHandle
+                    let definitionToken = MetadataTokens.GetToken definitionEntity
+                    if definitionToken = methodToken then
+                        Some(handle)
+                    else
+                        None)
+            match matchingHandle with
+            | None -> failwithf "Expected method token 0x%08X in portable PDB delta." methodToken
+            | Some handle ->
+                let definitionHandle = handle.ToDefinitionHandle()
+                let definitionEntity: EntityHandle = MethodDefinitionHandle.op_Implicit definitionHandle
+                let definitionToken = MetadataTokens.GetToken definitionEntity
+                Assert.Equal(methodToken, definitionToken)
+
+                let info = reader.GetMethodDebugInformation handle
+                Assert.False(info.Document.IsNil, "Expected event accessor to reference a source document.")
+                Assert.False(info.Document.IsNil, "Expected event accessor to reference a source document.")
+
+                let sequencePoints = info.GetSequencePoints() |> Seq.toArray
+                Assert.NotEmpty(sequencePoints)
+                let firstPoint = sequencePoints[0]
+                Assert.Equal(1, firstPoint.StartLine)
+        finally
+            if File.Exists(artifacts.AssemblyPath) then File.Delete(artifacts.AssemblyPath)
+            match artifacts.PdbPath with
+            | Some path when File.Exists(path) -> File.Delete(path)
+            | _ -> ()
+
+    [<Fact>]
+    let ``emitDelta emits portable PDB delta for added property accessor`` () =
+        let baselineModule = TestHelpers.createPropertyHostBaselineModule ()
+        let artifacts = TestHelpers.createBaselineFromModule baselineModule
+        let typeName = "Sample.PropertyDemo"
+        let accessorKey = TestHelpers.methodKey typeName "get_Message" [] PrimaryAssemblyILGlobals.typ_String
+        let accessorUpdate =
+            TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.PropertyGet "Message") accessorKey
+
+        let request : IlxDeltaRequest =
+            { Baseline = artifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = []
+              UpdatedAccessors = [ accessorUpdate ]
+              Module = TestHelpers.createPropertyModule "Property helper added message"
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        try
+            let delta = emitDelta request
+
+            let pdbBytes =
+                match delta.Pdb with
+                | Some bytes -> bytes
+                | None -> failwith "Expected portable PDB delta for added property accessor."
+
+            use provider = MetadataReaderProvider.FromPortablePdbImage(ImmutableArray.CreateRange pdbBytes)
+            let reader = provider.GetMetadataReader()
+            let info =
+                reader.MethodDebugInformation
+                |> Seq.map reader.GetMethodDebugInformation
+                |> Seq.head
+
+            Assert.False(info.Document.IsNil, "Expected added property accessor to carry document info.")
+            let points = info.GetSequencePoints() |> Seq.toArray
+            Assert.NotEmpty(points)
+        finally
+            if File.Exists(artifacts.AssemblyPath) then File.Delete(artifacts.AssemblyPath)
+            match artifacts.PdbPath with
+            | Some path when File.Exists(path) -> File.Delete(path)
+            | _ -> ()
+
+    [<Fact>]
+    let ``emitDelta emits portable PDB delta for added event accessor`` () =
+        let baselineModule = TestHelpers.createEventHostBaselineModule ()
+        let artifacts = TestHelpers.createBaselineFromModule baselineModule
+        let typeName = "Sample.EventDemo"
+        let accessorKey = TestHelpers.methodKey typeName "add_OnChanged" [ PrimaryAssemblyILGlobals.typ_Object ] ILType.Void
+        let accessorUpdate =
+            TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.EventAdd "OnChanged") accessorKey
+
+        let request : IlxDeltaRequest =
+            { Baseline = artifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = []
+              UpdatedAccessors = [ accessorUpdate ]
+              Module = TestHelpers.createEventModule "Event helper added payload"
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        try
+            let delta = emitDelta request
+
+            let pdbBytes =
+                match delta.Pdb with
+                | Some bytes -> bytes
+                | None -> failwith "Expected portable PDB delta for added event accessor."
+
+            use provider = MetadataReaderProvider.FromPortablePdbImage(ImmutableArray.CreateRange(pdbBytes))
+            let reader = provider.GetMetadataReader()
+            let infos =
+                reader.MethodDebugInformation
+                |> Seq.map reader.GetMethodDebugInformation
+                |> Seq.toArray
+
+            Assert.NotEmpty infos
+            infos
+            |> Array.iter (fun info ->
+                Assert.False(info.Document.IsNil, "Expected added event accessors to carry document info.")
+                let points = info.GetSequencePoints() |> Seq.toArray
+                Assert.NotEmpty(points))
+        finally
+            if File.Exists(artifacts.AssemblyPath) then File.Delete(artifacts.AssemblyPath)
+            match artifacts.PdbPath with
+            | Some path when File.Exists(path) -> File.Delete(path)
+            | _ -> ()
