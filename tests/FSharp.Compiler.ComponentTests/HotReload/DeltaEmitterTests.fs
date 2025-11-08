@@ -502,6 +502,56 @@ module DeltaEmitterTests =
         | None -> ()
 
     [<Fact>]
+    let ``emitDelta adds method metadata rows for new method`` () =
+        let baselineArtifacts =
+            TestHelpers.createBaselineFromModule (createModuleWithMethods [ "GetValue", 1 ])
+        let updatedModule = createModuleWithMethods [ "GetValue", 1; "GetExtra", 5 ]
+
+        let request =
+            {
+                IlxDeltaRequest.Baseline = baselineArtifacts.Baseline
+                UpdatedTypes = [ "Sample.Multi" ]
+                UpdatedMethods = []
+                UpdatedAccessors = []
+                Module = updatedModule
+                SymbolChanges = None
+                CurrentGeneration = 1
+                PreviousGenerationId = None
+                SynthesizedNames = None
+            }
+
+        let delta = emitDelta request
+
+        Assert.Equal(1, List.length delta.MethodBodies)
+        let addedToken = Assert.Single(delta.UpdatedMethodTokens)
+
+        let expectedRowId =
+            baselineArtifacts.Baseline.Metadata.TableRowCounts.[int TableIndex.MethodDef] + 1
+
+        Assert.Equal(0x06000000 ||| expectedRowId, addedToken)
+
+        let hasMethodAdd =
+            delta.EncLog
+            |> Array.exists (fun (table, row, op) ->
+                table = TableIndex.MethodDef && row = expectedRowId && op = EditAndContinueOperation.AddMethod)
+
+        Assert.True(hasMethodAdd, "Expected MethodDef add operation in EncLog.")
+
+        match delta.UpdatedBaseline with
+        | Some updatedBaseline ->
+            let addedKey =
+                { MethodDefinitionKey.DeclaringType = "Sample.Multi"
+                  Name = "GetExtra"
+                  GenericArity = 0
+                  ParameterTypes = []
+                  ReturnType = PrimaryAssemblyILGlobals.typ_Int32 }
+
+            Assert.True(updatedBaseline.MethodTokens.ContainsKey addedKey, "Updated baseline missing added method token.")
+            Assert.Equal(addedToken, updatedBaseline.MethodTokens[addedKey])
+        | None ->
+            Assert.True(false, "Updated baseline missing.")
+
+    [<Fact>]
     let ``metadata validator tool is available`` () =
         match tryRunMdv "--version" with
         | ValueNone ->
