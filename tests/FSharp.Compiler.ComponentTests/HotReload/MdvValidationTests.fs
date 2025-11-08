@@ -1434,6 +1434,118 @@ module Demo =
             try Directory.Delete(deltaDir, true) with _ -> ()
             try Directory.Delete(projectDir, true) with _ -> ()
 
+    [<Fact>]
+    let ``mdv validates consecutive closure edits`` () =
+        let checker =
+            FSharpChecker.Create(
+                keepAssemblyContents = true,
+                enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                captureIdentifiersWhenParsing = false
+            )
+
+        let projectDir, fsPath, dllPath = createTempProject ()
+        let baselineSource =
+            """
+namespace MdVClosure
+
+module Demo =
+    let GetMessage () =
+        let prefix = "Integration closure baseline"
+        fun value -> sprintf "%s %s" prefix value
+
+    let Invoke value = (GetMessage()) value
+"""
+
+        let firstUpdateSource =
+            """
+namespace MdVClosure
+
+module Demo =
+    let GetMessage () =
+        let prefix = "Integration closure updated v2"
+        fun value -> sprintf "%s %s" prefix value
+
+    let Invoke value = (GetMessage()) value
+"""
+
+        let secondUpdateSource =
+            """
+namespace MdVClosure
+
+module Demo =
+    let GetMessage () =
+        let prefix = "Integration closure updated v3"
+        fun value -> sprintf "%s %s" prefix value
+
+    let Invoke value = (GetMessage()) value
+"""
+
+        let deltaDir = Path.Combine(projectDir, "mdv-closure-multi-delta")
+
+        try
+            Directory.CreateDirectory(deltaDir) |> ignore
+            let baselineOptions, _ = compileProject checker fsPath dllPath baselineSource
+            let baselineCopy = Path.Combine(projectDir, "baseline.dll")
+            File.Copy(dllPath, baselineCopy, true)
+
+            match checker.StartHotReloadSession(baselineOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "StartHotReloadSession failed: %A" error
+            | Ok () -> ()
+
+            let updatedOptions1, _ = compileProject checker fsPath dllPath firstUpdateSource
+            let delta1 =
+                match checker.EmitHotReloadDelta(updatedOptions1) |> Async.RunSynchronously with
+                | Error error -> failwithf "EmitHotReloadDelta (generation 1) failed: %A" error
+                | Ok delta -> delta
+
+            let meta1Path = Path.Combine(deltaDir, "1.meta")
+            let il1Path = Path.Combine(deltaDir, "1.il")
+            File.WriteAllBytes(meta1Path, delta1.Metadata)
+            File.WriteAllBytes(il1Path, delta1.IL)
+
+            let expectedLiteral1 = Text.Encoding.Unicode.GetBytes("Integration closure updated v2")
+            Assert.True(
+                containsSubsequence delta1.Metadata expectedLiteral1,
+                "Expected generation 1 closure metadata to contain updated literal."
+            )
+
+            File.WriteAllText(fsPath, secondUpdateSource)
+            let updatedOptions2, _ = compileProject checker fsPath dllPath secondUpdateSource
+            let delta2 =
+                match checker.EmitHotReloadDelta(updatedOptions2) |> Async.RunSynchronously with
+                | Error error -> failwithf "EmitHotReloadDelta (generation 2) failed: %A" error
+                | Ok delta -> delta
+
+            Assert.NotEqual(Guid.Empty, delta2.BaseGenerationId)
+
+            let meta2Path = Path.Combine(deltaDir, "2.meta")
+            let il2Path = Path.Combine(deltaDir, "2.il")
+            File.WriteAllBytes(meta2Path, delta2.Metadata)
+            File.WriteAllBytes(il2Path, delta2.IL)
+
+            let expectedLiteral2 = Text.Encoding.Unicode.GetBytes("Integration closure updated v3")
+            Assert.True(
+                containsSubsequence delta2.Metadata expectedLiteral2,
+                "Expected generation 2 closure metadata to contain updated literal."
+            )
+
+            match runMdv baselineCopy meta1Path il1Path with
+            | Some output ->
+                Assert.Contains("Generation 1", output)
+                assertGenerationContains output 1 "Integration closure updated v2"
+            | None ->
+                printfn "mdv not available; skipping closure Generation 1 verification."
+
+            match runMdv baselineCopy meta2Path il2Path with
+            | Some output ->
+                assertGenerationContains output 1 "Integration closure updated v3"
+            | None ->
+                printfn "mdv not available; skipping closure Generation 2 verification."
+        finally
+            try checker.InvalidateAll() with _ -> ()
+            try checker.EndHotReloadSession() with _ -> ()
+            try Directory.Delete(deltaDir, true) with _ -> ()
+            try Directory.Delete(projectDir, true) with _ -> ()
 
     [<Fact>]
     let ``mdv validates method-body edit with async state machine`` () =
