@@ -12,6 +12,7 @@ module SymbolChangesTests =
           LogicalName = name
           Stamp = stamp
           Kind = kind
+          MemberKind = None
           IsSynthesized = isSynthesized }
 
     let private diff edits rude =

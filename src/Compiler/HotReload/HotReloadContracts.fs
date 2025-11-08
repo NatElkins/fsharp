@@ -20,6 +20,7 @@ type internal DeltaEmissionRequest =
         IlModule: ILModuleDef
         UpdatedTypes: string list
         UpdatedMethods: MethodDefinitionKey list
+        UpdatedAccessors: AccessorUpdate list
         SymbolChanges: FSharpSymbolChanges option
     }
 

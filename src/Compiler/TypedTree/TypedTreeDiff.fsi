@@ -11,12 +11,22 @@ type SymbolKind =
     | Value
     | Entity
 
+[<RequireQualifiedAccess>]
+type SymbolMemberKind =
+    | Method
+    | PropertyGet of propertyName: string
+    | PropertySet of propertyName: string
+    | EventAdd of eventName: string
+    | EventRemove of eventName: string
+    | EventInvoke of eventName: string
+
 /// Stable identity for values and entities tracked across baseline/hot reload sessions.
 type SymbolId =
     { Path: string list
       LogicalName: string
       Stamp: Stamp
       Kind: SymbolKind
+      MemberKind: SymbolMemberKind option
       IsSynthesized: bool }
 
     member QualifiedName: string

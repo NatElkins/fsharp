@@ -10,6 +10,7 @@ open FSharp.Compiler
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.TypedTree
+open FSharp.Compiler.TypedTreeBasics
 open FSharp.Compiler.TypedTreeOps
 
 /// Describes the high-level category for a symbol participating in a hot reload edit.
@@ -18,12 +19,22 @@ type SymbolKind =
     | Value
     | Entity
 
+[<RequireQualifiedAccess>]
+type SymbolMemberKind =
+    | Method
+    | PropertyGet of propertyName: string
+    | PropertySet of propertyName: string
+    | EventAdd of eventName: string
+    | EventRemove of eventName: string
+    | EventInvoke of eventName: string
+
 /// Stable identity for values and entities tracked across baseline/hot reload sessions.
 type SymbolId =
     { Path: string list
       LogicalName: string
       Stamp: Stamp
       Kind: SymbolKind
+      MemberKind: SymbolMemberKind option
       IsSynthesized: bool }
 
     member x.QualifiedName =
@@ -86,6 +97,35 @@ let private hashList (items: seq<int>) =
         acc <- hashCombine acc item
 
     acc
+
+let private propertyDisplayName (vref: ValRef) =
+    let name = vref.PropertyName
+    if String.IsNullOrWhiteSpace name then vref.DisplayName else name
+
+let private tryEventMemberKind (compiledName: string) =
+    if String.IsNullOrEmpty compiledName then
+        None
+    elif compiledName.StartsWith("add_", StringComparison.Ordinal) then
+        Some(SymbolMemberKind.EventAdd(compiledName.Substring(4)))
+    elif compiledName.StartsWith("remove_", StringComparison.Ordinal) then
+        Some(SymbolMemberKind.EventRemove(compiledName.Substring(7)))
+    elif compiledName.StartsWith("raise_", StringComparison.Ordinal) then
+        Some(SymbolMemberKind.EventInvoke(compiledName.Substring(6)))
+    else
+        None
+
+let private memberKindOfVal (var: Val) =
+    let vref = mkLocalValRef var
+    if vref.IsPropertyGetterMethod then
+        Some(SymbolMemberKind.PropertyGet(propertyDisplayName vref))
+    elif vref.IsPropertySetterMethod then
+        Some(SymbolMemberKind.PropertySet(propertyDisplayName vref))
+    else
+        let compiledName = vref.CompiledName None
+        match tryEventMemberKind compiledName with
+        | Some accessor -> Some accessor
+        | None when vref.MemberInfo.IsSome -> Some SymbolMemberKind.Method
+        | _ -> None
 
 let private normalizeTypeString (text: string) =
     let sb = StringBuilder(text.Length)
@@ -260,11 +300,12 @@ type private EntitySnapshot =
       RepresentationText: string
       IsSynthesized: bool }
 
-let private symbolId path logicalName stamp kind isSynthesized =
+let private symbolId path logicalName stamp kind memberKind isSynthesized =
     { Path = path
       LogicalName = logicalName
       Stamp = stamp
       Kind = kind
+      MemberKind = memberKind
       IsSynthesized = isSynthesized }
 
 let private bindingKey (snapshot: BindingSnapshot) =
@@ -314,7 +355,8 @@ and private snapshotBinding denv path (TBind (var, expr, _)) =
     let signature = tyToString denv var.Type
     let bodyHash = exprDigest denv expr
     let containingEntity = tryGetContainingEntityFullName var
-    let symbol = symbolId path var.LogicalName var.Stamp SymbolKind.Value var.IsCompilerGenerated
+    let memberKind = memberKindOfVal var
+    let symbol = symbolId path var.LogicalName var.Stamp SymbolKind.Value memberKind var.IsCompilerGenerated
 
     { Symbol = symbol
       InlineInfo = var.InlineInfo
@@ -379,7 +421,7 @@ and private snapshotTycon denv path (tycon: Tycon) =
 
         sb.ToString()
 
-    { Symbol = symbolId path tycon.LogicalName tycon.Stamp SymbolKind.Entity false
+    { Symbol = symbolId path tycon.LogicalName tycon.Stamp SymbolKind.Entity None false
       RepresentationHash = stableHash reprText
       RepresentationText = reprText
       IsSynthesized = false }: EntitySnapshot

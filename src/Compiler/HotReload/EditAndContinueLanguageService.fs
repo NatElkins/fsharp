@@ -1,6 +1,7 @@
 namespace FSharp.Compiler.HotReload
 
 open System
+open System.IO
 open FSharp.Compiler
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.AbstractIL.IL
@@ -19,6 +20,12 @@ type internal FSharpEditAndContinueLanguageService private () =
 
     static let lazyInstance = lazy FSharpEditAndContinueLanguageService()
     static let mutable lastBaselineState : (FSharpEmitBaseline * CheckedAssemblyAfterOptimization) option = None
+    static let shouldTraceMetadata () =
+        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METADATA") with
+        | null -> false
+        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+        | _ -> false
     static let createSynthesizedMapFromSnapshot (snapshot: Map<string, string[]>) =
         let map = FSharpSynthesizedTypeMaps()
         map.LoadSnapshot(snapshot |> Map.toSeq)
@@ -69,6 +76,15 @@ type internal FSharpEditAndContinueLanguageService private () =
     /// Emits a delta for the supplied request; callers may commit the delta by invoking <see cref="OnDeltaApplied"/>.
     /// </summary>
     member _.EmitDelta(request: DeltaEmissionRequest) =
+        let trace = shouldTraceMetadata ()
+        if trace then
+            let asm = typeof<FSharpEditAndContinueLanguageService>.Assembly
+            let message = sprintf "[fsharp-hotreload][service] EmitDelta invoked (assembly=%s)\n" asm.Location
+            printf "%s" message
+            try
+                let path = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-service.log")
+                File.AppendAllText(path, message)
+            with _ -> ()
         match FSharp.Compiler.HotReloadState.tryGetSession() with
         | ValueNone -> Error HotReloadError.NoActiveSession
         | ValueSome session ->
@@ -84,6 +100,7 @@ type internal FSharpEditAndContinueLanguageService private () =
                     { IlxDeltaRequest.Baseline = session.Baseline
                       UpdatedTypes = request.UpdatedTypes
                       UpdatedMethods = request.UpdatedMethods
+                      UpdatedAccessors = request.UpdatedAccessors
                       Module = request.IlModule
                       SymbolChanges = request.SymbolChanges
                       CurrentGeneration = session.CurrentGeneration
@@ -91,6 +108,18 @@ type internal FSharpEditAndContinueLanguageService private () =
                       SynthesizedNames = Some synthesizedMap }
 
                 let delta = FSharp.Compiler.IlxDeltaEmitter.emitDelta deltaRequest
+                if trace then
+                    let line = sprintf "[fsharp-hotreload][service] EmitDelta produced encLog=%A\n" delta.EncLog
+                    printf "%s" line
+                    try
+                        let path = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-service.log")
+                        File.AppendAllText(path, line)
+                    with _ -> ()
+                match delta.UpdatedBaseline with
+                | Some updatedBaseline ->
+                    FSharp.Compiler.HotReloadState.updateBaseline updatedBaseline
+                    lastBaselineState <- Some(updatedBaseline, session.ImplementationFiles)
+                | None -> ()
                 Ok { Delta = delta }
             with
             | HotReloadUnsupportedEditException message ->
@@ -140,7 +169,7 @@ type internal FSharpEditAndContinueLanguageService private () =
             elif not (List.isEmpty symbolChanges.Added) || not (List.isEmpty symbolChanges.Deleted) then
                 Error(HotReloadError.UnsupportedEdit "Structural edits detected; full rebuild required.")
             else
-                let updatedTypes, updatedMethods = mapSymbolChangesToDelta session.Baseline symbolChanges
+                let updatedTypes, updatedMethods, accessorUpdates = mapSymbolChangesToDelta session.Baseline symbolChanges
 
                 if List.isEmpty updatedMethods then
                     Error HotReloadError.NoChanges
@@ -149,6 +178,7 @@ type internal FSharpEditAndContinueLanguageService private () =
                         { IlModule = ilModule
                           UpdatedTypes = updatedTypes
                           UpdatedMethods = updatedMethods
+                          UpdatedAccessors = accessorUpdates
                           SymbolChanges = Some symbolChanges }
 
                     match this.EmitDelta request with

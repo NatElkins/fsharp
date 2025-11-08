@@ -1,14 +1,26 @@
 module internal FSharp.Compiler.HotReloadBaseline
 
 open System
-open System.Collections.Immutable
 open System.Collections.Generic
+open System.Collections.Immutable
+open System.Reflection
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.IlxGen
 open FSharp.Compiler.Syntax.PrettyNaming
+
+let private tableCount = MetadataTokens.TableCount
+
+/// <summary>Metadata describing a method body that was added or changed in a delta.</summary>
+type AddedOrChangedMethodInfo =
+    {
+        MethodToken: int
+        LocalSignatureToken: int
+        CodeOffset: int
+        CodeLength: int
+    }
 
 /// <summary>Stable identifier for a method definition used when correlating baseline tokens.</summary>
 type MethodDefinitionKey =
@@ -18,6 +30,13 @@ type MethodDefinitionKey =
         GenericArity: int
         ParameterTypes: ILType list
         ReturnType: ILType
+    }
+
+/// <summary>Stable identifier for a method parameter (sequence number within a method).</summary>
+type ParameterDefinitionKey =
+    {
+        Method: MethodDefinitionKey
+        SequenceNumber: int
     }
 
 /// <summary>Stable identifier for a field definition in the baseline assembly.</summary>
@@ -45,6 +64,17 @@ type EventDefinitionKey =
         EventType: ILType option
     }
 
+type MethodSemanticsAssociation =
+    | PropertyAssociation of PropertyDefinitionKey * rowId:int
+    | EventAssociation of EventDefinitionKey * rowId:int
+
+type MethodSemanticsEntry =
+    {
+        RowId: int
+        Attributes: MethodSemanticsAttributes
+        Association: MethodSemanticsAssociation
+    }
+
 /// <summary>Portable PDB snapshot captured during baseline emission.</summary>
 type PortablePdbSnapshot =
     {
@@ -60,6 +90,9 @@ type PortablePdbSnapshot =
 type FSharpEmitBaseline =
     {
         ModuleId: Guid
+        EncId: Guid
+        EncBaseId: Guid
+        NextGeneration: int
         Metadata: MetadataSnapshot
         TokenMappings: ILTokenMappings
         TypeTokens: Map<string, int>
@@ -67,9 +100,18 @@ type FSharpEmitBaseline =
         FieldTokens: Map<FieldDefinitionKey, int>
         PropertyTokens: Map<PropertyDefinitionKey, int>
         EventTokens: Map<EventDefinitionKey, int>
+        PropertyMapEntries: Map<string, int>
+        EventMapEntries: Map<string, int>
+        MethodSemanticsEntries: Map<MethodDefinitionKey, MethodSemanticsEntry list>
         IlxGenEnvironment: IlxGenEnvSnapshot option
         PortablePdb: PortablePdbSnapshot option
         SynthesizedNameSnapshot: Map<string, string[]>
+        TableEntriesAdded: int[]
+        StringStreamLengthAdded: int
+        UserStringStreamLengthAdded: int
+        BlobStreamLengthAdded: int
+        GuidStreamLengthAdded: int
+        AddedOrChangedMethods: AddedOrChangedMethodInfo list
     }
 
 type private BaselineMaps =
@@ -79,6 +121,8 @@ type private BaselineMaps =
         FieldTokens: Map<FieldDefinitionKey, int>
         PropertyTokens: Map<PropertyDefinitionKey, int>
         EventTokens: Map<EventDefinitionKey, int>
+        PropertyMapEntries: Map<string, int>
+        EventMapEntries: Map<string, int>
     }
 
 let private emptyMaps =
@@ -88,6 +132,8 @@ let private emptyMaps =
         FieldTokens = Map.empty
         PropertyTokens = Map.empty
         EventTokens = Map.empty
+        PropertyMapEntries = Map.empty
+        EventMapEntries = Map.empty
     }
 
 let private collectSynthesizedNameSnapshot (ilModule: ILModuleDef) =
@@ -190,8 +236,10 @@ let rec private collectType
                 })
             maps
 
+    let propertyDefs = tdef.Properties.AsList()
+
     let maps =
-        tdef.Properties.AsList()
+        propertyDefs
         |> List.fold
             (fun (acc: BaselineMaps) pdef ->
                 let key =
@@ -210,7 +258,17 @@ let rec private collectType
             maps
 
     let maps =
-        tdef.Events.AsList()
+        match propertyDefs with
+        | first :: _ ->
+            let token = tokenMappings.PropertyTokenMap (enclosing, tdef) first
+            let rowId = token &&& 0x00FFFFFF
+            { maps with PropertyMapEntries = maps.PropertyMapEntries |> Map.add typeName rowId }
+        | [] -> maps
+
+    let eventDefs = tdef.Events.AsList()
+
+    let maps =
+        eventDefs
         |> List.fold
             (fun (acc: BaselineMaps) edef ->
                 let key =
@@ -227,8 +285,99 @@ let rec private collectType
                 })
             maps
 
+    let maps =
+        match eventDefs with
+        | first :: _ ->
+            let token = tokenMappings.EventTokenMap (enclosing, tdef) first
+            let rowId = token &&& 0x00FFFFFF
+            { maps with EventMapEntries = maps.EventMapEntries |> Map.add typeName rowId }
+        | [] -> maps
+
     tdef.NestedTypes.AsList()
     |> List.fold (collectType tokenMappings scope (enclosing @ [ tdef ])) maps
+
+let private methodKeyFromRef (methodRef: ILMethodRef) =
+    { MethodDefinitionKey.DeclaringType = methodRef.DeclaringTypeRef.FullName
+      Name = methodRef.Name
+      GenericArity = methodRef.GenericArity
+      ParameterTypes = methodRef.ArgTypes |> Seq.toList
+      ReturnType = methodRef.ReturnType }
+
+let collectMethodSemanticsEntries
+    (ilModule: ILModuleDef)
+    (methodTokens: Map<MethodDefinitionKey, int>)
+    (propertyTokens: Map<PropertyDefinitionKey, int>)
+    (eventTokens: Map<EventDefinitionKey, int>)
+    =
+    let entries = Dictionary<MethodDefinitionKey, ResizeArray<MethodSemanticsEntry>>(HashIdentity.Structural)
+    let mutable nextRowId = 0
+
+    let addEntry methodKey entry =
+        match entries.TryGetValue methodKey with
+        | true, bucket -> bucket.Add entry
+        | _ ->
+            let bucket = ResizeArray()
+            bucket.Add entry
+            entries[methodKey] <- bucket
+
+    let tryAddSemantics association attributes methodRefOpt =
+        match methodRefOpt with
+        | None -> ()
+        | Some methodRef ->
+            let methodKey = methodKeyFromRef methodRef
+            if methodTokens.ContainsKey methodKey then
+                nextRowId <- nextRowId + 1
+                addEntry methodKey
+                    { RowId = nextRowId
+                      Attributes = attributes
+                      Association = association }
+
+    let rec visitType enclosing (typeDef: ILTypeDef) =
+        let typeRef = mkRefForNestedILTypeDef ILScopeRef.Local (enclosing, typeDef)
+        let typeName = typeRef.FullName
+
+        let buildPropertyKey (prop: ILPropertyDef) =
+            { PropertyDefinitionKey.DeclaringType = typeName
+              Name = prop.Name
+              PropertyType = prop.PropertyType
+              IndexParameterTypes = List.ofSeq prop.Args }
+
+        let buildEventKey (eventDef: ILEventDef) =
+            { EventDefinitionKey.DeclaringType = typeName
+              Name = eventDef.Name
+              EventType = eventDef.EventType }
+
+        for prop in typeDef.Properties.AsList() do
+            let propertyKey = buildPropertyKey prop
+            match propertyTokens |> Map.tryFind propertyKey with
+            | Some propertyToken ->
+                let rowId = propertyToken &&& 0x00FFFFFF
+                let association = MethodSemanticsAssociation.PropertyAssociation(propertyKey, rowId)
+                tryAddSemantics association MethodSemanticsAttributes.Setter prop.SetMethod
+                tryAddSemantics association MethodSemanticsAttributes.Getter prop.GetMethod
+            | None -> ()
+
+        for eventDef in typeDef.Events.AsList() do
+            let eventKey = buildEventKey eventDef
+            match eventTokens |> Map.tryFind eventKey with
+            | Some eventToken ->
+                let rowId = eventToken &&& 0x00FFFFFF
+                let association = MethodSemanticsAssociation.EventAssociation(eventKey, rowId)
+                tryAddSemantics association MethodSemanticsAttributes.Adder (Some eventDef.AddMethod)
+                tryAddSemantics association MethodSemanticsAttributes.Remover (Some eventDef.RemoveMethod)
+                eventDef.FireMethod |> Option.iter (fun fire -> tryAddSemantics association MethodSemanticsAttributes.Raiser (Some fire))
+                eventDef.OtherMethods |> List.iter (fun other -> tryAddSemantics association MethodSemanticsAttributes.Other (Some other))
+            | None -> ()
+
+        typeDef.NestedTypes.AsList()
+        |> List.iter (fun nested -> visitType (enclosing @ [ typeDef ]) nested)
+
+    ilModule.TypeDefs.AsList()
+    |> List.iter (visitType [])
+
+    entries
+    |> Seq.map (fun kvp -> kvp.Key, kvp.Value |> Seq.toList)
+    |> Map.ofSeq
 
 let private createCore
     (moduleId: Guid)
@@ -244,10 +393,16 @@ let private createCore
         ilModule.TypeDefs.AsList()
         |> List.fold (collectType tokenMappings scope []) emptyMaps
 
+    let methodSemanticsEntries =
+        collectMethodSemanticsEntries ilModule maps.MethodTokens maps.PropertyTokens maps.EventTokens
+
     let synthesizedNames = collectSynthesizedNameSnapshot ilModule
 
     {
         ModuleId = moduleId
+        EncId = Guid.Empty
+        EncBaseId = moduleId
+        NextGeneration = 1
         Metadata = metadataSnapshot
         TokenMappings = tokenMappings
         TypeTokens = maps.TypeTokens
@@ -255,9 +410,74 @@ let private createCore
         FieldTokens = maps.FieldTokens
         PropertyTokens = maps.PropertyTokens
         EventTokens = maps.EventTokens
+        PropertyMapEntries = maps.PropertyMapEntries
+        EventMapEntries = maps.EventMapEntries
+        MethodSemanticsEntries = methodSemanticsEntries
         IlxGenEnvironment = ilxGenEnvironment
         PortablePdb = portablePdbSnapshot
         SynthesizedNameSnapshot = synthesizedNames
+        TableEntriesAdded = Array.zeroCreate tableCount
+        StringStreamLengthAdded = 0
+        UserStringStreamLengthAdded = 0
+        BlobStreamLengthAdded = 0
+        GuidStreamLengthAdded = 0
+        AddedOrChangedMethods = []
+    }
+
+let internal applyDelta
+    (baseline: FSharpEmitBaseline)
+    (deltaTableCounts: int[])
+    (deltaHeapSizes: MetadataHeapSizes)
+    (addedOrChangedMethods: AddedOrChangedMethodInfo list)
+    (encId: Guid)
+    (encBaseId: Guid)
+    (synthesizedSnapshot: Map<string, string[]> option)
+    : FSharpEmitBaseline =
+
+    let tableCounts =
+        if deltaTableCounts.Length = tableCount then
+            deltaTableCounts
+        else
+            Array.zeroCreate tableCount
+
+    let updatedTableEntries =
+        Array.init tableCount (fun i ->
+            let previous = baseline.TableEntriesAdded[i]
+            previous + tableCounts.[i])
+
+    let updatedMetadataSnapshot =
+        let updatedHeapSizes =
+            { StringHeapSize = baseline.Metadata.HeapSizes.StringHeapSize + deltaHeapSizes.StringHeapSize
+              UserStringHeapSize = baseline.Metadata.HeapSizes.UserStringHeapSize + deltaHeapSizes.UserStringHeapSize
+              BlobHeapSize = baseline.Metadata.HeapSizes.BlobHeapSize + deltaHeapSizes.BlobHeapSize
+              GuidHeapSize = baseline.Metadata.HeapSizes.GuidHeapSize + deltaHeapSizes.GuidHeapSize }
+
+        let updatedTableCountsAbsolute =
+            Array.init tableCount (fun i ->
+                baseline.Metadata.TableRowCounts.[i] + tableCounts.[i])
+
+        { baseline.Metadata with
+            HeapSizes = updatedHeapSizes
+            TableRowCounts = updatedTableCountsAbsolute }
+
+    { baseline with
+        EncId = encId
+        EncBaseId = encBaseId
+        NextGeneration = baseline.NextGeneration + 1
+        TableEntriesAdded = updatedTableEntries
+        StringStreamLengthAdded = baseline.StringStreamLengthAdded + deltaHeapSizes.StringHeapSize
+        UserStringStreamLengthAdded = baseline.UserStringStreamLengthAdded + deltaHeapSizes.UserStringHeapSize
+        BlobStreamLengthAdded = baseline.BlobStreamLengthAdded + deltaHeapSizes.BlobHeapSize
+        GuidStreamLengthAdded = baseline.GuidStreamLengthAdded + deltaHeapSizes.GuidHeapSize
+        Metadata = updatedMetadataSnapshot
+        SynthesizedNameSnapshot =
+            match synthesizedSnapshot with
+            | Some snapshot -> snapshot
+            | None -> baseline.SynthesizedNameSnapshot
+        MethodSemanticsEntries = baseline.MethodSemanticsEntries
+        AddedOrChangedMethods =
+            (addedOrChangedMethods @ baseline.AddedOrChangedMethods)
+            |> List.distinctBy (fun info -> info.MethodToken)
     }
 
 /// <summary>Create an <see cref="FSharpEmitBaseline"/> without capturing the ILX environment snapshot.</summary>

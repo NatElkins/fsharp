@@ -11,6 +11,7 @@ module DefinitionMapTests =
           LogicalName = name
           Stamp = stamp
           Kind = kind
+          MemberKind = None
           IsSynthesized = isSynthesized }
 
     let private diffResult edits rude =

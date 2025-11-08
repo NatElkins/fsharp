@@ -108,3 +108,34 @@ module FSharpSymbolChanges =
             match change.EditKind with
             | SynthesizedMemberEditKind.Deleted -> Some change.Symbol
             | _ -> None)
+
+    let private isPropertySymbol symbol =
+        match symbol.MemberKind with
+        | Some (SymbolMemberKind.PropertyGet _)
+        | Some (SymbolMemberKind.PropertySet _) -> true
+        | _ -> false
+
+    let private isEventSymbol symbol =
+        match symbol.MemberKind with
+        | Some (SymbolMemberKind.EventAdd _)
+        | Some (SymbolMemberKind.EventRemove _)
+        | Some (SymbolMemberKind.EventInvoke _) -> true
+        | _ -> false
+
+    let propertyAccessorsAdded (changes: FSharpSymbolChanges) : SymbolId list =
+        changes.Added |> List.filter isPropertySymbol
+
+    let propertyAccessorsUpdated (changes: FSharpSymbolChanges) : UpdatedSymbolChange list =
+        changes.Updated |> List.filter (fun change -> isPropertySymbol change.Symbol)
+
+    let propertyAccessorsDeleted (changes: FSharpSymbolChanges) : SymbolId list =
+        changes.Deleted |> List.filter isPropertySymbol
+
+    let eventAccessorsAdded (changes: FSharpSymbolChanges) : SymbolId list =
+        changes.Added |> List.filter isEventSymbol
+
+    let eventAccessorsUpdated (changes: FSharpSymbolChanges) : UpdatedSymbolChange list =
+        changes.Updated |> List.filter (fun change -> isEventSymbol change.Symbol)
+
+    let eventAccessorsDeleted (changes: FSharpSymbolChanges) : SymbolId list =
+        changes.Deleted |> List.filter isEventSymbol

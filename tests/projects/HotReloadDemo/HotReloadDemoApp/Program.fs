@@ -35,6 +35,16 @@ module private ConsoleHelpers =
         printfn "Δ applied. Generation: %O (base %O)" delta.GenerationId delta.BaseGenerationId
         if delta.UpdatedMethods.Length > 0 then
             printfn "  Updated methods: %A" delta.UpdatedMethods
+        if delta.AddedOrChangedMethods.Length > 0 then
+            printfn "  Added/changed method details:"
+            delta.AddedOrChangedMethods
+            |> List.iter (fun info ->
+                printfn
+                    "    token=0x%08X locals=0x%08X offset=%d length=%d"
+                    info.MethodToken
+                    info.LocalSignatureToken
+                    info.CodeOffset
+                    info.CodeLength)
         if delta.UpdatedTypes.Length > 0 then
             printfn "  Updated types: %A" delta.UpdatedTypes
         printfn "  Session generation counter: %d" generation

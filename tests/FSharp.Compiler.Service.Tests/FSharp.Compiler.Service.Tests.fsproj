@@ -82,6 +82,7 @@
     <Compile Include="HotReload/TypedTreeDiffTests.fs" />
     <Compile Include="HotReload/HotReloadCheckerTests.fs" />
     <Compile Include="HotReload/GeneratedNamesTests.fs" />
+    <Compile Include="HotReload/DefinitionIndexTests.fs" />
     <Compile Include="HotReload/NameMapTests.fs" />
     <Compile Include="HotReload/RudeEditDiagnosticsTests.fs" />
   </ItemGroup>

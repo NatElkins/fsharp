@@ -72,12 +72,19 @@ type FSharpHotReloadCapabilities internal (flags: FSharpHotReloadCapability) =
         let casted = enum<FSharpHotReloadCapability>(int flags)
         FSharpHotReloadCapabilities(casted)
 
+type FSharpAddedOrChangedMethodInfo =
+    { MethodToken: int
+      LocalSignatureToken: int
+      CodeOffset: int
+      CodeLength: int }
+
 type FSharpHotReloadDelta =
     { Metadata: byte[]
       IL: byte[]
       Pdb: byte[] option
       UpdatedTypes: int list
       UpdatedMethods: int list
+      AddedOrChangedMethods: FSharpAddedOrChangedMethodInfo list
       GenerationId: Guid
       BaseGenerationId: Guid }
 
@@ -387,6 +394,13 @@ type FSharpChecker
           Pdb = delta.Pdb |> Option.map Array.copy
           UpdatedTypes = delta.UpdatedTypeTokens
           UpdatedMethods = delta.UpdatedMethodTokens
+          AddedOrChangedMethods =
+              delta.AddedOrChangedMethods
+              |> List.map (fun info ->
+                  { MethodToken = info.MethodToken
+                    LocalSignatureToken = info.LocalSignatureToken
+                    CodeOffset = info.CodeOffset
+                    CodeLength = info.CodeLength })
           GenerationId = delta.GenerationId
           BaseGenerationId = delta.BaseGenerationId }
 

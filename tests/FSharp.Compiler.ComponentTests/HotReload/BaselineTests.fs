@@ -194,6 +194,69 @@ module BaselineTests =
         let moduleId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         create ilModule tokenMappings metadataSnapshot moduleId None
 
+    [<Fact>]
+    let ``baseline captures method semantics entries`` () =
+        let baseline = emitBaseline ()
+        let ilg = PrimaryAssemblyILGlobals
+
+        let propertyGetterKey =
+            { MethodDefinitionKey.DeclaringType = "Sample.Container"
+              Name = "get_Data"
+              GenericArity = 0
+              ParameterTypes = []
+              ReturnType = ilg.typ_Int32 }
+
+        let propertySetterKey =
+            { MethodDefinitionKey.DeclaringType = "Sample.Container"
+              Name = "set_Data"
+              GenericArity = 0
+              ParameterTypes = [ ilg.typ_Int32 ]
+              ReturnType = ILType.Void }
+
+        let eventAdderKey =
+            { MethodDefinitionKey.DeclaringType = "Sample.Container"
+              Name = "add_OnChanged"
+              GenericArity = 0
+              ParameterTypes = [ ilg.typ_Object ]
+              ReturnType = ILType.Void }
+
+        let eventRemoverKey =
+            { eventAdderKey with
+                Name = "remove_OnChanged"
+                ParameterTypes = [ ilg.typ_Object ] }
+
+        let getterSemantics = baseline.MethodSemanticsEntries[propertyGetterKey] |> List.exactlyOne
+        Assert.Equal(2, getterSemantics.RowId)
+        Assert.Equal(MethodSemanticsAttributes.Getter, getterSemantics.Attributes)
+
+        match getterSemantics.Association with
+        | MethodSemanticsAssociation.PropertyAssociation(_, rowId) -> Assert.Equal(1, rowId)
+        | _ -> failwith "Expected property association for getter."
+
+        let setterSemantics = baseline.MethodSemanticsEntries[propertySetterKey] |> List.exactlyOne
+        Assert.Equal(1, setterSemantics.RowId)
+        Assert.Equal(MethodSemanticsAttributes.Setter, setterSemantics.Attributes)
+
+        match setterSemantics.Association with
+        | MethodSemanticsAssociation.PropertyAssociation(_, rowId) -> Assert.Equal(1, rowId)
+        | _ -> failwith "Expected property association for setter."
+
+        let adderSemantics = baseline.MethodSemanticsEntries[eventAdderKey] |> List.exactlyOne
+        Assert.Equal(3, adderSemantics.RowId)
+        Assert.Equal(MethodSemanticsAttributes.Adder, adderSemantics.Attributes)
+
+        match adderSemantics.Association with
+        | MethodSemanticsAssociation.EventAssociation(_, rowId) -> Assert.Equal(1, rowId)
+        | _ -> failwith "Expected event association for adder."
+
+        let removerSemantics = baseline.MethodSemanticsEntries[eventRemoverKey] |> List.exactlyOne
+        Assert.Equal(4, removerSemantics.RowId)
+        Assert.Equal(MethodSemanticsAttributes.Remover, removerSemantics.Attributes)
+
+        match removerSemantics.Association with
+        | MethodSemanticsAssociation.EventAssociation(_, rowId) -> Assert.Equal(1, rowId)
+        | _ -> failwith "Expected event association for remover."
+
     let private createDummySnapshot () =
         let snapshotType = typeof<IlxGenEnvSnapshot>
         let fields =

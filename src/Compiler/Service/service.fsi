@@ -23,12 +23,19 @@ type FSharpHotReloadError =
     | CompilationFailed of FSharpDiagnostic[]
     | DeltaEmissionFailed of string
 
+type FSharpAddedOrChangedMethodInfo =
+    { MethodToken: int
+      LocalSignatureToken: int
+      CodeOffset: int
+      CodeLength: int }
+
 type FSharpHotReloadDelta =
     { Metadata: byte[]
       IL: byte[]
       Pdb: byte[] option
       UpdatedTypes: int list
       UpdatedMethods: int list
+      AddedOrChangedMethods: FSharpAddedOrChangedMethodInfo list
       GenerationId: Guid
       BaseGenerationId: Guid }
 

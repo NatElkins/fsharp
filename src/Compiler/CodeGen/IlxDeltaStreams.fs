@@ -1,6 +1,7 @@
 module internal FSharp.Compiler.IlxDeltaStreams
 
 open System
+open System.IO
 open System.Collections.Generic
 open System.Collections.Immutable
 open System.Reflection.Metadata
@@ -27,12 +28,9 @@ type StandaloneSignatureUpdate =
 /// <summary>The emitted metadata and IL payloads produced by <see cref="IlDeltaStreamBuilder"/>.</summary>
 type IlDeltaStreams =
     {
-        Metadata: byte[]
         IL: byte[]
         MethodBodies: MethodBodyUpdate list
         StandaloneSignatures: StandaloneSignatureUpdate list
-        EncLogEntries: (TableIndex * int * EditAndContinueOperation) list
-        EncMapEntries: (TableIndex * int) list
     }
 
 /// <summary>
@@ -61,8 +59,6 @@ type IlDeltaStreamBuilder(baselineMetadata: MetadataSnapshot option) =
     let methodBodyStream = BlobBuilder()
     let methodBodies = ResizeArray<MethodBodyUpdate>()
     let standaloneSigs = ResizeArray<StandaloneSignatureUpdate>()
-    let encLogEntries = ResizeArray<TableIndex * int * EditAndContinueOperation>()
-    let encMapEntries = ResizeArray<TableIndex * int>()
     let mutable isBuilt = false
 
     let alignMethodStream () =
@@ -188,46 +184,16 @@ type IlDeltaStreamBuilder(baselineMetadata: MetadataSnapshot option) =
             standaloneSigs.Add({ Handle = handle; Blob = Array.copy signature })
             token
 
-    /// <summary>Register an Edit-and-Continue log entry.</summary>
-    member _.AddEncLogEntry(tableIndex: TableIndex, rowId: int, operation: EditAndContinueOperation) =
-        let handle = MetadataTokens.EntityHandle(tableIndex, rowId)
-        metadataBuilder.AddEncLogEntry(handle, operation) |> ignore
-        encLogEntries.Add(tableIndex, rowId, operation)
-
-    /// <summary>Register an Edit-and-Continue map entry.</summary>
-    member _.AddEncMapEntry(tableIndex: TableIndex, rowId: int) =
-        let handle = MetadataTokens.EntityHandle(tableIndex, rowId)
-        metadataBuilder.AddEncMapEntry(handle) |> ignore
-        encMapEntries.Add(tableIndex, rowId)
-
     /// <summary>
     /// Finalise the builder and emit the metadata and IL blobs. The builder can only be consumed once; subsequent
     /// invocations throw to prevent mismatched Edit-and-Continue state.
     /// </summary>
-    member _.Build(moduleName: string, mvid: Guid, encId: Guid, encBaseId: Guid option) =
+    member _.Build() =
         if isBuilt then invalidOp "IlDeltaStreamBuilder.Build may only be called once per builder instance."
         isBuilt <- true
 
-        let moduleNameHandle = metadataBuilder.GetOrAddString(moduleName)
-        let mvidHandle = metadataBuilder.GetOrAddGuid(mvid)
-        let encIdHandle = metadataBuilder.GetOrAddGuid(encId)
-        let encBaseHandle =
-            encBaseId
-            |> Option.defaultValue Guid.Empty
-            |> metadataBuilder.GetOrAddGuid
-
-        // Generation 0 is a placeholder; callers will populate the actual generation number when integrating with the runtime.
-        metadataBuilder.AddModule(0, moduleNameHandle, mvidHandle, encIdHandle, encBaseHandle) |> ignore
-
-        let metadataBlob = BlobBuilder()
-        let metadataRoot = new MetadataRootBuilder(metadataBuilder)
-        metadataRoot.Serialize(metadataBlob, 0, 0)
-
         {
-            Metadata = metadataBlob.ToArray()
             IL = methodBodyStream.ToArray()
             MethodBodies = methodBodies |> Seq.toList
             StandaloneSignatures = standaloneSigs |> Seq.toList
-            EncLogEntries = encLogEntries |> Seq.toList
-            EncMapEntries = encMapEntries |> Seq.toList
         }

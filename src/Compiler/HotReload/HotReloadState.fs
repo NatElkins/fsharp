@@ -15,13 +15,19 @@ type HotReloadSession =
 let mutable private session: HotReloadSession voption = ValueNone
 
 let setBaseline (value: FSharpEmitBaseline) (implementationFiles: CheckedAssemblyAfterOptimization) =
+    let previousGenerationId =
+        if value.EncId = Guid.Empty then
+            None
+        else
+            Some value.EncId
+
     session <-
         ValueSome
             {
                 Baseline = value
                 ImplementationFiles = implementationFiles
-                CurrentGeneration = 1
-                PreviousGenerationId = None
+                CurrentGeneration = max 1 value.NextGeneration
+                PreviousGenerationId = previousGenerationId
             }
 
 let clearBaseline () = session <- ValueNone
@@ -41,6 +47,17 @@ let updateImplementationFiles (implementationFiles: CheckedAssemblyAfterOptimiza
                 {
                     state with
                         ImplementationFiles = implementationFiles
+                }
+    | ValueNone -> ()
+
+let updateBaseline (baseline: FSharpEmitBaseline) =
+    match session with
+    | ValueSome state ->
+        session <-
+            ValueSome
+                {
+                    state with
+                        Baseline = baseline
                 }
     | ValueNone -> ()
 

@@ -2,6 +2,7 @@ module internal FSharp.Compiler.HotReloadBaseline
 
 open System
 open System.Collections.Immutable
+open System.Reflection
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.IL
@@ -15,6 +16,10 @@ type MethodDefinitionKey =
       GenericArity: int
       ParameterTypes: ILType list
       ReturnType: ILType }
+
+type ParameterDefinitionKey =
+    { Method: MethodDefinitionKey
+      SequenceNumber: int }
 
 /// <summary>Stable identifier for a field definition in the baseline assembly.</summary>
 type FieldDefinitionKey =
@@ -35,11 +40,26 @@ type EventDefinitionKey =
       Name: string
       EventType: ILType option }
 
+type MethodSemanticsAssociation =
+    | PropertyAssociation of PropertyDefinitionKey * rowId:int
+    | EventAssociation of EventDefinitionKey * rowId:int
+
+type MethodSemanticsEntry =
+    { RowId: int
+      Attributes: MethodSemanticsAttributes
+      Association: MethodSemanticsAssociation }
+
 /// <summary>Portable PDB snapshot captured during baseline emission.</summary>
 type PortablePdbSnapshot =
     { Bytes: byte[]
       TableRowCounts: ImmutableArray<int>
       EntryPointToken: int option }
+
+type AddedOrChangedMethodInfo =
+    { MethodToken: int
+      LocalSignatureToken: int
+      CodeOffset: int
+      CodeLength: int }
 
 /// <summary>
 /// Represents the captured state of a baseline emission, mirroring Roslyn's EmitBaseline. It stores metadata
@@ -47,6 +67,9 @@ type PortablePdbSnapshot =
 /// </summary>
 type FSharpEmitBaseline =
     { ModuleId: Guid
+      EncId: Guid
+      EncBaseId: Guid
+      NextGeneration: int
       Metadata: MetadataSnapshot
       TokenMappings: ILTokenMappings
       TypeTokens: Map<string, int>
@@ -54,9 +77,18 @@ type FSharpEmitBaseline =
       FieldTokens: Map<FieldDefinitionKey, int>
       PropertyTokens: Map<PropertyDefinitionKey, int>
       EventTokens: Map<EventDefinitionKey, int>
+      PropertyMapEntries: Map<string, int>
+      EventMapEntries: Map<string, int>
+      MethodSemanticsEntries: Map<MethodDefinitionKey, MethodSemanticsEntry list>
       IlxGenEnvironment: IlxGenEnvSnapshot option
       PortablePdb: PortablePdbSnapshot option
-      SynthesizedNameSnapshot: Map<string, string[]> }
+      SynthesizedNameSnapshot: Map<string, string[]>
+      TableEntriesAdded: int[]
+      StringStreamLengthAdded: int
+      UserStringStreamLengthAdded: int
+      BlobStreamLengthAdded: int
+      GuidStreamLengthAdded: int
+      AddedOrChangedMethods: AddedOrChangedMethodInfo list }
 
 /// <summary>Create a baseline record for the supplied IL module and token mappings.</summary>
 val create:
@@ -78,3 +110,20 @@ val createWithEnvironment:
         FSharpEmitBaseline
 
 val metadataSnapshotFromReader: reader: MetadataReader -> MetadataSnapshot
+
+val applyDelta:
+    baseline: FSharpEmitBaseline ->
+    deltaTableCounts: int[] ->
+    deltaHeapSizes: MetadataHeapSizes ->
+    addedOrChangedMethods: AddedOrChangedMethodInfo list ->
+    encId: Guid ->
+    encBaseId: Guid ->
+    synthesizedSnapshot: Map<string, string[]> option ->
+        FSharpEmitBaseline
+
+val collectMethodSemanticsEntries :
+    ilModule: ILModuleDef ->
+    methodTokens: Map<MethodDefinitionKey, int> ->
+    propertyTokens: Map<PropertyDefinitionKey, int> ->
+    eventTokens: Map<EventDefinitionKey, int> ->
+        Map<MethodDefinitionKey, MethodSemanticsEntry list>

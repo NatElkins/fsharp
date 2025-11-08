@@ -3,6 +3,7 @@ module internal FSharp.Compiler.HotReload.DeltaBuilder
 open System
 open FSharp.Compiler
 open FSharp.Compiler.AbstractIL.IL
+open FSharp.Compiler.HotReload
 open FSharp.Compiler.HotReload.DefinitionMap
 open FSharp.Compiler.HotReload.SymbolChanges
 open FSharp.Compiler.HotReloadBaseline
@@ -60,10 +61,17 @@ let private joinPath (segments: string list) = String.concat "." segments
 
 let private deduplicate list = list |> List.fold (fun acc item -> if List.contains item acc then acc else item :: acc) [] |> List.rev
 
+let private deduplicateSymbols symbols =
+    symbols
+    |> List.fold (fun acc symbol ->
+        if acc |> List.exists (fun existing -> existing.Stamp = symbol.Stamp) then acc else symbol :: acc)
+        []
+    |> List.rev
+
 let mapSymbolChangesToDelta
     (baseline: FSharpEmitBaseline)
     (changes: FSharpSymbolChanges)
-    : string list * MethodDefinitionKey list =
+    : string list * MethodDefinitionKey list * AccessorUpdate list =
 
     let candidateEntityNames (symbol: SymbolId) =
         let segments = symbol.Path @ [ symbol.LogicalName ]
@@ -105,6 +113,14 @@ let mapSymbolChangesToDelta
 
         deduplicate (explicitEntity @ pathSuffixes)
 
+    let tryResolveMethodKey symbol typeName =
+        baseline.MethodTokens
+        |> Map.toSeq
+        |> Seq.tryFind (fun (key, _) ->
+            key.DeclaringType = typeName
+            && String.Equals(key.Name, symbol.LogicalName, StringComparison.Ordinal))
+        |> Option.map fst
+
     let updatedMethods =
         changes.Updated
         |> List.choose (fun change ->
@@ -112,14 +128,35 @@ let mapSymbolChangesToDelta
             | SemanticEditKind.MethodBody when change.Symbol.Kind = SymbolKind.Value && not change.Symbol.IsSynthesized ->
                 change
                 |> candidateContainingTypeNames
-                |> List.tryPick (fun typeName ->
-                    baseline.MethodTokens
-                    |> Map.toSeq
-                    |> Seq.tryFind (fun (key, _) ->
-                        key.DeclaringType = typeName
-                        && String.Equals(key.Name, change.Symbol.LogicalName, StringComparison.Ordinal))
-                    |> Option.map fst)
+                |> List.tryPick (fun typeName -> tryResolveMethodKey change.Symbol typeName)
             | _ -> None)
         |> deduplicate
 
-    updatedTypes, updatedMethods
+    let accessorSymbols =
+        [ yield! FSharpSymbolChanges.propertyAccessorsAdded changes
+          yield! FSharpSymbolChanges.propertyAccessorsUpdated changes |> List.map (fun change -> change.Symbol)
+          yield! FSharpSymbolChanges.propertyAccessorsDeleted changes
+          yield! FSharpSymbolChanges.eventAccessorsAdded changes
+          yield! FSharpSymbolChanges.eventAccessorsUpdated changes |> List.map (fun change -> change.Symbol)
+          yield! FSharpSymbolChanges.eventAccessorsDeleted changes ]
+        |> List.filter (fun symbol ->
+            match symbol.MemberKind with
+            | Some SymbolMemberKind.Method -> false
+            | Some _ -> true
+            | None -> false)
+        |> deduplicateSymbols
+
+    let accessorUpdates =
+        accessorSymbols
+        |> List.choose (fun symbol ->
+            symbol
+            |> candidateEntityNames
+            |> tryResolveTypeName
+            |> Option.map (fun typeName ->
+                let methodKey = tryResolveMethodKey symbol typeName
+                { AccessorUpdate.Symbol = symbol
+                  ContainingType = typeName
+                  MemberKind = symbol.MemberKind.Value
+                  Method = methodKey }))
+
+    updatedTypes, updatedMethods, accessorUpdates
