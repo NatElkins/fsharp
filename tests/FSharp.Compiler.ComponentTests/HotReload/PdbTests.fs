@@ -161,18 +161,7 @@ module PdbTests =
             | Some bytes -> bytes
             | None -> failwith "Expected portable PDB delta"
 
-        use provider = MetadataReaderProvider.FromPortablePdbImage(ImmutableArray.CreateRange pdbBytes)
-        let reader = provider.GetMetadataReader()
-
-        let handles = reader.MethodDebugInformation |> Seq.toList
-        let handle = Assert.Single(handles)
-        let definitionHandle = handle.ToDefinitionHandle()
-        let definitionEntity: EntityHandle = MethodDefinitionHandle.op_Implicit definitionHandle
-        let definitionToken = MetadataTokens.GetToken definitionEntity
-        Assert.Equal(methodToken, definitionToken)
-
-        let _methodInfo = reader.GetMethodDebugInformation handle
-        ()
+        assertPdbContainsMethodToken pdbBytes methodToken
 
     [<Fact>]
     let ``emitDelta emits portable PDB delta for property accessor edits`` () =
