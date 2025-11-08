@@ -330,6 +330,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let propertyTokenMap = Dictionary<int, int>()
     let eventTokenMap = Dictionary<int, int>()
     let addedMethodTokens = Dictionary<MethodDefinitionKey, int>(HashIdentity.Structural)
+    let addedPropertyTokens = Dictionary<PropertyDefinitionKey, int>(HashIdentity.Structural)
     let baselineTypeNameByNew = Dictionary<string, string>(StringComparer.Ordinal)
 
     let getAliasCandidates (typeName: string) =
@@ -535,10 +536,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 addMapping propertyTokenMap newPropertyToken baselinePropertyToken
             | None when synthesizedBuckets.IsSome && IsCompilerGeneratedName typeDef.Name -> ()
             | None ->
-                let propertyDisplay = $"{baselineDeclaringType}::{propertyDef.Name}"
-                let message =
-                    $"Edit adds property '{propertyDisplay}'. Hot reload currently supports method-body changes only; please rebuild."
-                raise (HotReloadUnsupportedEditException message))
+                if not (addedPropertyTokens.ContainsKey propertyKey) then
+                    addedPropertyTokens[propertyKey] <- newPropertyToken)
 
         typeDef.Events.AsList()
         |> List.iter (fun eventDef ->
@@ -738,6 +737,17 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let propertyDefinitionIndex = DefinitionIndex<PropertyDefinitionKey>(propertyRowLookup, lastPropertyRowId)
     let processedPropertyKeys = HashSet<PropertyDefinitionKey>()
     let propertyHandleLookup = Dictionary<PropertyDefinitionKey, PropertyDefinitionHandle>()
+    let addedPropertyDeltaTokens = Dictionary<PropertyDefinitionKey, int>(HashIdentity.Structural)
+
+    for KeyValue(key, newToken) in addedPropertyTokens do
+        if not (propertyDefinitionIndex.IsAdded key) then
+            let rowId = propertyDefinitionIndex.Add key
+            let deltaToken = 0x17000000 ||| rowId
+            addedPropertyDeltaTokens[key] <- deltaToken
+            addMapping propertyTokenMap newToken deltaToken
+
+    for KeyValue(key, token) in addedPropertyDeltaTokens do
+        propertyTokenToKey[token] <- key
 
     let lastEventRowId = baselineTableRowCounts.[int TableIndex.Event]
     let eventDefinitionIndex = DefinitionIndex<EventDefinitionKey>(eventRowLookup, lastEventRowId)
@@ -824,7 +834,10 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let registerPropertyDefinition key handle =
         if processedPropertyKeys.Add key then
-            propertyDefinitionIndex.AddExisting key
+            if propertyDefinitionIndex.IsAdded key then
+                ()
+            else
+                propertyDefinitionIndex.AddExisting key
         propertyHandleLookup[key] <- handle
 
     let registerEventDefinition key handle =
@@ -832,33 +845,42 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             eventDefinitionIndex.AddExisting key
         eventHandleLookup[key] <- handle
 
+    let tryResolveAccessor methodToken =
+        let methodHandle = MetadataTokens.MethodDefinitionHandle methodToken
+        match propertyAccessorLookup.TryGetValue methodHandle with
+        | true, propertyHandle ->
+            if traceMethodUpdates.Value then
+                printfn "[fsharp-hotreload][accessor] property handle matched token=0x%08X" (MetadataTokens.GetToken(EntityHandle.op_Implicit propertyHandle))
+            let associationToken = MetadataTokens.GetToken(EntityHandle.op_Implicit propertyHandle)
+            let baselineToken = remapToken propertyTokenMap associationToken
+            match propertyTokenToKey.TryGetValue(baselineToken) with
+            | true, key ->
+                let baselineHandle = MetadataTokens.PropertyDefinitionHandle baselineToken
+                registerPropertyDefinition key baselineHandle
+            | _ -> ()
+        | _ ->
+            if traceMethodUpdates.Value then
+                printfn "[fsharp-hotreload][accessor] property handle missing for method token=0x%08X" (MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle))
+            match eventAccessorLookup.TryGetValue methodHandle with
+            | true, eventHandle ->
+                let associationToken = MetadataTokens.GetToken(EntityHandle.op_Implicit eventHandle)
+                let baselineToken = remapToken eventTokenMap associationToken
+                match eventTokenToKey.TryGetValue(baselineToken) with
+                | true, key ->
+                    let baselineHandle = MetadataTokens.EventDefinitionHandle baselineToken
+                    registerEventDefinition key baselineHandle
+                | _ -> ()
+            | _ -> ()
+
     for accessor in request.UpdatedAccessors do
         match accessor.Method with
         | Some methodKey ->
             match request.Baseline.MethodTokens |> Map.tryFind methodKey with
-            | Some methodToken ->
-                let methodHandle = MetadataTokens.MethodDefinitionHandle methodToken
-                match propertyAccessorLookup.TryGetValue methodHandle with
-                | true, propertyHandle ->
-                    let associationToken = MetadataTokens.GetToken(EntityHandle.op_Implicit propertyHandle)
-                    let baselineToken = remapToken propertyTokenMap associationToken
-                    match propertyTokenToKey.TryGetValue(baselineToken) with
-                    | true, key ->
-                        let baselineHandle = MetadataTokens.PropertyDefinitionHandle baselineToken
-                        registerPropertyDefinition key baselineHandle
-                    | _ -> ()
-                | _ ->
-                    match eventAccessorLookup.TryGetValue methodHandle with
-                    | true, eventHandle ->
-                        let associationToken = MetadataTokens.GetToken(EntityHandle.op_Implicit eventHandle)
-                        let baselineToken = remapToken eventTokenMap associationToken
-                        match eventTokenToKey.TryGetValue(baselineToken) with
-                        | true, key ->
-                            let baselineHandle = MetadataTokens.EventDefinitionHandle baselineToken
-                            registerEventDefinition key baselineHandle
-                        | _ -> ()
-                    | _ -> ()
-            | _ -> ()
+            | Some methodToken -> tryResolveAccessor methodToken
+            | None ->
+                match addedMethodTokens.TryGetValue methodKey with
+                | true, methodToken -> tryResolveAccessor methodToken
+                | _ -> ()
         | None -> ()
 
     let updatedTypeTokens =
@@ -939,6 +961,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                           IsAdded = isAdded
                           Handle = handle }
                 | _ -> None)
+
+        if traceMethodUpdates.Value then
+            printfn "[fsharp-hotreload][property-rows] count=%d" propertyDefinitionRowsSnapshot.Length
 
         let eventDefinitionRowsSnapshot =
             eventDefinitionIndex.Rows
@@ -1251,9 +1276,14 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             addedMethodDeltaTokens
             |> Seq.fold (fun acc (KeyValue(key, token)) -> acc |> Map.add key token) updatedBaselineCore.MethodTokens
 
+        let updatedPropertyTokenMap =
+            addedPropertyDeltaTokens
+            |> Seq.fold (fun acc (KeyValue(key, token)) -> acc |> Map.add key token) updatedBaselineCore.PropertyTokens
+
         let updatedBaseline =
             { updatedBaselineCore with
                 MethodTokens = updatedMethodTokenMap
+                PropertyTokens = updatedPropertyTokenMap
                 PropertyMapEntries = updatedPropertyMapEntries
                 EventMapEntries = updatedEventMapEntries
                 MethodSemanticsEntries = updatedMethodSemanticsEntries }

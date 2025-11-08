@@ -159,6 +159,57 @@ module DeltaEmitterTests =
             (mkILExportedTypes [])
             "v4.0.30319"
 
+    let private createPropertyHostBaselineModule () =
+        let ilg = PrimaryAssemblyILGlobals
+        let stringType = ilg.typ_String
+        let document = ILSourceDocument.Create(None, None, None, "PropertyBaseline.fs")
+        let debugPoint = ILDebugPoint.Create(document, 1, 1, 1, 40)
+
+        let methodBody =
+            mkMethodBody(
+                false,
+                [],
+                2,
+                nonBranchingInstrsToCode [ I_seqpoint debugPoint; I_ldstr "Baseline host" ; I_ret ],
+                Some debugPoint,
+                None)
+
+        let methodDef =
+            mkILNonGenericInstanceMethod(
+                "GetMessage",
+                ILMemberAccess.Public,
+                [],
+                mkILReturn stringType,
+                methodBody)
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    "Sample.PropertyDemo",
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ methodDef ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField
+                )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
     let private createModuleWithParameterizedMethod () =
         let ilg = PrimaryAssemblyILGlobals
         let baseMethod = createMethod ilg "GetValue" 1
@@ -643,6 +694,70 @@ module DeltaEmitterTests =
             |> Array.toList
 
         Assert.Equal<int list>(expectedParamRows, actualRows)
+
+    [<Fact>]
+    let ``emitDelta adds property metadata rows for new property`` () =
+        let baselineArtifacts =
+            TestHelpers.createBaselineFromModule (createPropertyHostBaselineModule ())
+        let updatedModule = TestHelpers.createPropertyModule "Property addition message"
+
+        let getterKey =
+            { MethodDefinitionKey.DeclaringType = "Sample.PropertyDemo"
+              Name = "get_Message"
+              GenericArity = 0
+              ParameterTypes = []
+              ReturnType = PrimaryAssemblyILGlobals.typ_String }
+
+        let accessorUpdate =
+            TestHelpers.mkAccessorUpdate "Sample.PropertyDemo" (SymbolMemberKind.PropertyGet "Message") getterKey
+
+        let request =
+            {
+                IlxDeltaRequest.Baseline = baselineArtifacts.Baseline
+                UpdatedTypes = [ "Sample.PropertyDemo" ]
+                UpdatedMethods = []
+                UpdatedAccessors = [ accessorUpdate ]
+                Module = updatedModule
+                SymbolChanges = None
+                CurrentGeneration = 1
+                PreviousGenerationId = None
+                SynthesizedNames = None
+            }
+
+        let delta = emitDelta request
+
+        let baselinePropertyCount = baselineArtifacts.Baseline.Metadata.TableRowCounts.[int TableIndex.Property]
+
+        let propertyAdds =
+            delta.EncLog
+            |> Array.filter (fun (table, _, op) -> table = TableIndex.Property && op = EditAndContinueOperation.AddProperty)
+
+        let propertyMapAdds =
+            delta.EncLog
+            |> Array.filter (fun (table, _, op) -> table = TableIndex.PropertyMap && op = EditAndContinueOperation.AddProperty)
+
+        Assert.Single propertyAdds |> ignore
+        Assert.Single propertyMapAdds |> ignore
+
+        let propertyRowId =
+            propertyAdds
+            |> Array.exactlyOne
+            |> fun (_, row, _) -> row
+
+        Assert.Equal(baselinePropertyCount + 1, propertyRowId)
+
+        match delta.UpdatedBaseline with
+        | Some updatedBaseline ->
+            let propertyKey =
+                { PropertyDefinitionKey.DeclaringType = "Sample.PropertyDemo"
+                  Name = "Message"
+                  PropertyType = PrimaryAssemblyILGlobals.typ_String
+                  IndexParameterTypes = [] }
+
+            Assert.True(updatedBaseline.PropertyTokens.ContainsKey propertyKey, "Updated baseline missing property token.")
+            Assert.True(updatedBaseline.PropertyMapEntries.ContainsKey "Sample.PropertyDemo", "Updated baseline missing property map entry.")
+        | None ->
+            Assert.True(false, "Updated baseline missing.")
 
     [<Fact>]
     let ``metadata validator tool is available`` () =
