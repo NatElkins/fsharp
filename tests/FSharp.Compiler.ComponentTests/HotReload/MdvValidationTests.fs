@@ -81,7 +81,7 @@ module MdvValidationTests =
             |> Array.exists (fun (table, row, op) ->
                 table = TableIndex.MethodDef
                 && row = methodRowId
-                && op = EditAndContinueOperation.Default)
+                && (op = EditAndContinueOperation.Default || op = EditAndContinueOperation.AddMethod))
         Assert.True(methodEntry, "Expected EncLog entry for updated method definition")
 
     let private createTempProject () =
@@ -1340,6 +1340,60 @@ type EventDemo() =
             if not (keepArtifacts ()) then
                 try File.Delete(meta1Path) with _ -> ()
                 try File.Delete(meta2Path) with _ -> ()
+
+        if not (keepArtifacts ()) then
+            try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
+            match baselineArtifacts.PdbPath with
+            | Some path -> try File.Delete(path) with _ -> ()
+            | None -> ()
+
+    [<Fact>]
+    let ``mdv helper validates multi-generation event accessor metadata`` () =
+        let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createEventHostBaselineModule ())
+        let typeName = "Sample.EventDemo"
+        let addKey = TestHelpers.methodKey typeName "add_OnChanged" [ PrimaryAssemblyILGlobals.typ_Object ] ILType.Void
+
+        use deltaDir = new TemporaryDirectory()
+        let meta1Path = Path.Combine(deltaDir.Path, "1.meta")
+        let meta2Path = Path.Combine(deltaDir.Path, "2.meta")
+
+        let request1 : IlxDeltaRequest =
+            { Baseline = baselineArtifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ addKey ]
+              UpdatedAccessors = [ TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.EventAdd "OnChanged") addKey ]
+              Module = TestHelpers.createEventModule "Event helper generation 1"
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta1 = emitDelta request1
+        File.WriteAllBytes(meta1Path, delta1.Metadata)
+
+        let baseline2 =
+            match delta1.UpdatedBaseline with
+            | Some b -> b
+            | None -> failwith "First event delta did not provide an updated baseline."
+
+        let methodToken =
+            match delta1.AddedOrChangedMethods with
+            | info :: _ -> info.MethodToken
+            | [] -> failwith "Event accessor delta did not record method info."
+
+        let request2 : IlxDeltaRequest =
+            { request1 with
+                Baseline = baseline2
+                UpdatedMethods = [ addKey ]
+                Module = TestHelpers.createEventModule "Event helper generation 2"
+                CurrentGeneration = 2
+                PreviousGenerationId = Some delta1.GenerationId }
+
+        let delta2 = emitDelta request2
+        File.WriteAllBytes(meta2Path, delta2.Metadata)
+
+        assertMethodEncLog delta1 methodToken
+        assertMethodEncLog delta2 methodToken
 
         if not (keepArtifacts ()) then
             try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
