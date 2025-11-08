@@ -159,6 +159,55 @@ module DeltaEmitterTests =
             (mkILExportedTypes [])
             "v4.0.30319"
 
+    let private createModuleWithParameterizedMethod () =
+        let ilg = PrimaryAssemblyILGlobals
+        let baseMethod = createMethod ilg "GetValue" 1
+
+        let paramBody =
+            mkMethodBody (
+                false,
+                [],
+                2,
+                nonBranchingInstrsToCode [ I_ldarg 0us; I_ldarg 1us; AI_add; I_ret ],
+                None,
+                None)
+
+        let paramMethod =
+            mkILNonGenericStaticMethod(
+                "SumValues",
+                ILMemberAccess.Public,
+                [ mkILParamNamed("left", ilg.typ_Int32); mkILParamNamed("right", ilg.typ_Int32) ],
+                mkILReturn ilg.typ_Int32,
+                paramBody)
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    "Sample.Multi",
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ baseMethod; paramMethod ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField
+                )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
     let private createStringModule (message: string) =
         let ilg = PrimaryAssemblyILGlobals
         let methodBody =
@@ -550,6 +599,50 @@ module DeltaEmitterTests =
             Assert.Equal(addedToken, updatedBaseline.MethodTokens[addedKey])
         | None ->
             Assert.True(false, "Updated baseline missing.")
+
+    [<Fact>]
+    let ``emitDelta adds parameter metadata rows for new method`` () =
+        let baselineArtifacts =
+            TestHelpers.createBaselineFromModule (createModuleWithMethods [ "GetValue", 1 ])
+        let updatedModule = createModuleWithParameterizedMethod ()
+
+        let request =
+            {
+                IlxDeltaRequest.Baseline = baselineArtifacts.Baseline
+                UpdatedTypes = [ "Sample.Multi" ]
+                UpdatedMethods = []
+                UpdatedAccessors = []
+                Module = updatedModule
+                SymbolChanges = None
+                CurrentGeneration = 1
+                PreviousGenerationId = None
+                SynthesizedNames = None
+            }
+
+        let delta = emitDelta request
+
+        Assert.Equal(1, List.length delta.MethodBodies)
+        let addedToken = Assert.Single(delta.UpdatedMethodTokens)
+        Assert.True(addedToken <> 0, "Added method token missing.")
+
+        let paramAdds =
+            delta.EncLog
+            |> Array.filter (fun (table, _, _) -> table = TableIndex.Param)
+
+        Assert.Equal(2, paramAdds.Length)
+
+        let baselineParamCount = baselineArtifacts.Baseline.Metadata.TableRowCounts.[int TableIndex.Param]
+        let expectedParamRows = [ baselineParamCount + 1; baselineParamCount + 2 ]
+
+        let actualRows =
+            paramAdds
+            |> Array.map (fun (_, row, op) ->
+                Assert.Equal(EditAndContinueOperation.AddParameter, op)
+                row)
+            |> Array.sort
+            |> Array.toList
+
+        Assert.Equal<int list>(expectedParamRows, actualRows)
 
     [<Fact>]
     let ``metadata validator tool is available`` () =
