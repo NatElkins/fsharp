@@ -1548,6 +1548,107 @@ module Demo =
             try Directory.Delete(projectDir, true) with _ -> ()
 
     [<Fact>]
+    let ``mdv validates consecutive async method edits`` () =
+        let checker =
+            FSharpChecker.Create(
+                keepAssemblyContents = true,
+                enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                captureIdentifiersWhenParsing = false
+            )
+
+        let projectDir, fsPath, dllPath = createTempProject ()
+        let baselineSource =
+            """
+namespace MdVAsync
+
+module Demo =
+    let GetMessage () =
+        async {
+            let prefix = "Integration async baseline"
+            return sprintf "%s %d" prefix 1
+        }
+"""
+
+        let firstUpdateSource =
+            """
+namespace MdVAsync
+
+module Demo =
+    let GetMessage () =
+        async {
+            let prefix = "Integration async updated v2"
+            return sprintf "%s %d" prefix 2
+        }
+"""
+
+        let secondUpdateSource =
+            """
+namespace MdVAsync
+
+module Demo =
+    let GetMessage () =
+        async {
+            let prefix = "Integration async updated v3"
+            return sprintf "%s %d" prefix 3
+        }
+"""
+
+        let deltaDir = Path.Combine(projectDir, "mdv-async-multi-delta")
+
+        try
+            Directory.CreateDirectory(deltaDir) |> ignore
+            let baselineOptions, _ = compileProject checker fsPath dllPath baselineSource
+            let baselineCopy = Path.Combine(projectDir, "baseline.dll")
+            File.Copy(dllPath, baselineCopy, true)
+
+            match checker.StartHotReloadSession(baselineOptions) |> Async.RunSynchronously with
+            | Error error -> failwithf "StartHotReloadSession failed: %A" error
+            | Ok () -> ()
+
+            let updatedOptions1, _ = compileProject checker fsPath dllPath firstUpdateSource
+            let delta1 =
+                match checker.EmitHotReloadDelta(updatedOptions1) |> Async.RunSynchronously with
+                | Error error -> failwithf "EmitHotReloadDelta (generation 1) failed: %A" error
+                | Ok delta -> delta
+
+            let meta1Path = Path.Combine(deltaDir, "1.meta")
+            let il1Path = Path.Combine(deltaDir, "1.il")
+            File.WriteAllBytes(meta1Path, delta1.Metadata)
+            File.WriteAllBytes(il1Path, delta1.IL)
+
+            File.WriteAllText(fsPath, secondUpdateSource)
+            let updatedOptions2, _ = compileProject checker fsPath dllPath secondUpdateSource
+            let delta2 =
+                match checker.EmitHotReloadDelta(updatedOptions2) |> Async.RunSynchronously with
+                | Error error -> failwithf "EmitHotReloadDelta (generation 2) failed: %A" error
+                | Ok delta -> delta
+
+            Assert.NotEqual(Guid.Empty, delta2.BaseGenerationId)
+
+            let meta2Path = Path.Combine(deltaDir, "2.meta")
+            let il2Path = Path.Combine(deltaDir, "2.il")
+            File.WriteAllBytes(meta2Path, delta2.Metadata)
+            File.WriteAllBytes(il2Path, delta2.IL)
+
+            match runMdv baselineCopy meta1Path il1Path with
+            | Some output ->
+                Assert.Contains("Generation 1", output)
+                assertGenerationContains output 1 "Integration async updated v2"
+            | None ->
+                printfn "mdv not available; skipping async Generation 1 verification."
+
+            match runMdv baselineCopy meta2Path il2Path with
+            | Some output ->
+                assertGenerationContains output 1 "Integration async updated v3"
+            | None ->
+                printfn "mdv not available; skipping async Generation 2 verification."
+        finally
+            try checker.InvalidateAll() with _ -> ()
+            try checker.EndHotReloadSession() with _ -> ()
+            try Directory.Delete(deltaDir, true) with _ -> ()
+            try Directory.Delete(projectDir, true) with _ -> ()
+
+    [<Fact>]
     let ``mdv validates method-body edit with async state machine`` () =
         let checker =
             FSharpChecker.Create(
