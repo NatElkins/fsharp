@@ -496,3 +496,59 @@ module PdbTests =
             match artifacts.PdbPath with
             | Some path when File.Exists(path) -> File.Delete(path)
             | _ -> ()
+
+
+    [<Fact>]
+    let ``emitDelta emits portable PDB deltas across event accessor generations`` () =
+        let artifacts = TestHelpers.createBaselineFromModule (TestHelpers.createEventModule "Event helper baseline payload")
+        let typeName = "Sample.EventDemo"
+        let methodKey = TestHelpers.methodKey typeName "add_OnChanged" [ PrimaryAssemblyILGlobals.typ_Object ] ILType.Void
+        let methodToken = artifacts.Baseline.MethodTokens[methodKey]
+
+        let emitAndAssert request =
+            let delta = emitDelta request
+            let pdbBytes =
+                match delta.Pdb with
+                | Some bytes -> bytes
+                | None -> failwith "Expected portable PDB delta for event accessor edit."
+            assertPdbContainsMethodToken pdbBytes methodToken
+            delta
+
+        let request1 : IlxDeltaRequest =
+            { Baseline = artifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = [ TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.EventAdd "OnChanged") methodKey ]
+              Module = TestHelpers.createEventModule "Event helper generation 1"
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta1 = emitAndAssert request1
+
+        let baseline2 =
+            match delta1.UpdatedBaseline with
+            | Some b -> b
+            | None -> failwith "Generation 1 delta did not expose an updated baseline."
+
+        let request2 : IlxDeltaRequest =
+            { Baseline = baseline2
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = [ TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.EventAdd "OnChanged") methodKey ]
+              Module = TestHelpers.createEventModule "Event helper generation 2"
+              SymbolChanges = None
+              CurrentGeneration = 2
+              PreviousGenerationId = Some delta1.GenerationId
+              SynthesizedNames = None }
+
+        let delta2 = emitAndAssert request2
+        Assert.NotEqual(Guid.Empty, delta2.BaseGenerationId)
+        Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
+
+        if not (keepArtifacts ()) then
+            if File.Exists(artifacts.AssemblyPath) then File.Delete(artifacts.AssemblyPath)
+            match artifacts.PdbPath with
+            | Some path when File.Exists(path) -> File.Delete(path)
+            | _ -> ()
