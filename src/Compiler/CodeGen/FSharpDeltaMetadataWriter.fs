@@ -300,10 +300,9 @@ let emit
                     | None -> invalidOp "Property map rows marked as added require a property list pointer."
                 metadataBuilder.AddPropertyMap(parentHandle, propertyListHandle) |> ignore
 
-            let operation = if row.IsAdded then EditAndContinueOperation.AddProperty else EditAndContinueOperation.Default
-            metadataBuilder.AddEncLogEntry(handle, operation) |> ignore
+            metadataBuilder.AddEncLogEntry(handle, EditAndContinueOperation.Default) |> ignore
             metadataBuilder.AddEncMapEntry(handle) |> ignore
-            encLog.Add(struct (TableIndex.PropertyMap, row.RowId, operation))
+            encLog.Add(struct (TableIndex.PropertyMap, row.RowId, EditAndContinueOperation.Default))
             encMap.Add(struct (TableIndex.PropertyMap, row.RowId))
 
         for row in eventMapRows do
@@ -316,10 +315,9 @@ let emit
                     | None -> invalidOp "Event map rows marked as added require an event list pointer."
                 metadataBuilder.AddEventMap(parentHandle, eventListHandle) |> ignore
 
-            let operation = if row.IsAdded then EditAndContinueOperation.AddEvent else EditAndContinueOperation.Default
-            metadataBuilder.AddEncLogEntry(handle, operation) |> ignore
+            metadataBuilder.AddEncLogEntry(handle, EditAndContinueOperation.Default) |> ignore
             metadataBuilder.AddEncMapEntry(handle) |> ignore
-            encLog.Add(struct (TableIndex.EventMap, row.RowId, operation))
+            encLog.Add(struct (TableIndex.EventMap, row.RowId, EditAndContinueOperation.Default))
             encMap.Add(struct (TableIndex.EventMap, row.RowId))
 
         for row in methodSemanticsRows do
@@ -332,10 +330,9 @@ let emit
                 MetadataTokens.Handle(TableIndex.MethodSemantics, row.RowId)
                 |> EntityHandle.op_Explicit
 
-            let operation = if row.IsAdded then EditAndContinueOperation.AddMethod else EditAndContinueOperation.Default
-            metadataBuilder.AddEncLogEntry(semanticsHandle, operation) |> ignore
+            metadataBuilder.AddEncLogEntry(semanticsHandle, EditAndContinueOperation.Default) |> ignore
             metadataBuilder.AddEncMapEntry(semanticsHandle) |> ignore
-            encLog.Add(struct (TableIndex.MethodSemantics, row.RowId, operation))
+            encLog.Add(struct (TableIndex.MethodSemantics, row.RowId, EditAndContinueOperation.Default))
             encMap.Add(struct (TableIndex.MethodSemantics, row.RowId))
 
         let debugRows =

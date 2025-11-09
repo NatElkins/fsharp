@@ -304,12 +304,13 @@ module FSharpDeltaMetadataWriterTests =
 
         Assert.Equal(1, tableCount TableIndex.Property)
         Assert.Equal(1, tableCount TableIndex.PropertyMap)
-        let hasEncEntry table =
+        let tryOperation table =
             metadataDelta.EncLog
-            |> Array.exists (fun (index, _, _) -> index = table)
+            |> Array.tryFind (fun (index, _, _) -> index = table)
+            |> Option.map (fun (_, _, op) -> op)
 
-        Assert.True(hasEncEntry TableIndex.Property, "Expected EncLog entry for Property table")
-        Assert.True(hasEncEntry TableIndex.PropertyMap, "Expected EncLog entry for PropertyMap table")
+        Assert.Equal(Some EditAndContinueOperation.AddProperty, tryOperation TableIndex.Property)
+        Assert.Equal(Some EditAndContinueOperation.Default, tryOperation TableIndex.PropertyMap)
         Assert.True(metadataDelta.Metadata.Length > 0)
 
     [<Fact>]
@@ -397,10 +398,11 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(1, tableCount TableIndex.EventMap)
         Assert.Equal(1, tableCount TableIndex.MethodSemantics)
 
-        let hasEncEntry table operation =
+        let tryOperation table =
             metadataDelta.EncLog
-            |> Array.exists (fun (encTable, _, encOp) -> encTable = table && encOp = operation)
+            |> Array.tryFind (fun (encTable, _, _) -> encTable = table)
+            |> Option.map (fun (_, _, op) -> op)
 
-        Assert.True(hasEncEntry TableIndex.Event EditAndContinueOperation.AddEvent, "Expected EncLog entry for Event table")
-        Assert.True(hasEncEntry TableIndex.EventMap EditAndContinueOperation.AddEvent, "Expected EncLog entry for EventMap table")
-        Assert.True(hasEncEntry TableIndex.MethodSemantics EditAndContinueOperation.AddMethod, "Expected EncLog entry for MethodSemantics table")
+        Assert.Equal(Some EditAndContinueOperation.AddEvent, tryOperation TableIndex.Event)
+        Assert.Equal(Some EditAndContinueOperation.Default, tryOperation TableIndex.EventMap)
+        Assert.Equal(Some EditAndContinueOperation.Default, tryOperation TableIndex.MethodSemantics)
