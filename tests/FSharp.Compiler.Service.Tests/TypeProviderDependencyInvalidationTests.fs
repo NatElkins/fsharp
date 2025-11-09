@@ -874,3 +874,32 @@ module UseShapeProvided =
                 printfn "[fs1023] preserving temp dir %s" tempDir
             else
                 try Directory.Delete(tempDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``attribute propagation round trips metadata`` () =
+        let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(tempDir) |> ignore
+
+        try
+            let providerPath = Path.Combine(tempDir, "Fs1023Provider.fs")
+            let providerDll = Path.Combine(tempDir, "Fs1023Provider.dll")
+            let modelPath = Path.Combine(tempDir, "Model.fs")
+            let consumerPath = Path.Combine(tempDir, "Consumer.fs")
+            let outputDll = Path.Combine(tempDir, "Consumer.dll")
+
+            writeFile providerPath providerSource
+            writeFile modelPath modelSourceInitial
+            writeFile consumerPath consumerSource
+
+            let assertions assemblyPath =
+                let getter = assertProvidedTypeProperties assemblyPath "Fs1023Consumer.Provided"
+                Assert.Equal("value:false:false", getter "OptionalParameter")
+                Assert.Equal("value:true:true:42", getter "OptionalLiteralParameter")
+                Assert.Equal("index:Int32", getter "IndexerParameters")
+
+            compileAndAssert providerPath providerDll [ modelPath; consumerPath ] outputDll assertions
+        finally
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()
