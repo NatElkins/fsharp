@@ -106,6 +106,7 @@ type MetadataDelta =
         EncMap: (TableIndex * int) array
         TableRowCounts: int[]
         HeapSizes: MetadataHeapSizes
+        Tables: DeltaMetadataTables.TableRows
     }
 
 let emit
@@ -395,4 +396,5 @@ let emit
           EncLog = encLog |> Seq.toArray |> Array.map (fun struct (a, b, c) -> (a, b, c))
           EncMap = encMap |> Seq.toArray |> Array.map (fun struct (a, b) -> (a, b))
           TableRowCounts = tableRowCounts
-          HeapSizes = heapSizes }
+          HeapSizes = heapSizes
+          Tables = tableMirror.TableRows }

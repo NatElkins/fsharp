@@ -27,6 +27,16 @@ type DeltaMetadataTables() =
     let eventMapTable = MetadataTable<UnsharedRow>.New("EventMap", HashIdentity.Structural)
     let methodSemanticsTable = MetadataTable<UnsharedRow>.New("MethodSemantics", HashIdentity.Structural)
 
+    type TableRows =
+        { Module: UnsharedRow[]
+          MethodDef: UnsharedRow[]
+          Param: UnsharedRow[]
+          Property: UnsharedRow[]
+          Event: UnsharedRow[]
+          PropertyMap: UnsharedRow[]
+          EventMap: UnsharedRow[]
+          MethodSemantics: UnsharedRow[] }
+
     let inline addStringValue (value: string) =
         if String.IsNullOrEmpty value then 0 else strings.FindOrAddSharedEntry value
 
@@ -251,6 +261,16 @@ type DeltaMetadataTables() =
           UserStringHeapSize = 0
           BlobHeapSize = _.BlobHeapSize
           GuidHeapSize = _.GuidHeapSize }
+
+    member _.TableRows : TableRows =
+        { Module = moduleTable.EntriesAsArray
+          MethodDef = methodTable.EntriesAsArray
+          Param = paramTable.EntriesAsArray
+          Property = propertyTable.EntriesAsArray
+          Event = eventTable.EntriesAsArray
+          PropertyMap = propertyMapTable.EntriesAsArray
+          EventMap = eventMapTable.EntriesAsArray
+          MethodSemantics = methodSemanticsTable.EntriesAsArray }
 
     member _.TableRowCounts : int[] =
         let counts = Array.zeroCreate MetadataTokens.TableCount
