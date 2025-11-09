@@ -304,6 +304,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     use peStream = new MemoryStream(assemblyBytes, writable = false)
     use peReader = new PEReader(peStream)
     let metadataReader = peReader.GetMetadataReader()
+    let moduleDef = metadataReader.GetModuleDefinition()
+    let moduleName = metadataReader.GetString moduleDef.Name
     let metadataBuilder = builder.MetadataBuilder
     let stringTokenCache = Dictionary<int, int>()
     let userStringUpdates = ResizeArray<int * int * string>()
@@ -1258,7 +1260,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         let metadataDelta =
             MetadataWriter.emit
                 metadataBuilder
-                metadataReader
+                moduleName
                 encId
                 encBaseId
                 moduleMvid

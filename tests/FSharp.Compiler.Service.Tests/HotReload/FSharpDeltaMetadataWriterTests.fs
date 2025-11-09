@@ -296,10 +296,12 @@ module FSharpDeltaMetadataWriterTests =
                 FirstPropertyRowId = Some 1
                 IsAdded = true } ]
 
+        let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
+
         let metadataDelta =
             DeltaWriter.emit
                 builder.MetadataBuilder
-                metadataReader
+                moduleName
                 (Guid.NewGuid())
                 (Guid.NewGuid())
                 (Guid.NewGuid())
@@ -401,10 +403,12 @@ module FSharpDeltaMetadataWriterTests =
                 IsAdded = true
                 AssociationInfo = Some(MethodSemanticsAssociation.EventAssociation(eventKey, 1)) } ]
 
+        let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
+
         let metadataDelta =
             DeltaWriter.emit
                 builder.MetadataBuilder
-                metadataReader
+                moduleName
                 (Guid.NewGuid())
                 (Guid.NewGuid())
                 (Guid.NewGuid())

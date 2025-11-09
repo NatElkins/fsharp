@@ -110,7 +110,7 @@ type MetadataDelta =
 
 let emit
     (metadataBuilder: MetadataBuilder)
-    (metadataReader: MetadataReader)
+    (moduleName: string)
     (encId: Guid)
     (encBaseId: Guid)
     (moduleId: Guid)
@@ -200,8 +200,6 @@ let emit
         metadataBuilder.SetCapacity(TableIndex.MethodSpec, 0)
         metadataBuilder.SetCapacity(TableIndex.GenericParamConstraint, 0)
 
-        let moduleDef = metadataReader.GetModuleDefinition()
-        let moduleName = metadataReader.GetString moduleDef.Name
         let moduleNameHandle = metadataBuilder.GetOrAddString(moduleName)
         let mvidHandle = metadataBuilder.GetOrAddGuid(moduleId)
         let encIdHandle = metadataBuilder.GetOrAddGuid(encId)
