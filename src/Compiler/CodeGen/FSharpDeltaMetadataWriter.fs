@@ -12,6 +12,7 @@ open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.CodeGen.DeltaTableLayout
 open FSharp.Compiler.CodeGen.DeltaIndexSizing
+open FSharp.Compiler.CodeGen.DeltaMetadataSerializer
 
 let private shouldTraceMetadata () =
     match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METADATA") with
@@ -111,6 +112,7 @@ type MetadataDelta =
         Tables: DeltaMetadataTables.TableRows
         TableBitMasks: TableBitMasks
         IndexSizes: CodedIndexSizes
+        TableStream: DeltaTableStream
     }
 
 let emit
@@ -149,6 +151,12 @@ let emit
 
         let emptyCounts = Array.zeroCreate MetadataTokens.TableCount
         let emptyBitMasks = DeltaTableLayout.computeBitMasks emptyCounts
+        let emptyIndexSizes =
+            DeltaIndexSizing.compute
+                emptyCounts
+                0
+                0
+                0
 
         { Metadata = Array.empty
           StringHeap = Array.empty
@@ -159,7 +167,12 @@ let emit
           TableRowCounts = emptyCounts
           HeapSizes = emptyHeapSizes
           Tables = emptyTableRows
-          TableBitMasks = emptyBitMasks }
+          TableBitMasks = emptyBitMasks
+          IndexSizes = emptyIndexSizes
+          TableStream =
+            { Bytes = Array.empty
+              UnpaddedSize = 0
+              PaddedSize = 0 } }
     else
 
         // Ensure tables not emitted in the current delta remain empty to satisfy metadata writer invariants.
@@ -415,6 +428,17 @@ let emit
                 heapSizes.BlobHeapSize
                 heapSizes.GuidHeapSize
 
+        let tableStreamInput =
+            { DeltaMetadataSerializer.DeltaTableSerializerInput.Tables = tableMirror.TableRows
+              RowCounts = tableRowCounts
+              BitMasks = tableBitMasks
+              IndexSizes = indexSizes
+              StringHeap = tableMirror.StringHeapBytes
+              BlobHeap = tableMirror.BlobHeapBytes
+              GuidHeap = tableMirror.GuidHeapBytes }
+
+        let tableStream = DeltaMetadataSerializer.buildTableStream tableStreamInput
+
         if shouldTraceMetadata () then
             printfn "[fsharp-hotreload][metadata-writer] tableCounts method=%d param=%d" methodUpdateCount parameterUpdateCount
 
@@ -428,4 +452,5 @@ let emit
           HeapSizes = heapSizes
           Tables = tableMirror.TableRows
           TableBitMasks = tableBitMasks
-          IndexSizes = indexSizes }
+          IndexSizes = indexSizes
+          TableStream = tableStream }
