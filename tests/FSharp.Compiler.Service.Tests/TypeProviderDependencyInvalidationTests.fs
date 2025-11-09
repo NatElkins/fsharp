@@ -706,33 +706,40 @@ type ProvidedProvided = Fs1023.ProvidedGenerator<Source = ProvidedGenerated>
             Assert.Contains("get_Value", memberNames)
             Assert.Contains("MapParameters", memberNames)
 
+            let assertProperties assemblyPath =
+                let consumerAssemblyBytes = File.ReadAllBytes(assemblyPath)
+                let consumerAssembly = Assembly.Load(consumerAssemblyBytes)
+                let providedType = consumerAssembly.GetType("Fs1023Consumer.Provided", throwOnError = true, ignoreCase = false)
+
+                let staticPropertyNames =
+                    providedType.GetProperties(BindingFlags.Public ||| BindingFlags.Static)
+                    |> Array.map (fun p -> p.Name)
+
+                let instancePropertyNames =
+                    providedType.GetProperties(BindingFlags.Public ||| BindingFlags.Instance)
+                    |> Array.map (fun p -> p.Name)
+
+                printfn "[fs1023][reflection] %s static=%A instance=%A" (Path.GetFileName assemblyPath) staticPropertyNames instancePropertyNames
+
+                let getStaticStringProperty name =
+                    let propertyInfo = providedType.GetProperty(name, BindingFlags.Public ||| BindingFlags.Static)
+                    Assert.NotNull(propertyInfo)
+                    propertyInfo.GetValue(null) :?> string
+
+                Assert.Equal("Value", getStaticStringProperty "Value")
+                Assert.Equal("value:required:normal;rest:required:paramarray", getStaticStringProperty "MapParameters")
+                Assert.Equal("value:false:false", getStaticStringProperty "OptionalParameter")
+                Assert.Equal("value:true:true:42", getStaticStringProperty "OptionalLiteralParameter")
+                Assert.Equal("index:Int32", getStaticStringProperty "IndexerParameters")
+
             compile projectArgs
+            assertProperties outputDll
 
-            let consumerAssemblyBytes = File.ReadAllBytes(outputDll)
-            let consumerAssembly = Assembly.Load(consumerAssemblyBytes)
-            let providedType = consumerAssembly.GetType("Fs1023Consumer.Provided", throwOnError = true, ignoreCase = false)
-
-            let staticPropertyNames =
-                providedType.GetProperties(BindingFlags.Public ||| BindingFlags.Static)
-                |> Array.map (fun p -> p.Name)
-
-            let instancePropertyNames =
-                providedType.GetProperties(BindingFlags.Public ||| BindingFlags.Instance)
-                |> Array.map (fun p -> p.Name)
-
-            printfn "[fs1023][reflection] static properties=%A instance properties=%A" staticPropertyNames instancePropertyNames
-
-            let getStaticStringProperty name =
-                let propertyInfo = providedType.GetProperty(name, BindingFlags.Public ||| BindingFlags.Static)
-                Assert.NotNull(propertyInfo)
-                propertyInfo.GetValue(null) :?> string
-
-            printfn "[fs1023] keep-temp-env=%A" (Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP"))
-            Assert.Equal("Value", getStaticStringProperty "Value")
-            Assert.Equal("value:required:normal;rest:required:paramarray", getStaticStringProperty "MapParameters")
-            Assert.Equal("value:false:false", getStaticStringProperty "OptionalParameter")
-            Assert.Equal("value:true:true:42", getStaticStringProperty "OptionalLiteralParameter")
-            Assert.Equal("index:Int32", getStaticStringProperty "IndexerParameters")
+            // Recompile with /standalone to exercise the static-link path and ensure IlxGen-emitted IL survives relocation.
+            let standaloneDll = Path.Combine(tempDir, "Consumer.standalone.dll")
+            let standaloneArgs = Array.append projectArgs [| "--standalone"; "--out:" + standaloneDll |]
+            compile standaloneArgs
+            assertProperties standaloneDll
         finally
             if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
                 printfn "[fs1023] preserving temp dir %s" tempDir
