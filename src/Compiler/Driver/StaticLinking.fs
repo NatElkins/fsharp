@@ -499,14 +499,21 @@ let StaticLink (ctok, tcConfig: TcConfig, tcImports: TcImports, tcGlobals: TcGlo
 
 #if !NO_TYPEPROVIDERS
     let providerGeneratedAssemblies =
+        if tcImports.SkipProviderStaticLinking then
+            []
+        else
+            [ // Add all EST-generated assemblies into the static linking set
+                for KeyValue(_, importedBinary: ImportedBinary) in tcImports.DllTable do
+                    if importedBinary.IsProviderGenerated then
+                        match importedBinary.ProviderGeneratedStaticLinkMap with
+                        | None -> ()
+                        | Some provAssemStaticLinkInfo -> (importedBinary, provAssemStaticLinkInfo)
+            ]
 
-        [ // Add all EST-generated assemblies into the static linking set
-            for KeyValue(_, importedBinary: ImportedBinary) in tcImports.DllTable do
-                if importedBinary.IsProviderGenerated then
-                    match importedBinary.ProviderGeneratedStaticLinkMap with
-                    | None -> ()
-                    | Some provAssemStaticLinkInfo -> (importedBinary, provAssemStaticLinkInfo)
-        ]
+    printfn
+        "[fs1023][staticlink] skip=%b providerAssemblies=%d"
+        tcImports.SkipProviderStaticLinking
+        providerGeneratedAssemblies.Length
 #endif
     if
         not tcConfig.standalone
@@ -565,170 +572,177 @@ let StaticLink (ctok, tcConfig: TcConfig, tcImports: TcImports, tcGlobals: TcGlo
 
             // Relocate provider generated type definitions into the expected shape for the [<Generate>] declarations in an assembly
             let providerGeneratedILModules, ilxMainModule =
-                // Build a dictionary of all remapped IL type defs
-                let ilOrigTyRefsForProviderGeneratedTypesToRelocate =
-                    let rec walk acc (ProviderGeneratedType(ilOrigTyRef, _, xs) as node) =
-                        List.fold walk ((ilOrigTyRef, node) :: acc) xs
+                match providerGeneratedILModules with
+                | [] ->
+                    let projected =
+                        providerGeneratedILModules |> List.map (fun (ccu, _, ilModule) -> (ccu, ilModule))
 
-                    dict (Seq.fold walk [] tcImports.ProviderGeneratedTypeRoots)
+                    projected, ilxMainModule
+                | _ ->
+                    // Build a dictionary of all remapped IL type defs
+                    let ilOrigTyRefsForProviderGeneratedTypesToRelocate =
+                        let rec walk acc (ProviderGeneratedType(ilOrigTyRef, _, xs) as node) =
+                            List.fold walk ((ilOrigTyRef, node) :: acc) xs
 
-                // Build a dictionary of all IL type defs, mapping ilOrigTyRef --> ilTypeDef
-                let allTypeDefsInProviderGeneratedAssemblies =
-                    let rec loop ilOrigTyRef (ilTypeDef: ILTypeDef) =
-                        seq {
-                            (ilOrigTyRef, ilTypeDef)
+                        dict (Seq.fold walk [] tcImports.ProviderGeneratedTypeRoots)
 
-                            for ntdef in ilTypeDef.NestedTypes do
-                                yield! loop (mkILTyRefInTyRef (ilOrigTyRef, ntdef.Name)) ntdef
-                        }
+                    // Build a dictionary of all IL type defs, mapping ilOrigTyRef --> ilTypeDef
+                    let allTypeDefsInProviderGeneratedAssemblies =
+                        let rec loop ilOrigTyRef (ilTypeDef: ILTypeDef) =
+                            seq {
+                                (ilOrigTyRef, ilTypeDef)
 
-                    dict
+                                for ntdef in ilTypeDef.NestedTypes do
+                                    yield! loop (mkILTyRefInTyRef (ilOrigTyRef, ntdef.Name)) ntdef
+                            }
+
+                        dict
+                            [
+                                for _ccu, ilOrigScopeRef, ilModule in providerGeneratedILModules do
+                                    for td in ilModule.TypeDefs do
+                                        yield! loop (mkILTyRef (ilOrigScopeRef, td.Name)) td
+                            ]
+
+                    if debugStaticLinking then
+                        for KeyValue(k, td) in allTypeDefsInProviderGeneratedAssemblies do
+                            printfn "provider type cache contains key=%s name=%s" k.QualifiedName td.Name
+                        for _ccu, _scopeRef, ilModule in providerGeneratedILModules do
+                            match ilModule.Manifest with
+                            | Some manifest ->
+                                let rec dumpNested prefix scopeRef (nested: ILNestedExportedType) =
+                                    let fullName =
+                                        if System.String.IsNullOrEmpty prefix then
+                                            nested.Name
+                                        else
+                                            prefix + "." + nested.Name
+
+                                    printfn "provider exported nested type %s scope=%A" fullName scopeRef
+
+                                    for child in nested.Nested.AsList() do
+                                        dumpNested fullName scopeRef child
+
+                                let rec dumpExported prefix scopeRef (et: ILExportedTypeOrForwarder) =
+                                    let fullName =
+                                        if System.String.IsNullOrEmpty prefix then
+                                            et.Name
+                                        else
+                                            prefix + "." + et.Name
+
+                                    printfn "provider exported type %s scope=%A forwarder=%b" fullName scopeRef et.IsForwarder
+
+                                    for nested in et.Nested.AsList() do
+                                        dumpNested fullName scopeRef nested
+
+                                for et in manifest.ExportedTypes.AsList() do
+                                    dumpExported "" et.ScopeRef et
+                            | None -> ()
+
+                    // Debugging output
+                    if debugStaticLinking then
+                        for ProviderGeneratedType(ilOrigTyRef, _, _) in tcImports.ProviderGeneratedTypeRoots do
+                            printfn "Have [<Generate>] root '%s'" ilOrigTyRef.QualifiedName
+
+                    // Build the ILTypeDefs for generated types, starting with the roots
+                    let generatedILTypeDefs =
+                        let rec buildRelocatedGeneratedType (ProviderGeneratedType(ilOrigTyRef, ilTgtTyRef, ch)) =
+                            let isNested = not (isNil ilTgtTyRef.Enclosing)
+
+                            match allTypeDefsInProviderGeneratedAssemblies.TryGetValue ilOrigTyRef with
+                            | true, ilOrigTypeDef ->
+                                if debugStaticLinking then
+                                    printfn "Relocating %s to %s " ilOrigTyRef.QualifiedName ilTgtTyRef.QualifiedName
+
+                                let ilOrigTypeDef =
+                                    if isNested then
+                                        ilOrigTypeDef.WithAccess(
+                                            match ilOrigTypeDef.Access with
+                                            | ILTypeDefAccess.Public -> ILTypeDefAccess.Nested ILMemberAccess.Public
+                                            | ILTypeDefAccess.Private -> ILTypeDefAccess.Nested ILMemberAccess.Private
+                                            | _ -> ilOrigTypeDef.Access
+                                        )
+                                    else
+                                        ilOrigTypeDef
+
+                                ilOrigTypeDef.With(
+                                    name = ilTgtTyRef.Name,
+                                    nestedTypes = mkILTypeDefs (List.map buildRelocatedGeneratedType ch)
+                                )
+                            | _ ->
+                                // If there is no matching IL type definition, then make a simple container class
+                                if debugStaticLinking then
+                                    printfn
+                                        "Generating simple class '%s' because we didn't find an original type '%s' in a provider generated assembly"
+                                        ilTgtTyRef.QualifiedName
+                                        ilOrigTyRef.QualifiedName
+
+                                let access =
+                                    (if isNested then
+                                         ILTypeDefAccess.Nested ILMemberAccess.Public
+                                     else
+                                         ILTypeDefAccess.Public)
+
+                                let tdefs = mkILTypeDefs (List.map buildRelocatedGeneratedType ch)
+
+                                mkILSimpleClass
+                                    ilGlobals
+                                    (ilTgtTyRef.Name,
+                                     access,
+                                     emptyILMethods,
+                                     emptyILFields,
+                                     tdefs,
+                                     emptyILProperties,
+                                     emptyILEvents,
+                                     emptyILCustomAttrs,
+                                     ILTypeInit.OnAny)
+
                         [
-                            for _ccu, ilOrigScopeRef, ilModule in providerGeneratedILModules do
-                                for td in ilModule.TypeDefs do
-                                    yield! loop (mkILTyRef (ilOrigScopeRef, td.Name)) td
+                            for ProviderGeneratedType(_, ilTgtTyRef, _) as node in tcImports.ProviderGeneratedTypeRoots do
+                                (ilTgtTyRef, buildRelocatedGeneratedType node)
                         ]
 
-                if debugStaticLinking then
-                    for KeyValue(k, td) in allTypeDefsInProviderGeneratedAssemblies do
-                        printfn "provider type cache contains key=%s name=%s" k.QualifiedName td.Name
-                    for _ccu, _scopeRef, ilModule in providerGeneratedILModules do
-                        match ilModule.Manifest with
-                        | Some manifest ->
-                            let rec dumpNested prefix scopeRef (nested: ILNestedExportedType) =
-                                let fullName =
-                                    if System.String.IsNullOrEmpty prefix then
-                                        nested.Name
-                                    else
-                                        prefix + "." + nested.Name
+                    // Implant all the generated type definitions into the ilxMainModule (generating a new ilxMainModule)
+                    let ilxMainModule =
 
-                                printfn "provider exported nested type %s scope=%A" fullName scopeRef
+                        let newTypeDefs =
+                            (ilxMainModule.TypeDefs, generatedILTypeDefs)
+                            ||> List.fold (fun acc (ilTgtTyRef, td) ->
+                                if debugStaticLinking then
+                                    printfn "implanting '%s' at '%s'" td.Name ilTgtTyRef.QualifiedName
 
-                                for child in nested.Nested.AsList() do
-                                    dumpNested fullName scopeRef child
+                                implantTypeDef ilGlobals false acc ilTgtTyRef.Enclosing td)
 
-                            let rec dumpExported prefix scopeRef (et: ILExportedTypeOrForwarder) =
-                                let fullName =
-                                    if System.String.IsNullOrEmpty prefix then
-                                        et.Name
-                                    else
-                                        prefix + "." + et.Name
+                        { ilxMainModule with
+                            TypeDefs = newTypeDefs
+                        }
 
-                                printfn "provider exported type %s scope=%A forwarder=%b" fullName scopeRef et.IsForwarder
+                    // Remove any ILTypeDefs from the provider generated modules if they have been relocated because of a [<Generate>] declaration.
+                    let providerGeneratedILModules =
+                        providerGeneratedILModules
+                        |> List.map (fun (ccu, ilOrigScopeRef, ilModule) ->
+                            let ilTypeDefsAfterRemovingRelocatedTypes =
+                                let rec rw enc (tdefs: ILTypeDefs) =
+                                    mkILTypeDefs
+                                        [
+                                            for tdef in tdefs do
+                                                let ilOrigTyRef = mkILNestedTyRef (ilOrigScopeRef, enc, tdef.Name)
 
-                                for nested in et.Nested.AsList() do
-                                    dumpNested fullName scopeRef nested
+                                                if not (ilOrigTyRefsForProviderGeneratedTypesToRelocate.ContainsKey ilOrigTyRef) then
+                                                    if debugStaticLinking then
+                                                        printfn
+                                                            "Keep provided type %s in place because it wasn't relocated"
+                                                            ilOrigTyRef.QualifiedName
 
-                            for et in manifest.ExportedTypes.AsList() do
-                                dumpExported "" et.ScopeRef et
-                        | None -> ()
+                                                    tdef.With(nestedTypes = rw (enc @ [ tdef.Name ]) tdef.NestedTypes)
+                                        ]
 
-                // Debugging output
-                if debugStaticLinking then
-                    for ProviderGeneratedType(ilOrigTyRef, _, _) in tcImports.ProviderGeneratedTypeRoots do
-                        printfn "Have [<Generate>] root '%s'" ilOrigTyRef.QualifiedName
+                                rw [] ilModule.TypeDefs
 
-                // Build the ILTypeDefs for generated types, starting with the roots
-                let generatedILTypeDefs =
-                    let rec buildRelocatedGeneratedType (ProviderGeneratedType(ilOrigTyRef, ilTgtTyRef, ch)) =
-                        let isNested = not (isNil ilTgtTyRef.Enclosing)
+                            (ccu,
+                             { ilModule with
+                                 TypeDefs = ilTypeDefsAfterRemovingRelocatedTypes
+                             }))
 
-                        match allTypeDefsInProviderGeneratedAssemblies.TryGetValue ilOrigTyRef with
-                        | true, ilOrigTypeDef ->
-                            if debugStaticLinking then
-                                printfn "Relocating %s to %s " ilOrigTyRef.QualifiedName ilTgtTyRef.QualifiedName
-
-                            let ilOrigTypeDef =
-                                if isNested then
-                                    ilOrigTypeDef.WithAccess(
-                                        match ilOrigTypeDef.Access with
-                                        | ILTypeDefAccess.Public -> ILTypeDefAccess.Nested ILMemberAccess.Public
-                                        | ILTypeDefAccess.Private -> ILTypeDefAccess.Nested ILMemberAccess.Private
-                                        | _ -> ilOrigTypeDef.Access
-                                    )
-                                else
-                                    ilOrigTypeDef
-
-                            ilOrigTypeDef.With(
-                                name = ilTgtTyRef.Name,
-                                nestedTypes = mkILTypeDefs (List.map buildRelocatedGeneratedType ch)
-                            )
-                        | _ ->
-                            // If there is no matching IL type definition, then make a simple container class
-                            if debugStaticLinking then
-                                printfn
-                                    "Generating simple class '%s' because we didn't find an original type '%s' in a provider generated assembly"
-                                    ilTgtTyRef.QualifiedName
-                                    ilOrigTyRef.QualifiedName
-
-                            let access =
-                                (if isNested then
-                                     ILTypeDefAccess.Nested ILMemberAccess.Public
-                                 else
-                                     ILTypeDefAccess.Public)
-
-                            let tdefs = mkILTypeDefs (List.map buildRelocatedGeneratedType ch)
-
-                            mkILSimpleClass
-                                ilGlobals
-                                (ilTgtTyRef.Name,
-                                 access,
-                                 emptyILMethods,
-                                 emptyILFields,
-                                 tdefs,
-                                 emptyILProperties,
-                                 emptyILEvents,
-                                 emptyILCustomAttrs,
-                                 ILTypeInit.OnAny)
-
-                    [
-                        for ProviderGeneratedType(_, ilTgtTyRef, _) as node in tcImports.ProviderGeneratedTypeRoots do
-                            (ilTgtTyRef, buildRelocatedGeneratedType node)
-                    ]
-
-                // Implant all the generated type definitions into the ilxMainModule (generating a new ilxMainModule)
-                let ilxMainModule =
-
-                    let newTypeDefs =
-                        (ilxMainModule.TypeDefs, generatedILTypeDefs)
-                        ||> List.fold (fun acc (ilTgtTyRef, td) ->
-                            if debugStaticLinking then
-                                printfn "implanting '%s' at '%s'" td.Name ilTgtTyRef.QualifiedName
-
-                            implantTypeDef ilGlobals false acc ilTgtTyRef.Enclosing td)
-
-                    { ilxMainModule with
-                        TypeDefs = newTypeDefs
-                    }
-
-                // Remove any ILTypeDefs from the provider generated modules if they have been relocated because of a [<Generate>] declaration.
-                let providerGeneratedILModules =
-                    providerGeneratedILModules
-                    |> List.map (fun (ccu, ilOrigScopeRef, ilModule) ->
-                        let ilTypeDefsAfterRemovingRelocatedTypes =
-                            let rec rw enc (tdefs: ILTypeDefs) =
-                                mkILTypeDefs
-                                    [
-                                        for tdef in tdefs do
-                                            let ilOrigTyRef = mkILNestedTyRef (ilOrigScopeRef, enc, tdef.Name)
-
-                                            if not (ilOrigTyRefsForProviderGeneratedTypesToRelocate.ContainsKey ilOrigTyRef) then
-                                                if debugStaticLinking then
-                                                    printfn
-                                                        "Keep provided type %s in place because it wasn't relocated"
-                                                        ilOrigTyRef.QualifiedName
-
-                                                tdef.With(nestedTypes = rw (enc @ [ tdef.Name ]) tdef.NestedTypes)
-                                    ]
-
-                            rw [] ilModule.TypeDefs
-
-                        (ccu,
-                         { ilModule with
-                             TypeDefs = ilTypeDefsAfterRemovingRelocatedTypes
-                         }))
-
-                providerGeneratedILModules, ilxMainModule
+                    providerGeneratedILModules, ilxMainModule
 
             Morphs.disableMorphCustomAttributeData ()
 #else
