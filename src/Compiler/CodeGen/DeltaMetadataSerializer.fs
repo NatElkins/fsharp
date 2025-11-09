@@ -1,7 +1,11 @@
 module internal FSharp.Compiler.CodeGen.DeltaMetadataSerializer
 
 open System
+open System.Collections.Generic
+open System.IO
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
+open FSharp.Compiler.CodeGen.DeltaTableLayout
+open FSharp.Compiler.CodeGen.DeltaIndexSizing
 
 let private padTo4 (bytes: byte[]) =
     if bytes.Length % 4 = 0 then
@@ -31,3 +35,27 @@ let buildHeapStreams (mirror: DeltaMetadataTables) : DeltaHeapStreams =
       Blobs = padTo4 mirror.BlobHeapBytes
       Guids = padTo4 mirror.GuidHeapBytes
       UserStrings = emptyUserStringHeap }
+
+/// Represents the serialized `#~` stream (metadata tables) including its padded bytes.
+type DeltaTableStream =
+    { Bytes: byte[]
+      UnpaddedSize: int
+      PaddedSize: int }
+
+let private buildAddressTable (entries: byte[]) =
+    let table = Dictionary<int, int>()
+    table[0] <- 0
+    let mutable pos = 1
+    for i = 0 to entries.Length - 1 do
+        if entries.[i] = 0uy then
+            table[table.Count] <- pos
+            pos <- pos + 1
+        else
+            pos <- pos + 1
+    table
+
+/// Placeholder until the AbstractIL serializer is fully implemented.
+let buildTableStream (_mirror: DeltaMetadataTables) : DeltaTableStream =
+    { Bytes = Array.empty
+      UnpaddedSize = 0
+      PaddedSize = 0 }
