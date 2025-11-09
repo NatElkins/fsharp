@@ -932,12 +932,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         orderedMethodInputs
         |> List.map (fun struct (_, methodToken, _, _, _) -> methodToken)
 
-    let pdbMethodTokenList =
-        orderedMethodInputs
-        |> List.map (fun struct (_, _, methodHandle, _, _) ->
-            let entityHandle: EntityHandle = MethodDefinitionHandle.op_Implicit methodHandle
-            MetadataTokens.GetToken entityHandle)
-
     if List.isEmpty methodUpdateInputs && List.isEmpty updatedTypeTokens then
         emptyDelta
     else
@@ -1235,11 +1229,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
         let streams = builder.Build()
 
-        let pdbDelta =
-            match pdbBytesOpt with
-            | None -> None
-            | Some pdbBytes -> HotReloadPdb.emitDelta request.Baseline pdbBytes pdbMethodTokenList
-
         let addedOrChangedMethods =
             streams.MethodBodies
             |> List.map (fun body ->
@@ -1247,6 +1236,11 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                   LocalSignatureToken = body.LocalSignatureToken
                   CodeOffset = body.CodeOffset
                   CodeLength = body.CodeLength })
+
+        let pdbDelta =
+            match pdbBytesOpt with
+            | None -> None
+            | Some pdbBytes -> HotReloadPdb.emitDelta request.Baseline pdbBytes addedOrChangedMethods
 
         let synthesizedSnapshot =
             request.SynthesizedNames

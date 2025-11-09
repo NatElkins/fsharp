@@ -45,13 +45,14 @@ let createSnapshot (pdbBytes: byte[]) : PortablePdbSnapshot =
 let emitDelta
     (baseline: FSharpEmitBaseline)
     (updatedPdbBytes: byte[])
-    (methodTokens: int list)
+    (addedOrChangedMethods: AddedOrChangedMethodInfo list)
     : byte[] option =
     match baseline.PortablePdb with
     | None -> None
     | Some snapshot ->
         let distinctTokens =
-            methodTokens
+            addedOrChangedMethods
+            |> List.map (fun info -> info.MethodToken)
             |> List.distinct
             |> List.filter (fun token -> token <> 0)
 
