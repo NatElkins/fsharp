@@ -219,6 +219,29 @@ module UseProvided =
     let valueName = Provided.Value
 """
 
+    let private genericModelSource = """
+namespace Fs1023Consumer
+
+type Generic<'T> =
+    { Value: 'T }
+    with
+        member _.Map(value: 'T, [<ParamArray>] rest: string[]) =
+            ignore rest
+            value
+        member _.Optional(?value: 'T) = defaultArg value Unchecked.defaultof<'T>
+        member _.Item
+            with get(index: int) = index
+        member _.OptionalLiteral([<System.Runtime.InteropServices.Optional; System.Runtime.InteropServices.DefaultParameterValue(42)>] value: int) =
+            value
+
+type ProvidedGenericInt = Fs1023.ProvidedGenerator<Source = Generic<int>>
+type ProvidedGenericString = Fs1023.ProvidedGenerator<Source = Generic<string>>
+
+module UseGenericProvided =
+    let intValue = ProvidedGenericInt.Value
+    let stringValue = ProvidedGenericString.Value
+"""
+
     let private consumerSourceAnonymousRecord = """
 namespace Fs1023Consumer
 
@@ -329,7 +352,10 @@ type ProvidedProvided = Fs1023.ProvidedGenerator<Source = ProvidedGenerated>
             Assert.True(errors.Length > 0, "Expected type provider to invalidate generated members after source change.")
             Assert.True(errors |> Array.exists (fun e -> e.Message.Contains "Value"), "Expected missing member error referencing 'Value'.")
         finally
-            try Directory.Delete(tempDir, true) with _ -> ()
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()
 
     [<Fact>]
     let ``anonymous record static argument is rejected`` () =
@@ -374,7 +400,10 @@ type ProvidedProvided = Fs1023.ProvidedGenerator<Source = ProvidedGenerated>
             Assert.True(errors.Length > 0, "Expected anonymous record static argument to be rejected.")
             Assert.True(errors |> Array.exists (fun e -> e.Message.Contains "anonymous record types are not supported as static arguments"), "Expected diagnostic mentioning anonymous record support.")
         finally
-            try Directory.Delete(tempDir, true) with _ -> ()
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()
 
     [<Fact>]
     let ``type parameter static argument is rejected`` () =
@@ -423,7 +452,10 @@ type ProvidedProvided = Fs1023.ProvidedGenerator<Source = ProvidedGenerated>
             Assert.True(errors.Length > 0, "Expected type parameter static argument to be rejected.")
             Assert.True(errors |> Array.exists (fun e -> e.Message.Contains "type parameters are not supported as static arguments"), "Expected diagnostic mentioning type parameter restriction.")
         finally
-            try Directory.Delete(tempDir, true) with _ -> ()
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()
 
     [<Fact>]
     let ``provided type static argument is rejected`` () =
@@ -541,7 +573,70 @@ type ProvidedProvided = Fs1023.ProvidedGenerator<Source = ProvidedGenerated>
         finally
             try Directory.Delete(tempDir, true) with _ -> ()
 
-    [<Fact(Skip = "FS-1023: Generative members are not yet published into the TAST")>]
+    [<Fact(Skip = "Generic static arguments currently cause Fs1023 consumer compilation to hang; tracked in Phase 4 follow-up.")>]
+    let ``GenericInput_multipleInstantiations`` () =
+        let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(tempDir) |> ignore
+
+        let providerPath = Path.Combine(tempDir, "Fs1023Provider.fs")
+        let providerDll = Path.Combine(tempDir, "Fs1023Provider.dll")
+
+        let consumerPath = Path.Combine(tempDir, "Generic.fs")
+        let outputDll = Path.Combine(tempDir, "GenericConsumer.dll")
+
+        let logPath = Path.Combine(tempDir, "generic.log")
+        let log message =
+            File.AppendAllText(logPath, message + Environment.NewLine)
+
+        try
+            log (sprintf "[fs1023][generic] writing provider to %s" providerPath)
+            writeFile providerPath providerSource
+
+            let providerArgs =
+                Array.append
+                    (mkProjectCommandLineArgs(providerDll, [ providerPath ]))
+                    [| "-r:" + providedTypesAssembly |]
+
+            log "[fs1023][generic] compiling provider"
+            compile providerArgs
+            log "[fs1023][generic] provider compiled"
+
+            log "[fs1023][generic] writing generic consumer"
+            writeFile consumerPath genericModelSource
+
+            let consumerArgs =
+                Array.append
+                    (mkProjectCommandLineArgs(outputDll, [ consumerPath ]))
+                    [| "-r:" + providerDll |]
+
+            log "[fs1023][generic] compiling consumer"
+            compile consumerArgs
+            log (sprintf "[fs1023][generic] consumer compiled -> %s" outputDll)
+
+            let consumerAssembly =
+                File.ReadAllBytes(outputDll)
+                |> Assembly.Load
+
+            let assertProvidedType typeName =
+                let providedType = consumerAssembly.GetType(typeName, throwOnError = true, ignoreCase = false)
+                Assert.NotNull(providedType)
+
+                let getStaticStringProperty name =
+                    let propertyInfo = providedType.GetProperty(name, BindingFlags.Public ||| BindingFlags.Static)
+                    Assert.NotNull(propertyInfo)
+                    propertyInfo.GetValue(null) :?> string
+
+                Assert.Equal("Value", getStaticStringProperty "Value")
+
+            assertProvidedType "Fs1023Consumer.ProvidedGenericInt"
+            assertProvidedType "Fs1023Consumer.ProvidedGenericString"
+        finally
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()
+
+    [<Fact>]
     let ``provided type publishes members into the TAST`` () =
         let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(tempDir) |> ignore
@@ -586,16 +681,20 @@ type ProvidedProvided = Fs1023.ProvidedGenerator<Source = ProvidedGenerated>
 
             ensureSuccess projectResults.Diagnostics
 
+            let rec collectEntities declarations =
+                seq {
+                    for decl in declarations do
+                        match decl with
+                        | FSharpImplementationFileDeclaration.Entity(entity, nested) ->
+                            yield entity
+                            yield! collectEntities nested
+                        | _ -> ()
+                }
+
             let providedEntity =
                 projectResults.AssemblyContents.ImplementationFiles
-                |> Seq.collect (fun impl ->
-                    impl.Declarations
-                    |> Seq.choose (function
-                        | FSharpImplementationFileDeclaration.Entity(entity, _) when
-                            entity.FullName = "Fs1023Consumer.Provided" ->
-                            Some entity
-                        | _ -> None))
-                |> Seq.tryHead
+                |> Seq.collect (fun impl -> collectEntities impl.Declarations)
+                |> Seq.tryFind (fun entity -> entity.FullName = "Fs1023Consumer.Provided")
 
             Assert.True(providedEntity.IsSome, "Expected Fs1023Consumer.Provided to be present in the typed tree.")
 
@@ -606,5 +705,36 @@ type ProvidedProvided = Fs1023.ProvidedGenerator<Source = ProvidedGenerated>
 
             Assert.Contains("get_Value", memberNames)
             Assert.Contains("MapParameters", memberNames)
+
+            compile projectArgs
+
+            let consumerAssemblyBytes = File.ReadAllBytes(outputDll)
+            let consumerAssembly = Assembly.Load(consumerAssemblyBytes)
+            let providedType = consumerAssembly.GetType("Fs1023Consumer.Provided", throwOnError = true, ignoreCase = false)
+
+            let staticPropertyNames =
+                providedType.GetProperties(BindingFlags.Public ||| BindingFlags.Static)
+                |> Array.map (fun p -> p.Name)
+
+            let instancePropertyNames =
+                providedType.GetProperties(BindingFlags.Public ||| BindingFlags.Instance)
+                |> Array.map (fun p -> p.Name)
+
+            printfn "[fs1023][reflection] static properties=%A instance properties=%A" staticPropertyNames instancePropertyNames
+
+            let getStaticStringProperty name =
+                let propertyInfo = providedType.GetProperty(name, BindingFlags.Public ||| BindingFlags.Static)
+                Assert.NotNull(propertyInfo)
+                propertyInfo.GetValue(null) :?> string
+
+            printfn "[fs1023] keep-temp-env=%A" (Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP"))
+            Assert.Equal("Value", getStaticStringProperty "Value")
+            Assert.Equal("value:required:normal;rest:required:paramarray", getStaticStringProperty "MapParameters")
+            Assert.Equal("value:false:false", getStaticStringProperty "OptionalParameter")
+            Assert.Equal("value:true:true:42", getStaticStringProperty "OptionalLiteralParameter")
+            Assert.Equal("index:Int32", getStaticStringProperty "IndexerParameters")
         finally
-            try Directory.Delete(tempDir, true) with _ -> ()
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()
