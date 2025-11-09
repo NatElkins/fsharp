@@ -3,6 +3,8 @@ module internal FSharp.Compiler.CodeGen.DeltaMetadataSerializer
 open System
 open System.Collections.Generic
 open System.IO
+open System.Reflection.Metadata
+open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.CodeGen.DeltaTableLayout
 open FSharp.Compiler.CodeGen.DeltaIndexSizing
@@ -42,20 +44,29 @@ type DeltaTableStream =
       UnpaddedSize: int
       PaddedSize: int }
 
-let private buildAddressTable (entries: byte[]) =
+let private buildHeapAddressTable (heapBytes: byte[]) =
     let table = Dictionary<int, int>()
     table[0] <- 0
-    let mutable pos = 1
-    for i = 0 to entries.Length - 1 do
-        if entries.[i] = 0uy then
-            table[table.Count] <- pos
-            pos <- pos + 1
-        else
-            pos <- pos + 1
+    let mutable offset = 1
+    let mutable token = 1
+    for i = 0 to heapBytes.Length - 1 do
+        if heapBytes.[i] = 0uy then
+            table[token] <- offset
+            token <- token + 1
+        offset <- offset + 1
     table
 
+type DeltaTableSerializerInput =
+    { Tables: TableRows
+      RowCounts: int[]
+      BitMasks: TableBitMasks
+      IndexSizes: CodedIndexSizes
+      StringHeap: byte[]
+      BlobHeap: byte[]
+      GuidHeap: byte[] }
+
 /// Placeholder until the AbstractIL serializer is fully implemented.
-let buildTableStream (_mirror: DeltaMetadataTables) : DeltaTableStream =
+let buildTableStream (_input: DeltaTableSerializerInput) : DeltaTableStream =
     { Bytes = Array.empty
       UnpaddedSize = 0
       PaddedSize = 0 }
