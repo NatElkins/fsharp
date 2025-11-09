@@ -91,6 +91,65 @@ module private MetadataWriterTestHelpers =
         let options = defaultWriterOptions testIlGlobals
         ILWriter.WriteILBinaryInMemoryWithArtifacts(options, moduleDef, id)
 
+    let padTo4 (bytes: byte[]) =
+        if bytes.Length % 4 = 0 then bytes
+        else
+            let padded = Array.zeroCreate<byte> (bytes.Length + (4 - (bytes.Length % 4)))
+            Array.Copy(bytes, padded, bytes.Length)
+            padded
+
+    let extractTablesStream (metadata: byte[]) =
+        use stream = new MemoryStream(metadata, false)
+        use reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen = true)
+
+        let readUInt32 () = reader.ReadUInt32()
+        let readUInt16 () = reader.ReadUInt16()
+
+        let _signature = readUInt32 ()
+        let _major = readUInt16 ()
+        let _minor = readUInt16 ()
+        let _reserved = readUInt32 ()
+        let versionLength = int (readUInt32 ())
+        reader.ReadBytes(versionLength) |> ignore
+        while stream.Position % 4L <> 0L do
+            reader.ReadByte() |> ignore
+
+        let _flags = readUInt16 ()
+        let streamCount = int (readUInt16 ())
+
+        let readStreamName () =
+            let buffer = ResizeArray()
+            let mutable finished = false
+            while not finished do
+                let b = reader.ReadByte()
+                if b = 0uy then
+                    finished <- true
+                else
+                    buffer.Add b
+            while stream.Position % 4L <> 0L do
+                reader.ReadByte() |> ignore
+            Encoding.UTF8.GetString(buffer.ToArray())
+
+        let mutable tablesOffset = 0u
+        let mutable tablesSize = 0u
+
+        for _ in 1 .. streamCount do
+            let offset = readUInt32 ()
+            let size = readUInt32 ()
+            let name = readStreamName ()
+            if name = "#~" then
+                tablesOffset <- offset
+                tablesSize <- size
+
+        if tablesSize = 0u then
+            failwith "#~ stream not found in metadata"
+
+        let start = int tablesOffset
+        let size = int tablesSize
+        let unpadded = Array.sub metadata start size
+        let padded = padTo4 unpadded
+        (size, padded)
+
     let ilGlobals = testIlGlobals
 
     let methodKey (typeName: string) name returnType =
@@ -102,6 +161,11 @@ module private MetadataWriterTestHelpers =
 
 module FSharpDeltaMetadataWriterTests =
     open MetadataWriterTestHelpers
+
+    let private assertTableStreamMatches metadataDelta =
+        let size, padded = extractTablesStream metadataDelta.Metadata
+        Assert.Equal(size, metadataDelta.TableStream.UnpaddedSize)
+        Assert.Equal<byte>(padded, metadataDelta.TableStream.Bytes)
 
     let private createPropertyModule () =
         let ilg = ilGlobals
@@ -327,6 +391,7 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(Some EditAndContinueOperation.Default, tryOperation TableIndex.PropertyMap)
         Assert.True(metadataDelta.Metadata.Length > 0)
         Assert.Contains("Message", Encoding.UTF8.GetString(metadataDelta.StringHeap))
+        assertTableStreamMatches metadataDelta
 
     [<Fact>]
     let ``metadata writer emits event and method semantics rows`` () =
@@ -426,6 +491,7 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(1, tableCount TableIndex.EventMap)
         Assert.Equal(1, tableCount TableIndex.MethodSemantics)
         Assert.Contains("OnChanged", Encoding.UTF8.GetString(metadataDelta.StringHeap))
+        assertTableStreamMatches metadataDelta
 
         let tryOperation table =
             metadataDelta.EncLog
