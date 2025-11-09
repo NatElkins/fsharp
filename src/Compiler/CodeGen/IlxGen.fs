@@ -44,8 +44,55 @@ open FSharp.Compiler.TypedTreeOps
 open FSharp.Compiler.TypedTreeOps.DebugPrint
 open FSharp.Compiler.TypeHierarchy
 open FSharp.Compiler.TypeRelations
+open FSharp.Compiler.MethodCalls
 
 let getEmptyStackGuard () = StackGuard("IlxAssemblyGenerator")
+
+let private fs1023TraceEnabled () =
+    match Environment.GetEnvironmentVariable("FS1023_TRACE") with
+    | null -> false
+    | value ->
+        let trimmed = value.Trim()
+        not (String.IsNullOrEmpty trimmed) && not (String.Equals(trimmed, "0", StringComparison.Ordinal))
+
+let private fs1023Trace format =
+    Printf.kprintf
+        (fun message ->
+            if fs1023TraceEnabled () then
+                let path =
+                    match Environment.GetEnvironmentVariable("FS1023_TRACE_PATH") with
+                    | null
+                    | "" -> "/tmp/fs1023_trace.log"
+                    | custom -> custom
+
+                let entry = sprintf "%s [fs1023][ilxgen] %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+
+                try
+                    File.AppendAllText(path, entry)
+                with _ -> ())
+        format
+
+let private isProvidedVal (vref: ValRef) =
+#if !NO_TYPEPROVIDERS
+    match vref.Deref.TryGetProvidedBinding with
+    | Some _ -> true
+    | None -> false
+#else
+    ignore vref
+    false
+#endif
+
+let private ensureProvidedBody (g: TcGlobals) (vspec: Val) =
+    match vspec.ReflectedDefinition with
+    | Some expr -> expr
+    | None ->
+#if DEBUG
+        if fs1023TraceEnabled () then
+            fs1023Trace "missing reflected definition for provided member %s" (vspec.CompiledName g.CompilerGlobalState)
+#else
+        ignore g
+#endif
+        error (InternalError("Provided member did not capture an invoker body", vspec.Range))
 
 let IsNonErasedTypar (tp: Typar) = not tp.IsErased
 
@@ -1706,12 +1753,13 @@ let AddStorageForExternalCcu cenv eenv (ccu: CcuThunk) =
         eenv
 
 /// Record how all the top level F#-declared values, functions and members are represented, for a local module or namespace.
-let rec AddBindingsForLocalModuleOrNamespaceType allocVal cloc eenv (mty: ModuleOrNamespaceType) =
+let rec AddBindingsForLocalModuleOrNamespaceType allocVal popProvidedValsForTycon cloc eenv (mty: ModuleOrNamespaceType) =
     let eenv =
         List.fold
             (fun eenv submodul ->
                 AddBindingsForLocalModuleOrNamespaceType
                     allocVal
+                    popProvidedValsForTycon
                     (CompLocForSubModuleOrNamespace cloc submodul)
                     eenv
                     submodul.ModuleOrNamespaceType)
@@ -1719,14 +1767,20 @@ let rec AddBindingsForLocalModuleOrNamespaceType allocVal cloc eenv (mty: Module
             mty.ModuleAndNamespaceDefinitions
 
     let eenv = Seq.fold (fun eenv v -> allocVal cloc v eenv) eenv mty.AllValsAndMembers
-    eenv
+
+    (eenv, mty.AllValsAndMembers)
+    ||> Seq.fold (fun eenv v ->
+        let vref = mkLocalValRef v
+        match vref.Deref.TryGetProvidedBinding with
+        | Some _ -> allocVal cloc vref.Deref eenv
+        | None -> eenv)
 
 /// Record how all the top level F#-declared values, functions and members are represented, for a set of referenced assemblies.
 let AddExternalCcusToIlxGenEnv cenv eenv ccus =
     List.fold (AddStorageForExternalCcu cenv) eenv ccus
 
 /// Record how all the unrealized abstract slots are represented, for a type definition.
-let AddBindingsForTycon allocVal (cloc: CompileLocation) (tycon: Tycon) eenv =
+let AddBindingsForTycon allocVal (popProvidedValsForTycon: Tycon -> ValRef list) (cloc: CompileLocation) (tycon: Tycon) eenv =
     let unrealizedSlots =
         if tycon.IsFSharpObjectModelTycon then
             tycon.FSharpTyconRepresentationData.fsobjmodel_vslots
@@ -1735,6 +1789,16 @@ let AddBindingsForTycon allocVal (cloc: CompileLocation) (tycon: Tycon) eenv =
 
     (eenv, unrealizedSlots)
     ||> List.fold (fun eenv vref -> allocVal cloc vref.Deref eenv)
+    |> fun eenv ->
+        let eenv =
+            (eenv, tycon.TypeContents.tcaug_adhoc_list :> seq<_>)
+            ||> Seq.fold (fun acc (_, vref) ->
+                match vref.Deref.TryGetProvidedBinding with
+                | Some _ -> allocVal cloc vref.Deref acc
+                | None -> acc)
+
+        let pending = popProvidedValsForTycon tycon
+        (eenv, pending) ||> List.fold (fun acc vref -> allocVal cloc vref.Deref acc)
 
 /// Record how constructs are represented, for a sequence of definitions in a module or namespace fragment.
 let AddDebugImportsToEnv (cenv: cenv) eenv (openDecls: OpenDeclaration list) =
@@ -1785,14 +1849,14 @@ let AddDebugImportsToEnv (cenv: cenv) eenv (openDecls: OpenDeclaration list) =
             imports = Some { Parent = None; Imports = imports }
         }
 
-let rec AddBindingsForModuleOrNamespaceContents allocVal cloc eenv x =
+let rec AddBindingsForModuleOrNamespaceContents allocVal popProvidedValsForTycon cloc eenv x =
     match x with
     | TMDefRec(_isRec, _opens, tycons, mbinds, _) ->
         // Virtual don't have 'let' bindings and must be added to the environment
-        let eenv = List.foldBack (AddBindingsForTycon allocVal cloc) tycons eenv
+        let eenv = List.foldBack (AddBindingsForTycon allocVal popProvidedValsForTycon cloc) tycons eenv
 
         let eenv =
-            List.foldBack (AddBindingsForModuleOrNamespaceBinding allocVal cloc) mbinds eenv
+            List.foldBack (AddBindingsForModuleOrNamespaceBinding allocVal popProvidedValsForTycon cloc) mbinds eenv
 
         eenv
     | TMDefLet(bind, _) -> allocVal cloc bind.Var eenv
@@ -1800,10 +1864,10 @@ let rec AddBindingsForModuleOrNamespaceContents allocVal cloc eenv x =
     | TMDefOpens _ -> eenv
     | TMDefs mdefs ->
         (eenv, mdefs)
-        ||> List.fold (AddBindingsForModuleOrNamespaceContents allocVal cloc)
+        ||> List.fold (AddBindingsForModuleOrNamespaceContents allocVal popProvidedValsForTycon cloc)
 
 /// Record how constructs are represented, for a module or namespace.
-and AddBindingsForModuleOrNamespaceBinding allocVal cloc x eenv =
+and AddBindingsForModuleOrNamespaceBinding allocVal popProvidedValsForTycon cloc x eenv =
     match x with
     | ModuleOrNamespaceBinding.Binding bind -> allocVal cloc bind.Var eenv
     | ModuleOrNamespaceBinding.Module(mspec, mdef) ->
@@ -1813,7 +1877,7 @@ and AddBindingsForModuleOrNamespaceBinding allocVal cloc x eenv =
             else
                 CompLocForFixedModule cloc.QualifiedNameOfFile cloc.TopImplQualifiedName mspec
 
-        AddBindingsForModuleOrNamespaceContents allocVal cloc eenv mdef
+        AddBindingsForModuleOrNamespaceContents allocVal popProvidedValsForTycon cloc eenv mdef
 
 /// Put the partial results for a generated fragment (i.e. a part of a CCU generated by FSI)
 /// into the stored results for the whole CCU.
@@ -1824,6 +1888,9 @@ let AddIncrementalLocalAssemblyFragmentToIlxGenEnv (cenv: cenv, isIncrementalFra
 
     let allocVal =
         ComputeAndAddStorageForLocalValWithValReprInfo(cenv, eenv.intraAssemblyInfo, true, NoShadowLocal)
+
+    let popProvidedValsForTycon tycon =
+        cenv.amap.assemblyLoader.PopProvidedMemberValsForTycon tycon
 
     (eenv, implFiles)
     ||> List.fold (fun eenv implFile ->
@@ -1836,9 +1903,9 @@ let AddIncrementalLocalAssemblyFragmentToIlxGenEnv (cenv: cenv, isIncrementalFra
             }
 
         if isIncrementalFragment then
-            AddBindingsForModuleOrNamespaceContents allocVal cloc eenv contents
+            AddBindingsForModuleOrNamespaceContents allocVal popProvidedValsForTycon cloc eenv contents
         else
-            AddBindingsForLocalModuleOrNamespaceType allocVal cloc eenv signature)
+            AddBindingsForLocalModuleOrNamespaceType allocVal popProvidedValsForTycon cloc eenv signature)
 
 //--------------------------------------------------------------------------
 // Generate debugging marks
@@ -6864,7 +6931,12 @@ and GenLambdaClosure cenv (cgbuf: CodeGenBuffer) eenv isLocalTypeFunc thisVars e
 
         cloinfo, m
 
-    | _ -> failwith "GenLambda: not a lambda"
+    | _ ->
+        if fs1023TraceEnabled () then
+            let tag = expr.GetType().Name
+            fs1023Trace "GenLambda missing lambda for expr=%s range=%A" tag expr.Range
+
+        failwith "GenLambda: not a lambda"
 
 and GenClosureAlloc cenv (cgbuf: CodeGenBuffer) eenv (cloinfo, m) =
     CountClosure()
@@ -10207,6 +10279,9 @@ and GenImplFileContents cenv cgbuf qname lazyInitInfo eenv mty def =
     // We use one scope for all the bindings in the module, which makes them all appear with their "default" values
     // rather than incrementally as we step through the initializations in the module. This is a little unfortunate
     // but stems from the way we add module values all at once before we generate the module itself.
+    let popProvidedValsForTycon tycon =
+        cenv.amap.assemblyLoader.PopProvidedMemberValsForTycon tycon
+
     LocalScope "module" cgbuf (fun (_, endMark) ->
         let sigToImplRemapInfo =
             ComputeRemappingFromImplementationToSignature cenv.g def mty
@@ -10215,7 +10290,12 @@ and GenImplFileContents cenv cgbuf qname lazyInitInfo eenv mty def =
 
         // Allocate all the values, including any shadow locals for static fields
         let eenv =
-            AddBindingsForModuleOrNamespaceContents (AllocValReprWithinExpr cenv cgbuf endMark) eenv.cloc eenv def
+            AddBindingsForModuleOrNamespaceContents
+                (AllocValReprWithinExpr cenv cgbuf endMark)
+                popProvidedValsForTycon
+                eenv.cloc
+                eenv
+                def
 
         let _eenvEnd = GenModuleOrNamespaceContents cenv cgbuf qname lazyInitInfo eenv def
         ())
@@ -10592,7 +10672,10 @@ and GenImplFile cenv (mgbuf: AssemblyBuilder) mainInfoOpt eenv (implFile: Checke
         let allocVal =
             ComputeAndAddStorageForLocalValWithValReprInfo(cenv, eenv.intraAssemblyInfo, cenv.options.isInteractive, NoShadowLocal)
 
-        AddBindingsForLocalModuleOrNamespaceType allocVal clocCcu eenv signature
+        let popProvidedValsForTycon tycon =
+            cenv.amap.assemblyLoader.PopProvidedMemberValsForTycon tycon
+
+        AddBindingsForLocalModuleOrNamespaceType allocVal popProvidedValsForTycon clocCcu eenv signature
 
     let eenvfinal =
         { eenvafter with
@@ -10836,6 +10919,219 @@ and GenPrintingMethod cenv eenv methName ilThisTy m =
             | _ -> ()
     ]
 
+#if !NO_TYPEPROVIDERS
+and private genProvidedMemberBinding cenv mgbuf eenv tref (vref: ValRef) =
+    let g = cenv.g
+    let vspec = vref.Deref
+
+    match StorageForVal vspec.Range vspec eenv with
+    | Method(valReprInfo, _, mspec, _, _, ctps, mtps, curriedArgInfos, paramInfos, witnessInfos, argTys, retInfo) ->
+        if fs1023TraceEnabled () then
+            fs1023Trace
+                "[ilxgen][provided] emit %s declaringType=%s access=%A"
+                (vspec.CompiledName g.CompilerGlobalState)
+                mspec.MethodRef.DeclaringTypeRef.FullName
+                (ComputeMethodAccessRestrictedBySig eenv vspec)
+
+        let lambdaExpr = ensureProvidedBody g vspec
+        let methLambdaTypars, ctorThisValOpt, baseValOpt, methLambdaCurriedVars, methLambdaBody, methLambdaBodyTy =
+            IteratedAdjustLambdaToMatchValReprInfo g cenv.amap valReprInfo lambdaExpr
+
+        let methLambdaVars = List.concat methLambdaCurriedVars
+        let access =
+            if vspec.Accessibility.IsPublic then
+                ILMemberAccess.Public
+            else
+                ComputeMethodAccessRestrictedBySig eenv vspec
+
+        GenMethodForBinding
+            cenv
+            mgbuf
+            eenv
+            (vspec,
+             mspec,
+             false,
+             false,
+             access,
+             ctps,
+             mtps,
+             witnessInfos,
+             curriedArgInfos,
+             paramInfos,
+             argTys,
+             retInfo,
+             valReprInfo,
+             ctorThisValOpt,
+             baseValOpt,
+             methLambdaTypars,
+             methLambdaVars,
+             methLambdaBody,
+             methLambdaBodyTy)
+
+        match vspec.MemberInfo with
+        | Some memberInfo when memberInfo.MemberFlags.MemberKind = SynMemberKind.PropertyGet ->
+            let propTy = ReturnTypeOfPropertyVal g vspec
+            let ilPropTy = GenType cenv vspec.Range eenv.tyenv propTy
+            let ilArgTys =
+                vspec
+                |> ArgInfosOfPropertyVal g
+                |> List.map fst
+                |> GenTypes cenv vspec.Range eenv.tyenv
+
+            let callingConv =
+                if memberInfo.MemberFlags.IsInstance then
+                    ILThisConvention.Instance
+                else
+                    ILThisConvention.Static
+
+            let getterRef = mspec.MethodRef
+
+            let propDef =
+                ILPropertyDef(
+                    name = vspec.PropertyName,
+                    attributes = PropertyAttributes.None,
+                    setMethod = None,
+                    getMethod = Some getterRef,
+                    callingConv = callingConv,
+                    propertyType = ilPropTy,
+                    init = None,
+                    args = ilArgTys,
+                    customAttrs = mkILCustomAttrs []
+                )
+
+            mgbuf.AddOrMergePropertyDef(tref, propDef, vspec.Range)
+        | _ -> ()
+    | storage ->
+        if fs1023TraceEnabled () then
+            fs1023Trace "[ilxgen][provided] skip %s storage=%A" (vspec.CompiledName g.CompilerGlobalState) storage
+
+and private GenProvidedTypeDef cenv (mgbuf: AssemblyBuilder) eenv m (tycon: Tycon) (info: TProvidedTypeInfo) : ILTypeRef option =
+    let g = cenv.g
+    let tcref = mkLocalTyconRef tycon
+    let eenvinner = EnvForTycon tycon eenv
+    let thisTy = generalizedTyconRef g tcref
+    let ilThisTy = GenType cenv m eenvinner.tyenv thisTy
+    let tref = ilThisTy.TypeRef
+    let hidden = IsHiddenTycon eenv.sigToImplRemapInfo tycon
+
+    let tyconForAccess = if eenv.realsig then DoRemapTycon eenv.sigToImplRemapInfo tycon else tycon
+    let access = ComputeTypeAccess tref hidden tyconForAccess.Accessibility cenv.g.realsig
+
+    if fs1023TraceEnabled () then
+        fs1023Trace
+            "[ilxgen][provided] type %s hidden=%b accessibility=%A computedAccess=%A"
+            tref.FullName
+            hidden
+            tyconForAccess.Accessibility
+            access
+
+    let ilCustomAttrs = mkILCustomAttrs (GenAttrs cenv eenv tycon.Attribs)
+
+    let tryComputeBaseILType () =
+        if info.IsInterface then
+            None
+        else
+            try
+                let baseTy = info.LazyBaseType.Force(m, g.obj_ty_withNulls)
+                let ilTy = GenType cenv m eenvinner.tyenv baseTy
+
+                if fs1023TraceEnabled () then
+                    fs1023Trace "[ilxgen][provided] type %s base=%s" tref.FullName (string ilTy.TypeRef)
+
+                Some ilTy
+            with ex ->
+                if fs1023TraceEnabled () then
+                    fs1023Trace "[ilxgen][provided] type %s base-resolution failed: %s" tref.FullName ex.Message
+
+                None
+
+    let ilInterfaceTypes =
+        tycon.ImmediateInterfaceTypesOfFSharpTycon
+        |> List.choose (fun ity ->
+            try
+                let ilTy = GenType cenv m eenvinner.tyenv ity
+                Some ilTy
+            with ex ->
+                if fs1023TraceEnabled () then
+                    fs1023Trace "[ilxgen][provided] type %s interface-resolution failed: %s" tref.FullName ex.Message
+
+                None)
+
+    if fs1023TraceEnabled () && not ilInterfaceTypes.IsEmpty then
+        let names = ilInterfaceTypes |> List.map (fun ty -> ty.TypeRef.FullName) |> List.toArray
+        fs1023Trace "[ilxgen][provided] type %s implements %A" tref.FullName names
+
+    let interfaceImpls =
+        ilInterfaceTypes
+        |> List.map (fun ilTy -> InterfaceImpl.Create(ilTy, emptyILCustomAttrsStored))
+
+    let isDelegate =
+        try
+            info.IsDelegate()
+        with ex ->
+            if fs1023TraceEnabled () then
+                fs1023Trace "[ilxgen][provided] type %s IsDelegate probe failed: %s" tref.FullName ex.Message
+
+            false
+
+    let typeKind =
+        if info.IsInterface then
+            ILTypeDefAdditionalFlags.Interface
+        elif info.IsEnum then
+            ILTypeDefAdditionalFlags.Enum
+        elif isDelegate then
+            ILTypeDefAdditionalFlags.Delegate
+        elif info.IsStructOrEnum then
+            ILTypeDefAdditionalFlags.ValueType
+        else
+            ILTypeDefAdditionalFlags.Class
+
+    let baseILTyOpt = tryComputeBaseILType ()
+
+    let tdef =
+        mkILSimpleClass
+            g.ilg
+            (tref.Name,
+             access,
+             emptyILMethods,
+             emptyILFields,
+             emptyILTypeDefs,
+             emptyILProperties,
+             emptyILEvents,
+             ilCustomAttrs,
+             ILTypeInit.BeforeField)
+        |> (fun td -> td.WithKind(typeKind))
+        |> (fun td -> td.WithAbstract(info.IsAbstract))
+        |> (fun td -> td.WithSealed(info.IsSealed))
+
+    let tdef =
+        match baseILTyOpt with
+        | Some ilBaseTy when not info.IsInterface ->
+            tdef.With(extends = notlazy (Some ilBaseTy))
+        | _ -> tdef
+
+    let tdef =
+        match interfaceImpls with
+        | [] -> tdef
+        | impls -> tdef.With(implements = notlazy impls)
+
+    mgbuf.AddTypeDef(tref, tdef, false, false, None)
+
+    if fs1023TraceEnabled () then
+        let memberNames =
+            tycon.MembersOfFSharpTyconSorted
+            |> List.map (fun v -> v.CompiledName g.CompilerGlobalState)
+            |> List.toArray
+
+        fs1023Trace "[ilxgen][provided] members for %s = %A" tref.FullName memberNames
+
+    tycon.MembersOfFSharpTyconSorted
+    |> List.filter isProvidedVal
+    |> List.iter (genProvidedMemberBinding cenv mgbuf eenvinner tref)
+
+    Some tref
+#endif
+
 and GenTypeDef cenv mgbuf lazyInitInfo eenv m (tycon: Tycon) : ILTypeRef option =
     let g = cenv.g
     let tcref = mkLocalTyconRef tycon
@@ -10845,8 +11141,12 @@ and GenTypeDef cenv mgbuf lazyInitInfo eenv m (tycon: Tycon) : ILTypeRef option 
     else
         match tycon.TypeReprInfo with
 #if !NO_TYPEPROVIDERS
-        | TProvidedNamespaceRepr _
-        | TProvidedTypeRepr _
+        | TProvidedNamespaceRepr _ -> None
+        | TProvidedTypeRepr info when info.IsErased -> None
+        | TProvidedTypeRepr info -> GenProvidedTypeDef cenv mgbuf eenv m tycon info
+#else
+        | TProvidedNamespaceRepr _ -> None
+        | TProvidedTypeRepr _ -> None
 #endif
         | TNoRepr
         | TAsmRepr _
@@ -11993,8 +12293,16 @@ let CodegenAssembly cenv eenv mgbuf implFiles =
                          let qname = QualifiedNameOfFile(mkSynId range0 "unused")
 
                          LocalScope "module" cgbuf (fun (_, endMark) ->
+                             let popProvidedValsForTycon tycon =
+                                 cenv.amap.assemblyLoader.PopProvidedMemberValsForTycon tycon
+
                              let eenv =
-                                 AddBindingsForModuleOrNamespaceContents (AllocValReprWithinExpr cenv cgbuf endMark) eenv.cloc eenv mexpr
+                                 AddBindingsForModuleOrNamespaceContents
+                                     (AllocValReprWithinExpr cenv cgbuf endMark)
+                                     popProvidedValsForTycon
+                                     eenv.cloc
+                                     eenv
+                                     mexpr
 
                              let _eenvEnv = GenModuleOrNamespaceContents cenv cgbuf qname lazyInitInfo eenv mexpr
                              ())),
