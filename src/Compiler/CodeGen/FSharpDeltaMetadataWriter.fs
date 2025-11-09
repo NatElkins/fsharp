@@ -2,9 +2,9 @@ module internal FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
 open System
 open System.Collections.Generic
-open System.Collections.Immutable
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
+open System.Reflection
 open Microsoft.FSharp.Collections
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.IlxDeltaStreams
@@ -23,6 +23,11 @@ type MethodDefinitionRowInfo =
         Key: MethodDefinitionKey
         RowId: int
         IsAdded: bool
+        Attributes: MethodAttributes
+        ImplAttributes: MethodImplAttributes
+        Name: string
+        Signature: byte[]
+        FirstParameterRowId: int option
     }
 
 type ParameterDefinitionRowInfo =
@@ -30,7 +35,9 @@ type ParameterDefinitionRowInfo =
         Key: ParameterDefinitionKey
         RowId: int
         IsAdded: bool
-        ParameterHandle: ParameterHandle option
+        Attributes: ParameterAttributes
+        SequenceNumber: int
+        Name: string option
     }
 
 type MethodMetadataUpdate =
@@ -41,20 +48,24 @@ type MethodMetadataUpdate =
         Body: MethodBodyUpdate
     }
 
-type PropertyMetadataUpdate =
+type PropertyDefinitionRowInfo =
     {
         Key: PropertyDefinitionKey
         RowId: int
         IsAdded: bool
-        Handle: PropertyDefinitionHandle
+        Name: string
+        Signature: byte[]
+        Attributes: PropertyAttributes
     }
 
-type EventMetadataUpdate =
+type EventDefinitionRowInfo =
     {
         Key: EventDefinitionKey
         RowId: int
         IsAdded: bool
-        Handle: EventDefinitionHandle
+        Name: string
+        Attributes: EventAttributes
+        EventType: EntityHandle
     }
 
 type PropertyMapRowInfo =
@@ -102,8 +113,8 @@ let emit
     (moduleId: Guid)
     (methodDefinitionRows: MethodDefinitionRowInfo list)
     (parameterDefinitionRows: ParameterDefinitionRowInfo list)
-    (propertyDefinitionRows: PropertyMetadataUpdate list)
-    (eventDefinitionRows: EventMetadataUpdate list)
+    (propertyDefinitionRows: PropertyDefinitionRowInfo list)
+    (eventDefinitionRows: EventDefinitionRowInfo list)
     (propertyMapRows: PropertyMapRowInfo list)
     (eventMapRows: EventMapRowInfo list)
     (methodSemanticsRows: MethodSemanticsMetadataUpdate list)
@@ -193,7 +204,7 @@ let emit
         let encIdHandle = metadataBuilder.GetOrAddGuid(encId)
         let encBaseHandle = metadataBuilder.GetOrAddGuid(encBaseId)
         let moduleHandle = metadataBuilder.AddModule(0, moduleNameHandle, mvidHandle, encIdHandle, encBaseHandle)
-        let tableMirror = DeltaMetadataTables(metadataReader)
+        let tableMirror = DeltaMetadataTables()
         tableMirror.AddModuleRow(moduleName, moduleId, encId, encBaseId)
 
         let updatesByKey = Dictionary<MethodDefinitionKey, MethodMetadataUpdate>(HashIdentity.Structural)
@@ -209,40 +220,22 @@ let emit
         encLog.Add(struct (TableIndex.Module, moduleRowId, EditAndContinueOperation.Default))
         encMap.Add(struct (TableIndex.Module, moduleRowId))
 
-        let firstParamRowByMethod =
-            let dict = Dictionary<MethodDefinitionKey, int>(HashIdentity.Structural)
-            for row in parameterDefinitionRows do
-                let methodKey = row.Key.Method
-                match dict.TryGetValue methodKey with
-                | true, existing when existing <= row.RowId -> ()
-                | _ -> dict[methodKey] <- row.RowId
-            dict
-
         for row in methodDefinitionRows do
             match updatesByKey.TryGetValue row.Key with
             | true, update ->
-                let methodDef = metadataReader.GetMethodDefinition update.MethodHandle
-
-                let methodName = metadataReader.GetString methodDef.Name
-                let nameHandle = metadataBuilder.GetOrAddString methodName
-
-                let signatureBytes = metadataReader.GetBlobBytes methodDef.Signature
-                let signatureHandle = metadataBuilder.GetOrAddBlob signatureBytes
+                let nameHandle = metadataBuilder.GetOrAddString row.Name
+                let signatureHandle = metadataBuilder.GetOrAddBlob row.Signature
 
                 metadataBuilder.AddMethodDefinition(
-                    methodDef.Attributes,
-                    methodDef.ImplAttributes,
+                    row.Attributes,
+                    row.ImplAttributes,
                     nameHandle,
                     signatureHandle,
                     update.Body.CodeOffset,
                     ParameterHandle()
                 )
                 |> ignore
-                let firstParamRow =
-                    match firstParamRowByMethod.TryGetValue row.Key with
-                    | true, value -> Some value
-                    | _ -> None
-                tableMirror.AddMethodRow(row, methodDef, update.Body, firstParamRow)
+                tableMirror.AddMethodRow(row, update.Body)
 
                 let methodHandle = MetadataTokens.MethodDefinitionHandle row.RowId
                 let operation = if row.IsAdded then EditAndContinueOperation.AddMethod else EditAndContinueOperation.Default
@@ -255,36 +248,25 @@ let emit
                     printfn "[fsharp-hotreload][metadata-writer] missing update payload for %A" row.Key
 
         for row in parameterDefinitionRows do
-            match row.ParameterHandle with
-            | Some handle ->
-                let parameter = metadataReader.GetParameter handle
-                let nameHandle: StringHandle =
-                    if parameter.Name.IsNil then
-                        StringHandle()
-                    else
-                        metadataBuilder.GetOrAddString(metadataReader.GetString parameter.Name)
-                let sequenceNumber = int parameter.SequenceNumber
+            let nameHandle =
+                match row.Name with
+                | Some name -> metadataBuilder.GetOrAddString name
+                | None -> StringHandle()
+            metadataBuilder.AddParameter(row.Attributes, nameHandle, row.SequenceNumber) |> ignore
+            tableMirror.AddParameterRow row
 
-                metadataBuilder.AddParameter(parameter.Attributes, nameHandle, sequenceNumber) |> ignore
-                tableMirror.AddParameterRow(row, parameter)
-
-                let parameterHandle = MetadataTokens.ParameterHandle row.RowId
-                let operation = if row.IsAdded then EditAndContinueOperation.AddParameter else EditAndContinueOperation.Default
-                metadataBuilder.AddEncLogEntry(parameterHandle, operation) |> ignore
-                metadataBuilder.AddEncMapEntry(parameterHandle) |> ignore
-                encLog.Add(struct (TableIndex.Param, row.RowId, operation))
-                encMap.Add(struct (TableIndex.Param, row.RowId))
-            | None ->
-                failwith "Added parameter rows require parameter metadata payload."
+            let parameterHandle = MetadataTokens.ParameterHandle row.RowId
+            let operation = if row.IsAdded then EditAndContinueOperation.AddParameter else EditAndContinueOperation.Default
+            metadataBuilder.AddEncLogEntry(parameterHandle, operation) |> ignore
+            metadataBuilder.AddEncMapEntry(parameterHandle) |> ignore
+            encLog.Add(struct (TableIndex.Param, row.RowId, operation))
+            encMap.Add(struct (TableIndex.Param, row.RowId))
 
         for row in propertyDefinitionRows do
-            let propertyDef = metadataReader.GetPropertyDefinition row.Handle
-            let propertyName = metadataReader.GetString propertyDef.Name
-            let nameHandle = metadataBuilder.GetOrAddString propertyName
-            let signatureBytes = metadataReader.GetBlobBytes propertyDef.Signature
-            let signatureHandle = metadataBuilder.GetOrAddBlob signatureBytes
+            let nameHandle = metadataBuilder.GetOrAddString row.Name
+            let signatureHandle = metadataBuilder.GetOrAddBlob row.Signature
 
-            metadataBuilder.AddProperty(propertyDef.Attributes, nameHandle, signatureHandle) |> ignore
+            metadataBuilder.AddProperty(row.Attributes, nameHandle, signatureHandle) |> ignore
             tableMirror.AddPropertyRow row
 
             let propertyHandle = MetadataTokens.PropertyDefinitionHandle row.RowId
@@ -295,12 +277,10 @@ let emit
             encMap.Add(struct (TableIndex.Property, row.RowId))
 
         for row in eventDefinitionRows do
-            let eventDef = metadataReader.GetEventDefinition row.Handle
-            let eventName = metadataReader.GetString eventDef.Name
-            let nameHandle = metadataBuilder.GetOrAddString eventName
-            let typeHandle = eventDef.Type
+            let nameHandle = metadataBuilder.GetOrAddString row.Name
+            let typeHandle = row.EventType
 
-            metadataBuilder.AddEvent(eventDef.Attributes, nameHandle, typeHandle) |> ignore
+            metadataBuilder.AddEvent(row.Attributes, nameHandle, typeHandle) |> ignore
             tableMirror.AddEventRow row
 
             let eventHandle = MetadataTokens.EventDefinitionHandle row.RowId

@@ -252,8 +252,16 @@ module FSharpDeltaMetadataWriterTests =
         let stringType = ilGlobals.typ_String
         let methodKey = methodKey "Sample.PropertyHost" "get_Message" stringType
 
+        let getterDef = metadataReader.GetMethodDefinition getterHandle
         let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
-            [ { Key = methodKey; RowId = 1; IsAdded = true } ]
+            [ { Key = methodKey
+                RowId = 1
+                IsAdded = true
+                Attributes = getterDef.Attributes
+                ImplAttributes = getterDef.ImplAttributes
+                Name = metadataReader.GetString getterDef.Name
+                Signature = metadataReader.GetBlobBytes getterDef.Signature
+                FirstParameterRowId = None } ]
 
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
@@ -271,11 +279,14 @@ module FSharpDeltaMetadataWriterTests =
               PropertyType = stringType
               IndexParameterTypes = [] }
 
-        let propertyRows: DeltaWriter.PropertyMetadataUpdate list =
+        let propertyDef = metadataReader.GetPropertyDefinition propertyHandle
+        let propertyRows: DeltaWriter.PropertyDefinitionRowInfo list =
             [ { Key = propertyKey
                 RowId = 1
                 IsAdded = true
-                Handle = propertyHandle } ]
+                Name = metadataReader.GetString propertyDef.Name
+                Signature = metadataReader.GetBlobBytes propertyDef.Signature
+                Attributes = propertyDef.Attributes } ]
 
         let propertyMapRows: DeltaWriter.PropertyMapRowInfo list =
             [ { DeclaringType = "Sample.PropertyHost"
@@ -336,8 +347,16 @@ module FSharpDeltaMetadataWriterTests =
 
         let methodKey = methodKey "Sample.EventHost" "add_OnChanged" ILType.Void
 
+        let addDef = metadataReader.GetMethodDefinition addHandle
         let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
-            [ { Key = methodKey; RowId = 1; IsAdded = true } ]
+            [ { Key = methodKey
+                RowId = 1
+                IsAdded = true
+                Attributes = addDef.Attributes
+                ImplAttributes = addDef.ImplAttributes
+                Name = metadataReader.GetString addDef.Name
+                Signature = metadataReader.GetBlobBytes addDef.Signature
+                FirstParameterRowId = None } ]
 
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
@@ -354,11 +373,14 @@ module FSharpDeltaMetadataWriterTests =
               Name = "OnChanged"
               EventType = Some ilGlobals.typ_Object }
 
-        let eventRows: DeltaWriter.EventMetadataUpdate list =
+        let eventDef = metadataReader.GetEventDefinition eventHandle
+        let eventRows: DeltaWriter.EventDefinitionRowInfo list =
             [ { Key = eventKey
                 RowId = 1
                 IsAdded = true
-                Handle = eventHandle } ]
+                Name = metadataReader.GetString eventDef.Name
+                Attributes = eventDef.Attributes
+                EventType = eventDef.Type } ]
 
         let eventMapRows: DeltaWriter.EventMapRowInfo list =
             [ { DeclaringType = "Sample.EventHost"

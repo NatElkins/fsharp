@@ -964,35 +964,75 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                    MethodHandle = methodHandle
                    Body = bodyUpdate }, methodDef))
 
-        let methodDefinitionRowsSnapshot =
-            methodDefinitionRowsRaw
-            |> List.map (fun struct (rowId, key, isAdded) ->
-                { MethodDefinitionRowInfo.Key = key
-                  RowId = rowId
-                  IsAdded = isAdded })
+        let methodMetadataLookup =
+            let dict = Dictionary<MethodDefinitionKey, struct (MethodAttributes * MethodImplAttributes * string * byte[])>(HashIdentity.Structural)
+            for update, methodDef in methodUpdatesWithDefs do
+                let name = metadataReader.GetString methodDef.Name
+                let signature = metadataReader.GetBlobBytes methodDef.Signature
+                dict[update.MethodKey] <- struct (methodDef.Attributes, methodDef.ImplAttributes, name, signature)
+            dict
+
+        let firstParamRowByMethod = Dictionary<MethodDefinitionKey, int>(HashIdentity.Structural)
 
         let parameterDefinitionRowsSnapshot =
             parameterDefinitionIndex.Rows
-            |> List.map (fun struct (rowId, key, isAdded) ->
-                let handleOpt =
-                    match parameterHandleLookup.TryGetValue key with
-                    | true, handle -> Some handle
-                    | _ -> None
-                { ParameterDefinitionRowInfo.Key = key
-                  RowId = rowId
-                  IsAdded = isAdded
-                  ParameterHandle = handleOpt })
+            |> List.choose (fun struct (rowId, key, isAdded) ->
+                match parameterHandleLookup.TryGetValue key with
+                | true, handle when not handle.IsNil ->
+                    let parameter = metadataReader.GetParameter handle
+                    let name =
+                        if parameter.Name.IsNil then
+                            None
+                        else
+                            metadataReader.GetString parameter.Name |> Some
+                    match firstParamRowByMethod.TryGetValue key.Method with
+                    | true, existing when existing <= rowId -> ()
+                    | _ -> firstParamRowByMethod[key.Method] <- rowId
+
+                    Some
+                        { ParameterDefinitionRowInfo.Key = key
+                          RowId = rowId
+                          IsAdded = isAdded
+                          Attributes = parameter.Attributes
+                          SequenceNumber = int parameter.SequenceNumber
+                          Name = name }
+                | _ -> None)
+
+        let methodDefinitionRowsSnapshot =
+            methodDefinitionRowsRaw
+            |> List.choose (fun struct (rowId, key, isAdded) ->
+                match methodMetadataLookup.TryGetValue key with
+                | true, struct (attrs, implAttrs, name, signature) ->
+                    let firstParam =
+                        match firstParamRowByMethod.TryGetValue key with
+                        | true, value -> Some value
+                        | _ -> None
+                    Some
+                        { MethodDefinitionRowInfo.Key = key
+                          RowId = rowId
+                          IsAdded = isAdded
+                          Attributes = attrs
+                          ImplAttributes = implAttrs
+                          Name = name
+                          Signature = signature
+                          FirstParameterRowId = firstParam }
+                | _ -> None)
 
         let propertyDefinitionRowsSnapshot =
             propertyDefinitionIndex.Rows
             |> List.choose (fun struct (rowId, key, isAdded) ->
                 match propertyHandleLookup.TryGetValue key with
                 | true, handle when not handle.IsNil ->
+                    let propertyDef = metadataReader.GetPropertyDefinition handle
+                    let name = metadataReader.GetString propertyDef.Name
+                    let signature = metadataReader.GetBlobBytes propertyDef.Signature
                     Some
-                        { PropertyMetadataUpdate.Key = key
+                        { PropertyDefinitionRowInfo.Key = key
                           RowId = rowId
                           IsAdded = isAdded
-                          Handle = handle }
+                          Name = name
+                          Signature = signature
+                          Attributes = propertyDef.Attributes }
                 | _ -> None)
 
         if traceMethodUpdates.Value then
@@ -1003,11 +1043,15 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             |> List.choose (fun struct (rowId, key, isAdded) ->
                 match eventHandleLookup.TryGetValue key with
                 | true, handle when not handle.IsNil ->
+                    let eventDef = metadataReader.GetEventDefinition handle
+                    let name = metadataReader.GetString eventDef.Name
                     Some
-                        { EventMetadataUpdate.Key = key
+                        { EventDefinitionRowInfo.Key = key
                           RowId = rowId
                           IsAdded = isAdded
-                          Handle = handle }
+                          Name = name
+                          Attributes = eventDef.Attributes
+                          EventType = eventDef.Type }
                 | _ -> None)
 
         let propertyRowsByType =
