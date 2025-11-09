@@ -9,6 +9,7 @@ open Microsoft.FSharp.Collections
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.HotReloadBaseline
+open FSharp.Compiler.CodeGen.DeltaMetadataTables
 
 let private shouldTraceMetadata () =
     match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METADATA") with
@@ -192,6 +193,8 @@ let emit
         let encIdHandle = metadataBuilder.GetOrAddGuid(encId)
         let encBaseHandle = metadataBuilder.GetOrAddGuid(encBaseId)
         let moduleHandle = metadataBuilder.AddModule(0, moduleNameHandle, mvidHandle, encIdHandle, encBaseHandle)
+        let tableMirror = DeltaMetadataTables(metadataReader)
+        tableMirror.AddModuleRow(moduleName, moduleId, encId, encBaseId)
 
         let updatesByKey = Dictionary<MethodDefinitionKey, MethodMetadataUpdate>(HashIdentity.Structural)
         for update in updates do
@@ -205,6 +208,15 @@ let emit
         let moduleRowId = MetadataTokens.GetRowNumber moduleHandle
         encLog.Add(struct (TableIndex.Module, moduleRowId, EditAndContinueOperation.Default))
         encMap.Add(struct (TableIndex.Module, moduleRowId))
+
+        let firstParamRowByMethod =
+            let dict = Dictionary<MethodDefinitionKey, int>(HashIdentity.Structural)
+            for row in parameterDefinitionRows do
+                let methodKey = row.Key.Method
+                match dict.TryGetValue methodKey with
+                | true, existing when existing <= row.RowId -> ()
+                | _ -> dict[methodKey] <- row.RowId
+            dict
 
         for row in methodDefinitionRows do
             match updatesByKey.TryGetValue row.Key with
@@ -226,6 +238,11 @@ let emit
                     ParameterHandle()
                 )
                 |> ignore
+                let firstParamRow =
+                    match firstParamRowByMethod.TryGetValue row.Key with
+                    | true, value -> Some value
+                    | _ -> None
+                tableMirror.AddMethodRow(row, methodDef, update.Body, firstParamRow)
 
                 let methodHandle = MetadataTokens.MethodDefinitionHandle row.RowId
                 let operation = if row.IsAdded then EditAndContinueOperation.AddMethod else EditAndContinueOperation.Default
@@ -249,6 +266,7 @@ let emit
                 let sequenceNumber = int parameter.SequenceNumber
 
                 metadataBuilder.AddParameter(parameter.Attributes, nameHandle, sequenceNumber) |> ignore
+                tableMirror.AddParameterRow(row, parameter)
 
                 let parameterHandle = MetadataTokens.ParameterHandle row.RowId
                 let operation = if row.IsAdded then EditAndContinueOperation.AddParameter else EditAndContinueOperation.Default
@@ -267,6 +285,7 @@ let emit
             let signatureHandle = metadataBuilder.GetOrAddBlob signatureBytes
 
             metadataBuilder.AddProperty(propertyDef.Attributes, nameHandle, signatureHandle) |> ignore
+            tableMirror.AddPropertyRow row
 
             let propertyHandle = MetadataTokens.PropertyDefinitionHandle row.RowId
             let operation = if row.IsAdded then EditAndContinueOperation.AddProperty else EditAndContinueOperation.Default
@@ -282,6 +301,7 @@ let emit
             let typeHandle = eventDef.Type
 
             metadataBuilder.AddEvent(eventDef.Attributes, nameHandle, typeHandle) |> ignore
+            tableMirror.AddEventRow row
 
             let eventHandle = MetadataTokens.EventDefinitionHandle row.RowId
             let operation = if row.IsAdded then EditAndContinueOperation.AddEvent else EditAndContinueOperation.Default
@@ -304,6 +324,7 @@ let emit
             metadataBuilder.AddEncMapEntry(handle) |> ignore
             encLog.Add(struct (TableIndex.PropertyMap, row.RowId, EditAndContinueOperation.Default))
             encMap.Add(struct (TableIndex.PropertyMap, row.RowId))
+            tableMirror.AddPropertyMapRow row
 
         for row in eventMapRows do
             let handle = MetadataTokens.EntityHandle(TableIndex.EventMap, row.RowId)
@@ -319,12 +340,14 @@ let emit
             metadataBuilder.AddEncMapEntry(handle) |> ignore
             encLog.Add(struct (TableIndex.EventMap, row.RowId, EditAndContinueOperation.Default))
             encMap.Add(struct (TableIndex.EventMap, row.RowId))
+            tableMirror.AddEventMapRow row
 
         for row in methodSemanticsRows do
             if row.IsAdded then
                 let methodRowId = row.MethodToken &&& 0x00FFFFFF
                 let methodHandle = MetadataTokens.MethodDefinitionHandle methodRowId
                 metadataBuilder.AddMethodSemantics(row.Association, row.Attributes, methodHandle) |> ignore
+            tableMirror.AddMethodSemanticsRow row
 
             let semanticsHandle =
                 MetadataTokens.Handle(TableIndex.MethodSemantics, row.RowId)
@@ -380,14 +403,7 @@ let emit
         use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange(metadataBlob.ToArray()))
         let deltaReader = deltaProvider.GetMetadataReader()
 
-        let tableRowCounts = Array.zeroCreate MetadataTokens.TableCount
-        tableRowCounts.[int TableIndex.MethodDef] <- methodUpdateCount
-        tableRowCounts.[int TableIndex.Param] <- parameterUpdateCount
-        tableRowCounts.[int TableIndex.Property] <- propertyUpdateCount
-        tableRowCounts.[int TableIndex.Event] <- eventUpdateCount
-        tableRowCounts.[int TableIndex.PropertyMap] <- propertyMapAddCount
-        tableRowCounts.[int TableIndex.EventMap] <- eventMapAddCount
-        tableRowCounts.[int TableIndex.MethodSemantics] <- methodSemanticsUpdateCount
+        let tableRowCounts = tableMirror.TableRowCounts
 
         let heapSizes =
             { StringHeapSize = deltaReader.GetHeapSize HeapIndex.String
