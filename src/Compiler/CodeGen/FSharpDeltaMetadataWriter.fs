@@ -380,16 +380,9 @@ let emit
             let enriched = sprintf "Metadata serialization failed. Non-zero tables: %s" details
             raise (Exception(enriched, ex))
 
-        use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange(metadataBlob.ToArray()))
-        let deltaReader = deltaProvider.GetMetadataReader()
-
         let tableRowCounts = tableMirror.TableRowCounts
 
-        let heapSizes =
-            { StringHeapSize = deltaReader.GetHeapSize HeapIndex.String
-              UserStringHeapSize = deltaReader.GetHeapSize HeapIndex.UserString
-              BlobHeapSize = deltaReader.GetHeapSize HeapIndex.Blob
-              GuidHeapSize = deltaReader.GetHeapSize HeapIndex.Guid }
+        let heapSizes = tableMirror.HeapSizes
 
         if shouldTraceMetadata () then
             printfn "[fsharp-hotreload][metadata-writer] tableCounts method=%d param=%d" methodUpdateCount parameterUpdateCount

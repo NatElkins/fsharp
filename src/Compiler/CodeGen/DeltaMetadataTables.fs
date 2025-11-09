@@ -2,6 +2,7 @@ module internal FSharp.Compiler.CodeGen.DeltaMetadataTables
 
 open System
 open System.Reflection.Metadata
+open System.Text
 open Microsoft.FSharp.Collections
 open FSharp.Compiler.AbstractIL.ILBinary
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
@@ -11,6 +12,7 @@ open FSharp.Compiler.HotReloadBaseline
 /// hot reload deltas. The tables are populated alongside the SRM metadata
 /// builder so we can eventually serialize deltas directly via AbstractIL.
 type DeltaMetadataTables() =
+    let utf8 = Encoding.UTF8
     let strings = MetadataTable<string>.New("#Strings", HashIdentity.Structural)
     let blobs = MetadataTable<byte[]>.New("#Blob", HashIdentity.Structural)
     let guids = MetadataTable<byte[]>.New("#Guid", HashIdentity.Structural)
@@ -144,6 +146,38 @@ type DeltaMetadataTables() =
             |]
             |> UnsharedRow
         methodSemanticsTable.AddUnsharedEntry rowElements |> ignore
+
+    let inline compressedLength size =
+        if size <= 0x7F then 1
+        elif size <= 0x3FFF then 2
+        else 4
+
+    member _.StringHeapSize
+        with get () =
+            let mutable total = 1 // initial empty string entry
+            for entry in strings.Entries do
+                if String.IsNullOrEmpty entry then
+                    total <- total + 1
+                else
+                    total <- total + utf8.GetByteCount(entry) + 1
+            total
+
+    member _.BlobHeapSize
+        with get () =
+            let mutable total = 1 // initial empty blob
+            for entry in blobs.Entries do
+                total <- total + compressedLength entry.Length + entry.Length
+            total
+
+    member _.GuidHeapSize
+        with get () =
+            guids.Count * 16
+
+    member _.HeapSizes : MetadataHeapSizes =
+        { StringHeapSize = _.StringHeapSize
+          UserStringHeapSize = 0
+          BlobHeapSize = _.BlobHeapSize
+          GuidHeapSize = _.GuidHeapSize }
 
     member _.TableRowCounts : int[] =
         let counts = Array.zeroCreate MetadataTokens.TableCount
