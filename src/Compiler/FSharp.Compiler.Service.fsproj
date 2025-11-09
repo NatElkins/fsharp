@@ -439,6 +439,7 @@
     <Compile Include="CodeGen\FSharpDefinitionIndex.fs" />
     <Compile Include="CodeGen\FSharpDeltaMetadataWriter.fs" />
     <Compile Include="CodeGen\DeltaTableLayout.fs" />
+    <Compile Include="CodeGen\DeltaIndexSizing.fs" />
     <Compile Include="CodeGen\DeltaMetadataTables.fs" />
     <Compile Include="HotReload\FSharpMetadataAggregator.fs" />
     <Compile Include="HotReload\SymbolMatcher.fs" />

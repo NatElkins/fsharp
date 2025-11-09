@@ -11,6 +11,7 @@ open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.CodeGen.DeltaTableLayout
+open FSharp.Compiler.CodeGen.DeltaIndexSizing
 
 let private shouldTraceMetadata () =
     match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METADATA") with
@@ -109,6 +110,7 @@ type MetadataDelta =
         HeapSizes: MetadataHeapSizes
         Tables: DeltaMetadataTables.TableRows
         TableBitMasks: TableBitMasks
+        IndexSizes: CodedIndexSizes
     }
 
 let emit
@@ -406,6 +408,12 @@ let emit
         let tableBitMasks = DeltaTableLayout.computeBitMasks tableRowCounts
 
         let heapSizes = tableMirror.HeapSizes
+        let indexSizes =
+            DeltaIndexSizing.compute
+                tableRowCounts
+                heapSizes.StringHeapSize
+                heapSizes.BlobHeapSize
+                heapSizes.GuidHeapSize
 
         if shouldTraceMetadata () then
             printfn "[fsharp-hotreload][metadata-writer] tableCounts method=%d param=%d" methodUpdateCount parameterUpdateCount
@@ -419,4 +427,5 @@ let emit
           TableRowCounts = tableRowCounts
           HeapSizes = heapSizes
           Tables = tableMirror.TableRows
-          TableBitMasks = tableBitMasks }
+          TableBitMasks = tableBitMasks
+          IndexSizes = indexSizes }
