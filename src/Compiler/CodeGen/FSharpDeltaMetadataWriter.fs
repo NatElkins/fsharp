@@ -10,6 +10,7 @@ open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
+open FSharp.Compiler.CodeGen.DeltaTableLayout
 
 let private shouldTraceMetadata () =
     match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METADATA") with
@@ -107,6 +108,7 @@ type MetadataDelta =
         TableRowCounts: int[]
         HeapSizes: MetadataHeapSizes
         Tables: DeltaMetadataTables.TableRows
+        TableBitMasks: TableBitMasks
     }
 
 let emit
@@ -133,11 +135,29 @@ let emit
               BlobHeapSize = 0
               GuidHeapSize = 0 }
 
+        let emptyTableRows : DeltaMetadataTables.TableRows =
+            { Module = Array.empty
+              MethodDef = Array.empty
+              Param = Array.empty
+              Property = Array.empty
+              Event = Array.empty
+              PropertyMap = Array.empty
+              EventMap = Array.empty
+              MethodSemantics = Array.empty }
+
+        let emptyCounts = Array.zeroCreate MetadataTokens.TableCount
+        let emptyBitMasks = DeltaTableLayout.computeBitMasks emptyCounts
+
         { Metadata = Array.empty
+          StringHeap = Array.empty
+          BlobHeap = Array.empty
+          GuidHeap = Array.empty
           EncLog = Array.empty
           EncMap = Array.empty
-          TableRowCounts = Array.zeroCreate MetadataTokens.TableCount
-          HeapSizes = emptyHeapSizes }
+          TableRowCounts = emptyCounts
+          HeapSizes = emptyHeapSizes
+          Tables = emptyTableRows
+          TableBitMasks = emptyBitMasks }
     else
 
         // Ensure tables not emitted in the current delta remain empty to satisfy metadata writer invariants.
@@ -383,6 +403,7 @@ let emit
             raise (Exception(enriched, ex))
 
         let tableRowCounts = tableMirror.TableRowCounts
+        let tableBitMasks = DeltaTableLayout.computeBitMasks tableRowCounts
 
         let heapSizes = tableMirror.HeapSizes
 
@@ -397,4 +418,5 @@ let emit
           EncMap = encMap |> Seq.toArray |> Array.map (fun struct (a, b) -> (a, b))
           TableRowCounts = tableRowCounts
           HeapSizes = heapSizes
-          Tables = tableMirror.TableRows }
+          Tables = tableMirror.TableRows
+          TableBitMasks = tableBitMasks }
