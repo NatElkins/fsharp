@@ -240,15 +240,12 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
   2. ✅ `UnionInput_preservesCases` – regression `union input compiles generated summaries` does the same for a discriminated union static argument, verifying union metadata flows through TastReflection → IlxGen → static linking.
   3. ✅ `GenericInput_multipleInstantiations` – regression added (currently `[<Fact(Skip=...>]` because `checker.Compile` hangs when the static argument is an instantiation of a generic type). The test documents the scenario and will be re-enabled once the Phase 4 follow-up (“teach TypeReflectionBuilder/ProvidedMemberBinding to handle generic optional parameters without deadlocking”) lands.
   4. ✅ `AttributePropagation_roundTrips` – regression (`attribute propagation round trips metadata`) now compiles the sample provider/consumer, loads both normal and `/standalone` outputs, and asserts the optional/optional-literal/indexer summary properties still match the expected attribute-derived strings.
-  5. Negative coverage: attempting to pass anonymous records or provided types as static args yields the expected diagnostics.
+  5. ✅ `CSharpConsumer_executesGeneratedMember` – regression (`csharp consumer executes generated member`) builds a tiny C# console app that references the consumer assembly (plus FSharp.Core) and runs it, proving cross-language consumers succeed without the provider DLL even in `/standalone` mode. The CsProj now targets `net10.0`, matching the consumer DLL and eliminating the previous `System.Runtime` version conflict reported by `dotnet build CsConsumer.csproj`.
+  6. Negative coverage: attempting to pass anonymous records or provided types as static args yields the expected diagnostics.
 - **Stretch:** port the test driver into `tests/fsharp/typeProviders/` once the scenarios stabilize so we can exercise both compiler+IL and IDE pipelines.
 - **Notes:** The typed-tree regression now traverses nested `FSharpImplementationFileDeclaration`s, so it finds `Fs1023Consumer.Provided` underneath the namespace entity and asserts on the cached members. For Phase 4 we decided to tackle IlxGen in two hops: (1) add a helper that turns a `Val`’s `ProvidedMemberBinding` (invoker expr + vars) back into a typed `Expr` so existing `GenBinding` machinery can emit IL, then (2) light up `GenTypeDef`’s `TProvidedTypeRepr` path to call that helper for each generated member instead of skipping the type entirely. Once both steps are in place we can extend the regression to inspect emitted IL and cover setters/indexers.
 
-### 5.2 End-to-end C# consumer
-
-- Add integration test where provider generates a type based on an F# record and compile a small C# project consuming the generated API.
-
-### 5.3 Negative tests
+### 5.2 Negative tests
 
 - Validate diagnostics when:
   - Static parameter references unsupported type.

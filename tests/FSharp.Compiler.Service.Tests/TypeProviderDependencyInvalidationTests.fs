@@ -5,6 +5,7 @@ namespace FSharp.Compiler.Service.Tests
 open System
 open System.IO
 open System.Reflection
+open System.Diagnostics
 open System.Runtime.Loader
 open Xunit
 open FSharp.Compiler.CodeAnalysis
@@ -288,6 +289,24 @@ type ProvidedProvided = Fs1023.ProvidedGenerator<Source = ProvidedGenerated>
         File.WriteAllText(path, contents)
 
     let private getFullPath path = Path.GetFullPath path
+
+    let private runCommand workingDir fileName args =
+        let psi = ProcessStartInfo(fileName)
+        psi.WorkingDirectory <- workingDir
+        psi.RedirectStandardOutput <- true
+        psi.RedirectStandardError <- true
+        psi.UseShellExecute <- false
+
+        for arg in args do
+            psi.ArgumentList.Add arg
+
+        use proc = Process.Start(psi)
+        let stdout = proc.StandardOutput.ReadToEnd()
+        let stderr = proc.StandardError.ReadToEnd()
+        proc.WaitForExit()
+
+        if proc.ExitCode <> 0 then
+            failwithf "Command '%s %s' failed with exit code %d.%s%s" fileName (String.concat " " args) proc.ExitCode stdout stderr
 
     [<Fact>]
     let ``type provider re-runs when source type changes`` () =
@@ -898,6 +917,100 @@ module UseShapeProvided =
                 Assert.Equal("index:Int32", getter "IndexerParameters")
 
             compileAndAssert providerPath providerDll [ modelPath; consumerPath ] outputDll assertions
+        finally
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``csharp consumer executes generated member`` () =
+        let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(tempDir) |> ignore
+
+        try
+            let providerPath = Path.Combine(tempDir, "Fs1023Provider.fs")
+            let providerDll = Path.Combine(tempDir, "Fs1023Provider.dll")
+            let modelPath = Path.Combine(tempDir, "Model.fs")
+            let consumerPath = Path.Combine(tempDir, "Consumer.fs")
+            let outputDll = Path.Combine(tempDir, "Consumer.dll")
+
+            writeFile providerPath providerSource
+            writeFile modelPath modelSourceInitial
+            writeFile consumerPath consumerSource
+
+            let providerArgs =
+                Array.append
+                    (mkProjectCommandLineArgs(providerDll, [ providerPath ]))
+                    [| "-r:" + providedTypesAssembly |]
+
+            compile providerArgs
+
+            let consumerArgs =
+                Array.append
+                    (mkProjectCommandLineArgs(outputDll, [ modelPath; consumerPath ]))
+                    [| "-r:" + providerDll |]
+
+            compile consumerArgs
+
+            let programPath = Path.Combine(tempDir, "Program.cs")
+            let programSource =
+                """
+using System;
+
+class Program
+{
+    static int Main()
+    {
+        var value = Fs1023Consumer.Provided.Value;
+        var summary = Fs1023Consumer.Provided.MapParameters;
+        return value == "Value" && summary == "value:required:normal;rest:required:paramarray" ? 0 : 1;
+    }
+}
+"""
+
+            File.WriteAllText(programPath, programSource)
+
+            let repoRoot = Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..", ".."))
+            let fsharpCoreCandidates =
+                [ Path.Combine(repoRoot, "artifacts/bin/FSharp.Core/Release/netstandard2.0/FSharp.Core.dll")
+                  Path.Combine(repoRoot, "artifacts/bin/FSharp.Core/Release/netstandard2.1/FSharp.Core.dll") ]
+
+            let fsharpCorePath =
+                match fsharpCoreCandidates |> List.tryFind File.Exists with
+                | Some path -> path
+                | None -> failwith "FSharp.Core.dll not found in artifacts/bin/FSharp.Core"
+
+            let csprojPath = Path.Combine(tempDir, "CsConsumer.csproj")
+            let csprojContent =
+                $"""
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <UseAppHost>false</UseAppHost>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Fs1023Consumer">
+      <HintPath>{outputDll}</HintPath>
+    </Reference>
+    <Reference Include="FSharp.Core">
+      <HintPath>{fsharpCorePath}</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>
+"""
+
+            File.WriteAllText(csprojPath, csprojContent)
+
+            runCommand tempDir "dotnet" [ "build"; "CsConsumer.csproj"; "-c"; "Release" ]
+
+            let csOutput = Path.Combine(tempDir, "bin", "Release", "net10.0", "CsConsumer.dll")
+            Assert.True(File.Exists(csOutput), "Expected dotnet build to produce CsConsumer.dll")
+
+            runCommand tempDir "dotnet" [ csOutput ]
         finally
             if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
                 printfn "[fs1023] preserving temp dir %s" tempDir
