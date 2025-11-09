@@ -179,6 +179,39 @@ type Fs1023Provider(config: TypeProviderConfig) as this =
 do ()
 """
 
+    let providerNonGeneratedSource = """
+namespace Fs1023Invalid
+
+open System
+open System.Reflection
+open Microsoft.FSharp.Core.CompilerServices
+open Microsoft.FSharp.Quotations
+open ProviderImplementation.ProvidedTypes
+
+[<TypeProvider>]
+type NonGeneratedProvider(config: TypeProviderConfig) as this =
+    inherit TypeProviderForNamespaces(config)
+
+    let assembly = Assembly.GetExecutingAssembly()
+    let namespaceName = "Fs1023Invalid"
+    let generator = ProvidedTypeDefinition(assembly, namespaceName, "NonGeneratedGenerator", Some typeof<obj>, isErased = true)
+
+    do
+        let parameters = [ ProvidedStaticParameter("Source", typeof<Type>) ]
+
+        generator.DefineStaticParameters(parameters, fun typeName _ ->
+            let provided = ProvidedTypeDefinition(assembly, namespaceName, typeName, Some typeof<obj>, isErased = true)
+            let getter (_args: Expr list) = <@@ "invalid" @@>
+            let property = ProvidedProperty("Value", typeof<string>, isStatic = true, getterCode = getter)
+            provided.AddMember property
+            provided)
+
+        this.AddNamespace(namespaceName, [ generator ])
+
+[<assembly: TypeProviderAssembly>]
+do ()
+"""
+
     let private modelSourceInitial = """
 namespace Fs1023Consumer
 
@@ -262,6 +295,17 @@ type Model = { Value: int }
 
 type ProvidedGenerated = Fs1023.ProvidedGenerator<Source = Model>
 type ProvidedProvided = Fs1023.ProvidedGenerator<Source = ProvidedGenerated>
+"""
+
+    let private consumerSourceNonGeneratedProvidedType = """
+namespace Fs1023Consumer
+
+type Model = { Value: int }
+
+type Provided = Fs1023Invalid.NonGeneratedGenerator<Source = Model>
+
+module UseProvided =
+    let name = Provided.Value
 """
 
     let private ensureSuccess (diagnostics: FSharpDiagnostic[]) =
@@ -521,6 +565,58 @@ type ProvidedProvided = Fs1023.ProvidedGenerator<Source = ProvidedGenerated>
             Assert.True(errors |> Array.exists (fun e -> e.Message.Contains "provided types cannot be used as static arguments"), "Expected diagnostic mentioning provided type restriction.")
         finally
             try Directory.Delete(tempDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``non-generated provider types are rejected`` () =
+        let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(tempDir) |> ignore
+
+        try
+            let providerPath = Path.Combine(tempDir, "Fs1023InvalidProvider.fs")
+            let providerDll = Path.Combine(tempDir, "Fs1023InvalidProvider.dll")
+
+            writeFile providerPath providerNonGeneratedSource
+
+            let providerArgs =
+                Array.append
+                    (mkProjectCommandLineArgs(providerDll, [ providerPath ]))
+                    [| "-r:" + providedTypesAssembly |]
+
+            compile providerArgs
+
+            let consumerPath = Path.Combine(tempDir, "Consumer.fs")
+            writeFile consumerPath consumerSourceNonGeneratedProvidedType
+
+            let outputDll = Path.Combine(tempDir, "Consumer.dll")
+            let projectFile = Path.Combine(tempDir, "Consumer.fsproj")
+
+            let projectArgs =
+                Array.append
+                    (mkProjectCommandLineArgs(outputDll, [ consumerPath ]))
+                    [| "-r:" + providerDll |]
+
+            let projectOptions =
+                { checker.GetProjectOptionsFromCommandLineArgs(projectFile, projectArgs) with
+                    SourceFiles = [| consumerPath |] }
+
+            let results = checker.ParseAndCheckProject(projectOptions) |> Async.RunImmediate
+
+            let errors =
+                results.Diagnostics
+                |> Array.filter (fun d -> d.Severity = FSharpDiagnosticSeverity.Error)
+
+            errors |> Array.iter (fun d -> printfn "[non-generated] %s" d.Message)
+
+            Assert.True(errors.Length > 0, "Expected non-generated provider type to be rejected.")
+            let messageMatches (e: FSharpDiagnostic) =
+                e.Message.Contains("non-generated type")
+                || e.Message.Contains("type could not be found in that assembly")
+            Assert.True(errors |> Array.exists messageMatches, "Expected diagnostic mentioning non-generated type restriction.")
+        finally
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()
 
     [<Fact>]
     let ``reflection proxy surfaces parameter metadata`` () =

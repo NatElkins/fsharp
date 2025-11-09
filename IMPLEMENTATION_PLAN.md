@@ -247,9 +247,8 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 
 ### 5.2 Negative tests
 
-- Validate diagnostics when:
-  - Static parameter references unsupported type.
-  - Provider emits IL referencing non-generated project types.
+- ✅ Static-argument rejections: `anonymous record static argument is rejected`, `type parameter static argument is rejected`, and `provided type static argument is rejected` all assert that TcStaticConstantParameter surfaces the expected diagnostics for anonymous records, typars, and provided types respectively.
+- ✅ Provider-surface guard: `non-generated provider types are rejected` compiles a provider that attempts to return an erased/non-generated type and verifies the compiler surfaces the relocation failure (“type could not be found in that assembly”) rather than emitting IL for it, proving we block providers from projecting project-defined types.
 
 ---
 
