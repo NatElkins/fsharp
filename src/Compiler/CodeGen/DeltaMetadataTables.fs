@@ -1,6 +1,7 @@
 module internal FSharp.Compiler.CodeGen.DeltaMetadataTables
 
 open System
+open System.IO
 open System.Reflection.Metadata
 open System.Text
 open Microsoft.FSharp.Collections
@@ -152,26 +153,98 @@ type DeltaMetadataTables() =
         elif size <= 0x3FFF then 2
         else 4
 
-    member _.StringHeapSize
-        with get () =
-            let mutable total = 1 // initial empty string entry
-            for entry in strings.Entries do
-                if String.IsNullOrEmpty entry then
-                    total <- total + 1
-                else
-                    total <- total + utf8.GetByteCount(entry) + 1
-            total
+    let mutable stringHeapBytesCache: byte[] option = None
+    let mutable blobHeapBytesCache: byte[] option = None
+    let mutable guidHeapBytesCache: byte[] option = None
 
-    member _.BlobHeapSize
-        with get () =
-            let mutable total = 1 // initial empty blob
-            for entry in blobs.Entries do
-                total <- total + compressedLength entry.Length + entry.Length
-            total
+    let writeCompressedUnsigned (writer: BinaryWriter) (value: int) =
+        if value <= 0x7F then
+            writer.Write(byte value)
+        elif value <= 0x3FFF then
+            let b1 = byte ((value >>> 8) ||| 0x80)
+            let b0 = byte (value &&& 0xFF)
+            writer.Write(b1)
+            writer.Write(b0)
+        elif value <= 0x1FFFFFFF then
+            let b2 = byte ((value >>> 24) ||| 0xC0)
+            let b1 = byte ((value >>> 16) &&& 0xFF)
+            let b0 = byte ((value >>> 8) &&& 0xFF)
+            let bLowest = byte (value &&& 0xFF)
+            writer.Write(b2)
+            writer.Write(b1)
+            writer.Write(b0)
+            writer.Write(bLowest)
+        else
+            invalidArg (nameof value) "Compressed integer is too large for CLI metadata."
 
-    member _.GuidHeapSize
+    let buildStringHeapBytes () =
+        use ms = new MemoryStream()
+        use writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen = true)
+        writer.Write(byte 0) // heap starts with empty string
+        for entry in strings.Entries do
+            if not (String.IsNullOrEmpty entry) then
+                let bytes = utf8.GetBytes(entry)
+                writer.Write(bytes)
+            writer.Write(byte 0)
+        writer.Flush()
+        ms.ToArray()
+
+    let buildBlobHeapBytes () =
+        use ms = new MemoryStream()
+        use writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen = true)
+        writer.Write(byte 0)
+        for entry in blobs.Entries do
+            writeCompressedUnsigned writer entry.Length
+            if entry.Length > 0 then
+                writer.Write(entry)
+        writer.Flush()
+        ms.ToArray()
+
+    let buildGuidHeapBytes () =
+        use ms = new MemoryStream()
+        use writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen = true)
+        // Guid heap index 0 refers to null; keep a single 0 GUID there.
+        writer.Write(Array.zeroCreate<byte> 16)
+        for entry in guids.Entries do
+            if entry.Length = 16 then
+                writer.Write(entry)
+            else
+                invalidArg "entry" "GUID entries must be 16 bytes."
+        writer.Flush()
+        ms.ToArray()
+
+    member _.StringHeapBytes
         with get () =
-            guids.Count * 16
+            match stringHeapBytesCache with
+            | Some bytes -> bytes
+            | None ->
+                let bytes = buildStringHeapBytes ()
+                stringHeapBytesCache <- Some bytes
+                bytes
+
+    member _.BlobHeapBytes
+        with get () =
+            match blobHeapBytesCache with
+            | Some bytes -> bytes
+            | None ->
+                let bytes = buildBlobHeapBytes ()
+                blobHeapBytesCache <- Some bytes
+                bytes
+
+    member _.GuidHeapBytes
+        with get () =
+            match guidHeapBytesCache with
+            | Some bytes -> bytes
+            | None ->
+                let bytes = buildGuidHeapBytes ()
+                guidHeapBytesCache <- Some bytes
+                bytes
+
+    member _.StringHeapSize = _.StringHeapBytes.Length
+
+    member _.BlobHeapSize = _.BlobHeapBytes.Length
+
+    member _.GuidHeapSize = _.GuidHeapBytes.Length
 
     member _.HeapSizes : MetadataHeapSizes =
         { StringHeapSize = _.StringHeapSize

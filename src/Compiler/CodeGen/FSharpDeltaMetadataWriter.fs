@@ -99,6 +99,9 @@ type MethodSemanticsMetadataUpdate =
 type MetadataDelta =
     {
         Metadata: byte[]
+        StringHeap: byte[]
+        BlobHeap: byte[]
+        GuidHeap: byte[]
         EncLog: (TableIndex * int * EditAndContinueOperation) array
         EncMap: (TableIndex * int) array
         TableRowCounts: int[]
@@ -388,6 +391,9 @@ let emit
             printfn "[fsharp-hotreload][metadata-writer] tableCounts method=%d param=%d" methodUpdateCount parameterUpdateCount
 
         { Metadata = metadataBlob.ToArray()
+          StringHeap = tableMirror.StringHeapBytes
+          BlobHeap = tableMirror.BlobHeapBytes
+          GuidHeap = tableMirror.GuidHeapBytes
           EncLog = encLog |> Seq.toArray |> Array.map (fun struct (a, b, c) -> (a, b, c))
           EncMap = encMap |> Seq.toArray |> Array.map (fun struct (a, b) -> (a, b))
           TableRowCounts = tableRowCounts

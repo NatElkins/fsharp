@@ -6,6 +6,7 @@ open System.Reflection
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
+open System.Text
 open Xunit
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
@@ -323,6 +324,7 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(Some EditAndContinueOperation.AddProperty, tryOperation TableIndex.Property)
         Assert.Equal(Some EditAndContinueOperation.Default, tryOperation TableIndex.PropertyMap)
         Assert.True(metadataDelta.Metadata.Length > 0)
+        Assert.Contains("Message", Encoding.UTF8.GetString(metadataDelta.StringHeap))
 
     [<Fact>]
     let ``metadata writer emits event and method semantics rows`` () =
@@ -419,6 +421,7 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(1, tableCount TableIndex.Event)
         Assert.Equal(1, tableCount TableIndex.EventMap)
         Assert.Equal(1, tableCount TableIndex.MethodSemantics)
+        Assert.Contains("OnChanged", Encoding.UTF8.GetString(metadataDelta.StringHeap))
 
         let tryOperation table =
             metadataDelta.EncLog
