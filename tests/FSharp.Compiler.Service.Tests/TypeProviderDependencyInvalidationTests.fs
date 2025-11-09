@@ -745,3 +745,132 @@ type ProvidedProvided = Fs1023.ProvidedGenerator<Source = ProvidedGenerated>
                 printfn "[fs1023] preserving temp dir %s" tempDir
             else
                 try Directory.Delete(tempDir, true) with _ -> ()
+
+    let private recordInputSource = """
+namespace Fs1023Consumer
+
+type RecordInput =
+    { Foo: int
+      Bar: string }
+    with
+        member _.Summary() = sprintf "%d-%s" _.Foo _.Bar
+"""
+
+    let private recordConsumerSource = """
+namespace Fs1023Consumer
+
+type RecordProvided = Fs1023.ProvidedGenerator<Source = Fs1023Consumer.RecordInput>
+
+module UseRecordProvided =
+    let summary = RecordProvided.Value
+"""
+
+    let private unionInputSource = """
+namespace Fs1023Consumer
+
+type Shape =
+    | Circle of radius: int
+    | Rectangle of width: int * height: int
+    with
+        member this.Describe() =
+            match this with
+            | Circle r -> sprintf "circle:%d" r
+            | Rectangle (w, h) -> sprintf "rect:%dx%d" w h
+"""
+
+    let private unionConsumerSource = """
+namespace Fs1023Consumer
+
+type ShapeProvided = Fs1023.ProvidedGenerator<Source = Fs1023Consumer.Shape>
+
+module UseShapeProvided =
+    let summary = ShapeProvided.MapParameters
+"""
+
+    let private assertProvidedTypeProperties assemblyPath typeName =
+        let assemblyBytes = File.ReadAllBytes(assemblyPath)
+        let assembly = Assembly.Load(assemblyBytes)
+        let providedType = assembly.GetType(typeName, throwOnError = true, ignoreCase = false)
+
+        let getStaticStringProperty name =
+            let propertyInfo = providedType.GetProperty(name, BindingFlags.Public ||| BindingFlags.Static)
+            Assert.NotNull(propertyInfo)
+            propertyInfo.GetValue(null) :?> string
+
+        getStaticStringProperty
+
+    let private compileAndAssert providerPath providerDll sources outputDll assertions =
+        let providerArgs =
+            Array.append
+                (mkProjectCommandLineArgs(providerDll, [ providerPath ]))
+                [| "-r:" + providedTypesAssembly |]
+
+        compile providerArgs
+
+        let consumerArgs =
+            Array.append
+                (mkProjectCommandLineArgs(outputDll, sources))
+                [| "-r:" + providerDll |]
+
+        compile consumerArgs
+        assertions outputDll
+
+        let standaloneDll = Path.ChangeExtension(outputDll, ".standalone.dll")
+        let standaloneArgs = Array.append consumerArgs [| "--standalone"; "--out:" + standaloneDll |]
+        compile standaloneArgs
+        assertions standaloneDll
+
+    [<Fact>]
+    let ``record input compiles generated summaries`` () =
+        let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(tempDir) |> ignore
+
+        try
+            let providerPath = Path.Combine(tempDir, "Fs1023Provider.fs")
+            let providerDll = Path.Combine(tempDir, "Fs1023Provider.dll")
+            let recordPath = Path.Combine(tempDir, "RecordInput.fs")
+            let consumerPath = Path.Combine(tempDir, "RecordConsumer.fs")
+            let outputDll = Path.Combine(tempDir, "RecordConsumer.dll")
+
+            writeFile providerPath providerSource
+            writeFile recordPath recordInputSource
+            writeFile consumerPath recordConsumerSource
+
+            let assertions assemblyPath =
+                let getter = assertProvidedTypeProperties assemblyPath "Fs1023Consumer.RecordProvided"
+                Assert.Equal("Value", getter "Value")
+                Assert.Equal("missing", getter "MapParameters")
+
+            compileAndAssert providerPath providerDll [ recordPath; consumerPath ] outputDll assertions
+        finally
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``union input compiles generated summaries`` () =
+        let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(tempDir) |> ignore
+
+        try
+            let providerPath = Path.Combine(tempDir, "Fs1023Provider.fs")
+            let providerDll = Path.Combine(tempDir, "Fs1023Provider.dll")
+            let unionPath = Path.Combine(tempDir, "UnionInput.fs")
+            let consumerPath = Path.Combine(tempDir, "UnionConsumer.fs")
+            let outputDll = Path.Combine(tempDir, "UnionConsumer.dll")
+
+            writeFile providerPath providerSource
+            writeFile unionPath unionInputSource
+            writeFile consumerPath unionConsumerSource
+
+            let assertions assemblyPath =
+                let getter = assertProvidedTypeProperties assemblyPath "Fs1023Consumer.ShapeProvided"
+                Assert.Equal("missing", getter "MapParameters")
+
+            compileAndAssert providerPath providerDll [ unionPath; consumerPath ] outputDll assertions
+        finally
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()

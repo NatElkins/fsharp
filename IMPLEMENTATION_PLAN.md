@@ -236,8 +236,8 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 
 - **Current plan:** build a focused test suite in `tests/FSharp.Compiler.Service.Tests` that exercises the Fs1023 work via the in-repo provider harness (`TypeProviderDependencyInvalidationTests`). Each scenario will compile the provider output and inspect `FSharpSymbolUse`/reflection to confirm results.
 - **Upcoming test cases:**
-  1. `RecordInput_compilesGeneratedMembers` – provider receives an F# record type and emits members mirroring its fields (smoke test that `System.Type` metadata flows).
-  2. `UnionInput_preservesCases` – provider consumes a DU and exposes its case names/fields (ensures reflection over discriminated unions survives the proxy layer).
+  1. ✅ `RecordInput_compilesGeneratedMembers` – regression `record input compiles generated summaries` compiles a record-shaped static argument (plus `/standalone`), then reflects over the emitted IL to confirm the summary properties survive relocation.
+  2. ✅ `UnionInput_preservesCases` – regression `union input compiles generated summaries` does the same for a discriminated union static argument, verifying union metadata flows through TastReflection → IlxGen → static linking.
   3. ✅ `GenericInput_multipleInstantiations` – regression added (currently `[<Fact(Skip=...>]` because `checker.Compile` hangs when the static argument is an instantiation of a generic type). The test documents the scenario and will be re-enabled once the Phase 4 follow-up (“teach TypeReflectionBuilder/ProvidedMemberBinding to handle generic optional parameters without deadlocking”) lands.
   4. `AttributePropagation_roundTrips` – confirm parameter/property attributes projected via `ProvidedMemberBinding` are visible at consumption time.
   5. Negative coverage: attempting to pass anonymous records or provided types as static args yields the expected diagnostics.
