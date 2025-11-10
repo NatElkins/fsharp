@@ -26,8 +26,32 @@ type ProvidedMemberBinding =
         ReturnParameter: ProvidedParameterInfo MaybeNull
         ResultType: ProvidedType MaybeNull
         InvokerExpression: Tainted<ProvidedExpr MaybeNull> option
+        InvokerVars: Tainted<ProvidedVar>[] option
         DefinitionLocation: range option
+        AssociatedMember: obj option
     }
+
+module ProvidedMemberBindingHelpers =
+
+    val createForMethod: range -> Tainted<ProvidedMethodInfo> -> ProvidedMemberBinding
+
+    val createForProperty: range -> Tainted<ProvidedPropertyInfo> -> ProvidedMemberBinding
+
+    val createForConstructor: range -> Tainted<ProvidedConstructorInfo> -> ProvidedMemberBinding
+
+    val withDefinitionLocation: range option -> ProvidedMemberBinding -> ProvidedMemberBinding
+
+    val withAssociatedMember: ProvidedMemberBinding -> obj -> ProvidedMemberBinding
+
+    val tryGetBinding: Tainted<ProvidedMemberInfo> -> ProvidedMemberBinding option
+
+    val tryGetBindingByProvidedMemberInfo: ProvidedMemberInfo -> ProvidedMemberBinding option
+
+module ProvidedGeneratedTypeRegistry =
+
+    val register: assemblyName: string -> path: string[] -> obj -> unit
+
+    val tryGet: assemblyName: string -> path: string[] -> obj option
 
 /// Raised when a type provider has thrown an exception.
 exception ProvidedTypeResolution of range * exn

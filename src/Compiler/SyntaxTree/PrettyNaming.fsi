@@ -245,6 +245,8 @@ val internal MangleProvidedTypeName: typeLogicalName: string * nonDefaultArgs: (
 val internal ComputeMangledNameWithoutDefaultArgValues:
     nm: string * staticArgs: 'a[] * defaultArgValues: (string * string option)[] -> string
 
+val internal TypeStaticArgMarker: string
+
 val internal outArgCompilerGeneratedName: string
 
 val internal ExtraWitnessMethodName: nm: string -> string

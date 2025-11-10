@@ -36,6 +36,14 @@ type AssemblyLoader =
     /// Record a root for a [<Generate>] type to help guide static linking & type relocation
     abstract RecordGeneratedTypeRoot: ProviderGeneratedType -> unit
 
+    /// Record that a provider-generated tycon needs IL emission via IlxGen.
+    abstract RecordGeneratedTycon: Tycon -> unit
+
+    /// Retrieve and clear the set of provider-generated tycons awaiting IL emission.
+    abstract PopProvidedGeneratedTycons: unit -> Tycon list
+    abstract RecordProvidedMemberVal: Tycon * ValRef -> unit
+    abstract PopProvidedMemberValsForTycon: Tycon -> ValRef list
+
     /// Record that a static parameter referenced the given type definition.
     abstract RecordTypeDependency: TyconRef -> unit
 #endif
@@ -63,6 +71,7 @@ type ImportMap =
 
     /// Project a TType into a System.Type using the reflection builder.
     member ReflectType: topCcu: CcuThunk * ty: TType -> System.Type
+    member ReflectTypeWithDependencies: topCcu: CcuThunk * ty: TType -> System.Type * TyconRef[]
 
 module Nullness =
 

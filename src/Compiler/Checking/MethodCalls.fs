@@ -34,6 +34,23 @@ open FSharp.Compiler.TypeRelations
 open FSharp.Compiler.TypeProviders
 #endif
 
+let private fs1023TraceEnabled () =
+    System.Environment.GetEnvironmentVariable("FS1023_TRACE") = "1"
+
+let private fs1023Trace format =
+    Printf.kprintf (fun message ->
+        if fs1023TraceEnabled () then
+            try
+                let path =
+                    match System.Environment.GetEnvironmentVariable("FS1023_TRACE_PATH") with
+                    | null
+                    | "" -> "/tmp/fs1023_trace.log"
+                    | value -> value
+
+                let entry = sprintf "%s [fs1023][methodcalls] %s%s" (System.DateTime.UtcNow.ToString("O")) message System.Environment.NewLine
+                System.IO.File.AppendAllText(path, entry)
+            with _ -> ()) format
+
 //-------------------------------------------------------------------------
 // Sets of methods involved in overload resolution and trait constraint
 // satisfaction.
@@ -1777,6 +1794,21 @@ let AdjustCallerArgs tcVal tcFieldInit eCallerMemberName (infoReader: InfoReader
 // This file is not a great place for this functionality to sit, it's here because of BuildMethodCall
 module ProvidedMethodCalls =
 
+    let private tryCallAssociatedMemberWithArgs g m (binding: ProvidedMemberBinding) objExprOpt arguments =
+        match binding.AssociatedMember |> Option.bind (function :? ValRef as vref -> Some vref | _ -> None) with
+        | Some vref ->
+            let allArgs =
+                match objExprOpt with
+                | Some objExpr -> objExpr :: arguments
+                | None -> arguments
+
+            if List.isEmpty allArgs then
+                None
+            else
+                let expr = mkApps g ((exprForValRef m vref, vref.Type), [], allArgs, m)
+                Some (vref, (expr, tyOfExpr g expr))
+        | None -> None
+
     let private convertConstExpr g amap m (constant : Tainted<objnull * ProvidedType>) =
         let obj, objTy = constant.PApply2(id, m)
         let ty = Import.ImportProvidedType amap m objTy
@@ -2045,27 +2077,71 @@ module ProvidedMethodCalls =
             let vRaw = v.PUntaint (id, m)
             varConv.Remove vRaw |> ignore
 
-        and methodCallToExpr top _origExpr (mce: Tainted<_>) =    
+        and methodCallToExpr top _origExpr (mce: Tainted<_>) : Tainted<ProvidedMethodInfo> option * (Expr * TType) =
             let objOpt, meth, args = mce.PApply3(id, m)
-            let targetMethInfo = ProvidedMeth(amap, meth.PApply((fun mce -> upcast mce), m), None, m)
-            let objArgs = 
-                match objOpt.PApplyOption(id, m) with
-                | None -> []
-                | Some objExpr -> [exprToExpr objExpr]
 
-            let arguments = [ for ea in args.PApplyArray(id, "GetInvokerExpression", m) -> exprToExpr ea ]
-            let genericArguments = 
-                if meth.PUntaint((fun m -> m.IsGenericMethod), m) then 
-                    meth.PApplyArray((fun m -> m.GetGenericArguments()), "GetGenericArguments", m)  
-                else 
-                    [| |]
-            let replacementGenericArguments = genericArguments |> Array.map (fun t->Import.ImportProvidedType amap m t) |> List.ofArray
+            let objExprOpt = objOpt.PApplyOption(id, m) |> Option.map exprToExpr
 
-            let mut         = if top then mut else PossiblyMutates
-            let isSuperInit = if top then isSuperInit else ValUseFlag.NormalValUse
-            let isProp      = if top then isProp else false
-            let callExpr = BuildMethodCall tcVal g amap mut m isProp targetMethInfo isSuperInit replacementGenericArguments objArgs arguments None
-            Some meth, callExpr
+            let arguments =
+                [ for ea in args.PApplyArray(id, "GetInvokerExpression", m) -> exprToExpr ea ]
+
+            let buildProviderCall () : Tainted<ProvidedMethodInfo> option * (Expr * TType) =
+                let targetMethInfo = ProvidedMeth(amap, meth.PApply((fun mce -> upcast mce), m), None, m)
+
+                let objArgs =
+                    match objExprOpt with
+                    | None -> []
+                    | Some objExpr -> [ objExpr ]
+
+                let genericArguments =
+                    if meth.PUntaint((fun m -> m.IsGenericMethod), m) then
+                        meth.PApplyArray((fun m -> m.GetGenericArguments()), "GetGenericArguments", m)
+                    else
+                        [| |]
+
+                let replacementGenericArguments =
+                    genericArguments
+                    |> Array.map (fun t -> Import.ImportProvidedType amap m t)
+                    |> List.ofArray
+
+                let mut = if top then mut else PossiblyMutates
+                let isSuperInit = if top then isSuperInit else ValUseFlag.NormalValUse
+                let isProp = if top then isProp else false
+                let callExpr, callTy =
+                    BuildMethodCall
+                        tcVal
+                        g
+                        amap
+                        mut
+                        m
+                        isProp
+                        targetMethInfo
+                        isSuperInit
+                        replacementGenericArguments
+                        objArgs
+                        arguments
+                        None
+
+                Some meth, (callExpr, callTy)
+
+            match ProvidedMemberBindingHelpers.tryGetBinding (meth.Coerce<ProvidedMemberInfo> m) with
+            | Some binding ->
+                match tryCallAssociatedMemberWithArgs g m binding objExprOpt arguments with
+                | Some (vref, (exprR, exprTy)) ->
+                    if fs1023TraceEnabled () then
+                        fs1023Trace "[tp-invoker] rewriting call to %s via ValRef %s" (meth.PUntaint((fun mi -> mi.Name), m)) (vref.CompiledName g.CompilerGlobalState)
+
+                    None, (exprR, exprTy)
+                | None ->
+                    if fs1023TraceEnabled () then
+                        fs1023Trace "[tp-invoker] binding missing AssociatedMember for %s" (meth.PUntaint((fun mi -> mi.Name), m))
+
+                    buildProviderCall ()
+            | None ->
+                if fs1023TraceEnabled () then
+                    fs1023Trace "[tp-invoker] no binding for %s" (meth.PUntaint((fun mi -> mi.Name), m))
+
+                buildProviderCall ()
 
         and varToExpr (pe: Tainted<ProvidedVar>) =    
             // sub in the appropriate argument
@@ -2085,33 +2161,84 @@ module ProvidedMethodCalls =
 
         
     // fill in parameter holes in the expression   
+    let internal TryMakeProvidedMemberBodyFromBinding tcVal (g, amap, mut, isProp, isSuperInit, binding: ProvidedMemberBinding, thisArgOpt, argExprs, m) =
+        match binding.InvokerExpression, binding.InvokerVars with
+        | Some invokerExpr, Some invokerVars ->
+            let _, (expr, retTy) =
+                convertProvidedExpressionToExprAndWitness
+                    tcVal
+                    (thisArgOpt, argExprs, invokerVars, g, amap, mut, isProp, isSuperInit, m, invokerExpr)
+
+            Some((None: Tainted<ProvidedMethodInfo> option), (expr, retTy))
+        | _ -> None
+
     let TranslateInvokerExpressionForProvidedMethodCall tcVal (g, amap, mut, isProp, isSuperInit, mi: Tainted<ProvidedMethodBase>, objArgs, allArgs, m) =        
-        let parameters = 
-            mi.PApplyArray((fun mi -> mi.GetParameters()), "GetParameters", m)
-        let paramTys = 
-            parameters
-            |> Array.map (fun p -> p.PApply((fun st -> st.ParameterType), m))
-        let erasedParamTys = 
-            paramTys
-            |> Array.map (fun pty -> eraseSystemType (amap, m, pty))
-        let paramVars = 
-            erasedParamTys
-            |> Array.mapi (fun i erasedParamTy -> erasedParamTy.PApply((fun ty -> ty.AsProvidedVar("arg" + i.ToString())), m))
+        let bindingResultOpt =
+            match ProvidedMemberBindingHelpers.tryGetBinding (mi.Coerce<ProvidedMemberInfo> m) with
+            | Some binding ->
+                let thisArgOptOrInvalid =
+                    match objArgs with
+                    | [] -> Some None
+                    | [objArg] -> Some (Some objArg)
+                    | _ -> None
+
+                match thisArgOptOrInvalid with
+                | None -> None
+                | Some thisArgOpt ->
+                    match tryCallAssociatedMemberWithArgs g m binding thisArgOpt allArgs with
+                    | Some (vref, result) ->
+                        if fs1023TraceEnabled () then
+                            fs1023Trace "[tp-invoker-call] rerouted via ValRef %s" (vref.CompiledName g.CompilerGlobalState)
+
+                        Some (None, result)
+                    | None ->
+                        let expectedCount =
+                            (match thisArgOpt with | Some _ -> 1 | None -> 0) + List.length allArgs
+
+                        match binding.InvokerVars with
+                        | Some invokerVars when invokerVars.Length = expectedCount ->
+                            TryMakeProvidedMemberBodyFromBinding tcVal (g, amap, mut, isProp, isSuperInit, binding, thisArgOpt, allArgs, m)
+                        | _ -> None
+            | None -> None
+
+        match bindingResultOpt with
+        | Some res ->
+            if fs1023TraceEnabled () then
+                let name = mi.PUntaint((fun mb -> mb.Name), m)
+                fs1023Trace "[tp-invoker-call] reused cached binding for %s" name
+
+            res
+        | None ->
+            if fs1023TraceEnabled () then
+                let name = mi.PUntaint((fun mb -> mb.Name), m)
+                fs1023Trace "[tp-invoker-call] falling back to provider invoker for %s" name
+
+            let parameters = 
+                mi.PApplyArray((fun mi -> mi.GetParameters()), "GetParameters", m)
+            let paramTys = 
+                parameters
+                |> Array.map (fun p -> p.PApply((fun st -> st.ParameterType), m))
+            let erasedParamTys = 
+                paramTys
+                |> Array.map (fun pty -> eraseSystemType (amap, m, pty))
+            let paramVars = 
+                erasedParamTys
+                |> Array.mapi (fun i erasedParamTy -> erasedParamTy.PApply((fun ty -> ty.AsProvidedVar("arg" + i.ToString())), m))
 
 
-        // encode "this" as the first ParameterExpression, if applicable
-        let thisArg, paramVars = 
-            match objArgs with
-            | [objArg] -> 
-                let erasedThisTy = eraseSystemType (amap, m, mi.PApply((fun mi -> nonNull<ProvidedType> mi.DeclaringType), m))
-                let thisVar = erasedThisTy.PApply((fun ty -> ty.AsProvidedVar("this")), m)
-                Some objArg, Array.append [| thisVar |] paramVars
-            | [] -> None, paramVars
-            | _ -> failwith "multiple objArgs?"
+            // encode "this" as the first ParameterExpression, if applicable
+            let thisArg, paramVars = 
+                match objArgs with
+                | [objArg] -> 
+                    let erasedThisTy = eraseSystemType (amap, m, mi.PApply((fun mi -> nonNull<ProvidedType> mi.DeclaringType), m))
+                    let thisVar = erasedThisTy.PApply((fun ty -> ty.AsProvidedVar("this")), m)
+                    Some objArg, Array.append [| thisVar |] paramVars
+                | [] -> None, paramVars
+                | _ -> failwith "multiple objArgs?"
             
-        let ea = mi.PApplyWithProvider((fun (methodInfo, provider) -> GetInvokerExpression(provider, methodInfo, [| for p in paramVars -> p.PUntaintNoFailure id |])), m)
+            let ea = mi.PApplyWithProvider((fun (methodInfo, provider) -> GetInvokerExpression(provider, methodInfo, [| for p in paramVars -> p.PUntaintNoFailure id |])), m)
 
-        convertProvidedExpressionToExprAndWitness tcVal (thisArg, allArgs, paramVars, g, amap, mut, isProp, isSuperInit, m, ea)
+            convertProvidedExpressionToExprAndWitness tcVal (thisArg, allArgs, paramVars, g, amap, mut, isProp, isSuperInit, m, ea)
 
             
     let BuildInvokerExpressionForProvidedMethodCall tcVal (g, amap, mi: Tainted<ProvidedMethodBase>, objArgs, mut, isProp, isSuperInit, allArgs, m) =

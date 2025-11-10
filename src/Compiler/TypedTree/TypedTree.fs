@@ -30,6 +30,25 @@ open FSharp.Compiler.Xml
 #if !NO_TYPEPROVIDERS
 open FSharp.Compiler.TypeProviders
 open FSharp.Core.CompilerServices
+
+let private fs1023TraceEnabled () =
+    let value = Environment.GetEnvironmentVariable("FS1023_TRACE")
+    value = "1"
+
+let private fs1023TracePath =
+    let path = Environment.GetEnvironmentVariable("FS1023_TRACE_PATH")
+    if String.IsNullOrWhiteSpace path then
+        "/tmp/fs1023_trace.log"
+    else
+        path
+
+let private fs1023Trace format =
+    Printf.kprintf (fun message ->
+        if fs1023TraceEnabled () then
+            let entry = sprintf "%s [fs1023][typedtree] %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+            try
+                System.IO.File.AppendAllText(fs1023TracePath, entry)
+            with _ -> ()) format
 #endif
 
 [<RequireQualifiedAccess>]
@@ -2037,6 +2056,9 @@ type ModuleOrNamespaceType(kind: ModuleOrNamespaceKind, vals: QueueList<Val>, en
 #if !NO_TYPEPROVIDERS
     /// Mutation used in hosting scenarios to hold the hosted types in this module or namespace
     member mtyp.AddProvidedTypeEntity(entity: Entity) = 
+        if fs1023TraceEnabled () then
+            fs1023Trace "add-provided-entity parentKind=%A added=%s" kind entity.CompiledName
+
         entities <- QueueList.appendOne entities entity
         tyconsByMangledNameCache <- None          
         tyconsByDemangledNameAndArityCache <- None
@@ -2759,7 +2781,7 @@ type ValOptionalData =
       mutable val_attribs: Attribs
 
 #if !NO_TYPEPROVIDERS
-      /// Optional binding information for provider-generated members.
+      /// Binding information for provider-generated members.
       mutable val_provided_binding: ProvidedMemberBinding option
 #endif
     }
@@ -3577,7 +3599,21 @@ type NonLocalEntityRef =
                     | None -> tryForwardPrefixPath (i+1)
                 else
                     ValueNone
-            tryForwardPrefixPath 0
+            let res = tryForwardPrefixPath 0
+            let res =
+#if !NO_TYPEPROVIDERS
+                match res with
+                | ValueNone ->
+                    match ProvidedGeneratedTypeRegistry.tryGet ccu.AssemblyName path with
+                    | Some entityObj -> ValueSome (entityObj :?> Entity)
+                    | None -> ValueNone
+                | _ -> res
+#else
+                res
+#endif
+            match res with
+            | _ -> ()
+            res
         
     /// Get the CCU referenced by the nonlocal reference.
     member nleref.Ccu =

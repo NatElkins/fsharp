@@ -11,6 +11,7 @@ open System.Collections.Concurrent
 open System.IO
 open System.Collections.Generic
 open System.Reflection
+open System.Runtime.CompilerServices
 open Internal.Utilities.Library
 open Internal.Utilities.FSharpEnvironment  
 open FSharp.Core.CompilerServices
@@ -32,7 +33,9 @@ type ProvidedMemberBinding =
         ReturnParameter: ProvidedParameterInfo MaybeNull
         ResultType: ProvidedType MaybeNull
         InvokerExpression: Tainted<ProvidedExpr MaybeNull> option
+        InvokerVars: Tainted<ProvidedVar>[] option
         DefinitionLocation: range option
+        AssociatedMember: obj option
     }
 
 module ProvidedArray =
@@ -1503,5 +1506,249 @@ type ProvidedAssemblyStaticLinkingMap =
 /// We check by seeing if the type is absent from the remapping context.
 let IsGeneratedTypeDirectReference (st: Tainted<ProvidedType>, m) =
     st.PUntaint((fun st -> st.TryGetTyconRef() |> Option.isNone), m)
+
+module ProvidedMemberBindingHelpers =
+
+    let private bindingTable = ConcurrentDictionary<string, ProvidedMemberBinding>()
+
+    let private normalizeProvidedArray (items: 'T ProvidedArray) : 'T[] =
+        if obj.ReferenceEquals(items, null) then
+            [| |]
+        else
+            items
+
+    let private mkMemberKey (memberInfo: MemberInfo) =
+        let assemblyName =
+            try
+                let asm = memberInfo.Module.Assembly
+                if isNull asm then "" else asm.FullName
+            with _ -> ""
+
+        let moduleId =
+            try memberInfo.Module.ModuleVersionId.ToString("N") with _ -> ""
+
+        let metadataToken =
+            try memberInfo.MetadataToken.ToString() with _ -> "-1"
+
+        let declaringTypeName =
+            match memberInfo.DeclaringType with
+            | null -> ""
+            | declTy -> declTy.FullName
+
+        String.concat "|" [ assemblyName; moduleId; metadataToken; declaringTypeName; memberInfo.Name ]
+
+    let private tryGetMemberHandle (memberInfo: ProvidedMemberInfo) =
+        match memberInfo with
+        | :? ProvidedMethodInfo as mi -> Some (mi.Handle :> MemberInfo)
+        | :? ProvidedConstructorInfo as ci -> Some (ci.Handle :> MemberInfo)
+        | :? ProvidedPropertyInfo as pi -> Some (pi.Handle :> MemberInfo)
+        | :? ProvidedEventInfo as ei -> Some (ei.Handle :> MemberInfo)
+        | _ -> None
+
+    let private registerBinding binding =
+        let memberInfo = binding.Member.PUntaint(id, range0)
+        let register key =
+            bindingTable.AddOrUpdate(key, binding, fun _ _ -> binding) |> ignore
+            if fs1023TraceEnabled () then
+                fs1023Trace "[tp-binding-cache] register key=%s" key
+
+        match tryGetMemberHandle memberInfo with
+        | Some handle -> register (mkMemberKey handle)
+        | None ->
+            let fallbackKey = sprintf "obj:%d" (RuntimeHelpers.GetHashCode memberInfo)
+            register fallbackKey
+
+        binding
+
+    let private buildInvokerVars (mi: ProvidedMethodBase) includeThisArg =
+        let parameters = normalizeProvidedArray (mi.GetParameters())
+        let thisVars =
+            if includeThisArg then
+                match mi.DeclaringType with
+                | null -> [| |]
+                | declTy -> [| declTy.AsProvidedVar "thisArg" |]
+            else
+                [| |]
+
+        let argVars =
+            parameters
+            |> Array.mapi (fun idx (paramInfo: ProvidedParameterInfo) ->
+                paramInfo.ParameterType.AsProvidedVar(sprintf "%s_arg%d" mi.Name idx))
+
+        Array.append thisVars argVars
+
+    let private createInvokerVars (range: range) (methodInfo: Tainted<ProvidedMethodBase>) includeThisArg =
+        methodInfo.PApplyArray((fun mi -> buildInvokerVars mi includeThisArg), "GetInvokerExpression" , range)
+
+    let private createInvokerExpr (range: range) (methodInfo: Tainted<ProvidedMethodBase>) includeThisArg =
+        methodInfo
+            .PApplyWithProvider(
+                (fun (mi, provider) ->
+                    let vars = buildInvokerVars mi includeThisArg
+                    GetInvokerExpression(provider, mi, vars)),
+                range)
+
+    let private createBaseBinding
+        (provider: Tainted<ITypeProvider>)
+        (memberInfo: Tainted<ProvidedMemberInfo>)
+        parameters
+        returnParameter
+        resultType
+        invokerExpr
+        invokerVars =
+        {
+            Provider = provider
+            Member = memberInfo
+            Parameters = parameters
+            ReturnParameter = returnParameter
+            ResultType = resultType
+            InvokerExpression = invokerExpr
+            InvokerVars = invokerVars
+            DefinitionLocation = None
+            AssociatedMember = None
+        }
+
+    let createForMethod m (methodInfo: Tainted<ProvidedMethodInfo>) =
+        let provider = methodInfo.TypeProvider
+        let memberInfo = methodInfo.Coerce<ProvidedMemberInfo> m
+        let methodBase = methodInfo.Coerce<ProvidedMethodBase> m
+        let parameterArray =
+            methodInfo
+                .PApply((fun mi -> mi.GetParameters()), m)
+                .PUntaint(id, m)
+            |> normalizeProvidedArray
+            |> Some
+
+        let returnParameter =
+            methodInfo
+                .PApply(
+                    (fun mi ->
+                        ProvidedParameterInfo.Create mi.Context (mi.Handle.ReturnParameter)),
+                    m)
+                .PUntaint(id, m)
+
+        let resultType = methodInfo.PApply((fun mi -> mi.ReturnType), m).PUntaint(id, m)
+
+        let includeThisArg = not (methodInfo.PApply((fun mi -> mi.IsStatic), m).PUntaint(id, m))
+
+        let invokerVars = createInvokerVars m methodBase includeThisArg |> Some
+
+        let invokerExpr = createInvokerExpr m methodBase includeThisArg |> Some
+
+        createBaseBinding provider memberInfo parameterArray returnParameter resultType invokerExpr invokerVars
+        |> registerBinding
+
+    let createForProperty m (propertyInfo: Tainted<ProvidedPropertyInfo>) =
+        let provider = propertyInfo.TypeProvider
+        let memberInfo = propertyInfo.Coerce<ProvidedMemberInfo> m
+
+        let parameters =
+            propertyInfo
+                .PApply((fun pi -> pi.GetIndexParameters()), m)
+                .PUntaint(id, m)
+            |> normalizeProvidedArray
+            |> Some
+
+        let resultType = propertyInfo.PApply((fun pi -> pi.PropertyType), m).PUntaint(id, m)
+
+        createBaseBinding provider memberInfo parameters null resultType None None
+        |> registerBinding
+
+    let createForConstructor m (ctorInfo: Tainted<ProvidedConstructorInfo>) =
+        let provider = ctorInfo.TypeProvider
+        let memberInfo = ctorInfo.Coerce<ProvidedMemberInfo> m
+        let ctorBase = ctorInfo.Coerce<ProvidedMethodBase> m
+
+        let parameters =
+            ctorInfo
+                .PApply((fun ci -> ci.GetParameters()), m)
+                .PUntaint(id, m)
+            |> normalizeProvidedArray
+            |> Some
+
+        let resultType =
+            memberInfo
+                .PUntaint(id, m)
+                .DeclaringType
+
+        let binding =
+            createBaseBinding
+                provider
+                memberInfo
+                parameters
+                null
+                resultType
+                (createInvokerExpr m ctorBase false |> Some)
+                (createInvokerVars m ctorBase false |> Some)
+
+        registerBinding binding
+
+    let withDefinitionLocation rangeOpt binding =
+        let updated = { binding with DefinitionLocation = rangeOpt }
+        registerBinding updated
+
+    let withAssociatedMember binding associatedMember =
+        let updated = { binding with AssociatedMember = Some associatedMember }
+        registerBinding updated
+
+    let private tryGetByMemberInfo (memberInfo: ProvidedMemberInfo) =
+        let tryLookup key =
+            match bindingTable.TryGetValue key with
+            | true, binding ->
+                if fs1023TraceEnabled () then
+                    fs1023Trace "[tp-binding-cache] hit key=%s" key
+                Some binding
+            | _ ->
+                if fs1023TraceEnabled () then
+                    fs1023Trace "[tp-binding-cache] miss key=%s" key
+                None
+
+        match tryGetMemberHandle memberInfo with
+        | Some handle -> tryLookup (mkMemberKey handle)
+        | None ->
+            let fallbackKey = sprintf "obj:%d" (RuntimeHelpers.GetHashCode memberInfo)
+            tryLookup fallbackKey
+
+    let tryGetBindingByProvidedMemberInfo memberInfo =
+        tryGetByMemberInfo memberInfo
+
+    let tryGetBinding (memberInfo: Tainted<ProvidedMemberInfo>) =
+        tryGetByMemberInfo (memberInfo.PUntaint(id, range0))
+
+module ProvidedGeneratedTypeRegistry =
+
+    let private registry = ConcurrentDictionary<string * string, obj>()
+
+    let private normalizeAssemblyName assemblyName =
+        if String.IsNullOrWhiteSpace assemblyName then "" else assemblyName
+
+    let private normalizePath (path: string[]) =
+        if isNull path then
+            [| |]
+        else
+            path
+
+    let private mkKey assemblyName path =
+        let normalizedAssembly = normalizeAssemblyName assemblyName
+        let normalizedPath = normalizePath path
+        normalizedAssembly, String.concat "/" (Array.toList normalizedPath)
+
+    let register assemblyName path tyconObj =
+        let key = mkKey assemblyName path
+        registry.AddOrUpdate(key, tyconObj, fun _ _ -> tyconObj) |> ignore
+        if fs1023TraceEnabled () then
+            fs1023Trace "[tp-registry] register assembly=%s path=%s" (fst key) (snd key)
+
+    let tryGet assemblyName path =
+        let key = mkKey assemblyName path
+        match registry.TryGetValue key with
+        | true, entity ->
+            if fs1023TraceEnabled () then
+                fs1023Trace "[tp-registry] hit assembly=%s path=%s" (fst key) (snd key)
+            Some entity
+        | _ ->
+            if fs1023TraceEnabled () then
+                fs1023Trace "[tp-registry] miss assembly=%s path=%s" (fst key) (snd key)
+            None
 
 #endif

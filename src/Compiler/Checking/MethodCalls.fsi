@@ -511,6 +511,19 @@ val GenWitnessArgs:
 
 #if !NO_TYPEPROVIDERS
 module ProvidedMethodCalls =
+    val TryMakeProvidedMemberBodyFromBinding:
+        tcVal: (ValRef -> ValUseFlag -> TType list -> range -> Expr * TType) ->
+        g: TcGlobals *
+        amap: ImportMap *
+        mut: TypedTreeOps.Mutates *
+        isProp: bool *
+        isSuperInit: ValUseFlag *
+        binding: ProvidedMemberBinding *
+        thisArgOpt: Expr option *
+        argExprs: Exprs *
+        m: range ->
+            (Tainted<ProvidedMethodInfo> option * (Expr * TType)) option
+
     val BuildInvokerExpressionForProvidedMethodCall:
         tcVal: (ValRef -> ValUseFlag -> TType list -> range -> Expr * TType) ->
         g: TcGlobals *

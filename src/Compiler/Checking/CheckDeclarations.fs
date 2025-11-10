@@ -5,6 +5,7 @@ module internal FSharp.Compiler.CheckDeclarations
 open System
 open System.Collections.Generic
 open System.Threading
+open System.IO
 
 open FSharp.Compiler.Diagnostics
 open Internal.Utilities.Collections
@@ -29,6 +30,7 @@ open FSharp.Compiler.Features
 open FSharp.Compiler.Infos
 open FSharp.Compiler.InfoReader
 open FSharp.Compiler.MethodOverrides
+open FSharp.Compiler.MethodCalls
 open FSharp.Compiler.NameResolution
 open FSharp.Compiler.Syntax
 open FSharp.Compiler.SyntaxTrivia
@@ -49,6 +51,40 @@ open FSharp.Compiler.TypeProviders
 #endif
 
 type cenv = TcFileState
+
+let private fs1023Enabled () =
+    let value = System.Environment.GetEnvironmentVariable("FS1023_TRACE")
+    value = "1"
+
+let private fs1023TracePath =
+    let path = System.Environment.GetEnvironmentVariable("FS1023_TRACE_PATH")
+    if String.IsNullOrWhiteSpace path then
+        "/tmp/fs1023_trace.log"
+    else
+        path
+
+let private fs1023Trace format =
+    Printf.kprintf (fun message ->
+        if fs1023Enabled () then
+            let entry = sprintf "%s [fs1023][publish] %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+            try
+                File.AppendAllText(fs1023TracePath, entry)
+            with _ ->
+                printfn "[fs1023][publish] %s" message) format
+
+let private fs1023TraceTyconSnapshot label (tycon: Tycon) =
+    if fs1023Enabled () then
+        let memberNames =
+            tycon.MembersOfFSharpTyconSorted
+            |> List.map (fun v -> v.DisplayName)
+            |> String.concat ";"
+
+        let adhocMembers =
+            tycon.TypeContents.tcaug_adhoc_list
+            |> Seq.map (fun (_, vref) -> vref.DisplayName)
+            |> String.concat ";"
+
+        fs1023Trace "[tp-generated-type][%s] %s members=[%s] adhoc=[%s]" label tycon.CompiledName memberNames adhocMembers
 
 //-------------------------------------------------------------------------
 // Mutually recursive shapes
@@ -3040,6 +3076,234 @@ module EstablishTypeDefinitionCores =
         let ctok = AssumeCompilationThreadWithoutEvidence()
 
         let tcref = mkLocalTyconRef tycon
+
+        let importProvidedType (pt: Tainted<ProvidedType>) =
+            Import.ImportProvidedType cenv.amap m pt |> Some |> GetFSharpViewOfReturnType g
+
+        let rec publishProvidedMembersForTycon (tycon: Tycon) (tcref: TyconRef) (providedType: Tainted<ProvidedType>) =
+            let thisTy = generalizedTyconRef g tcref
+
+            let addMemberVal (logicalName: string) (memberKind: SynMemberKind) (isStatic: bool) (argTys: TType list) (returnTy: TType) (binding: ProvidedMemberBinding) =
+                let memberFlags =
+                    (if isStatic then StaticMemberFlags else NonVirtualMemberFlags) memberKind
+
+                let baseOrThis =
+                    if isStatic then NormalVal else MemberThisVal
+
+                let ty =
+                    (argTys, returnTy)
+                    ||> List.foldBack (fun arg acc -> mkFunTy g arg acc)
+
+                let memberInfo: ValMemberInfo =
+                    { ApparentEnclosingEntity = tcref
+                      MemberFlags = memberFlags
+                      IsImplemented = false
+                      ImplementedSlotSigs = [] }
+
+                let vspec =
+                    Construct.NewVal(
+                        logicalName,
+                        tycon.Range,
+                        None,
+                        ty,
+                        Immutable,
+                        false,
+                        None,
+                        taccessPublic,
+                        ValNotInRecScope,
+                        Some memberInfo,
+                        baseOrThis,
+                        [],
+                        ValInline.Optional,
+                        XmlDoc.Empty,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        None,
+                        Parent tcref)
+
+                let vref = mkLocalValRef vspec
+                let bindingWithValRef =
+                    ProvidedMemberBindingHelpers.withAssociatedMember binding (box vref)
+
+                vspec.SetProvidedBinding(Some bindingWithValRef)
+
+                let mkArgReprInfo () : ArgReprInfo =
+                    { Attribs = []
+                      Name = None
+                      OtherRange = None }
+
+                let valueArgTys =
+                    if isStatic then
+                        argTys
+                    else
+                        match argTys with
+                        | _ :: rest -> rest
+                        | [] -> []
+
+                let valReprInfo =
+                    let argInfos =
+                        if List.isEmpty valueArgTys then
+                            []
+                        else
+                            [ valueArgTys |> List.map (fun _ -> mkArgReprInfo ()) ]
+
+                    ValReprInfo([], argInfos, mkArgReprInfo ())
+
+                vspec.SetValReprInfo(Some valReprInfo)
+
+                cenv.amap.assemblyLoader.RecordProvidedMemberVal (tycon, vref)
+
+                let tcaug = tycon.TypeContents
+                tcaug.tcaug_adhoc <- NameMultiMap.add logicalName vref tcaug.tcaug_adhoc
+                tcaug.tcaug_adhoc_list.Add(ValRefIsExplicitImpl g vref, vref)
+                let accessDesc = if vspec.Accessibility.IsPublic then "public" else "non-public"
+                fs1023Trace "[tp-generated-type] %s add member %s access=%s" tycon.CompiledName logicalName accessDesc
+
+                let tryAttachProvidedBody () =
+                    let tcVal = LightweightTcValForUsingInBuildMethodCall g
+                    let mkArgName idx =
+                        if not isStatic && idx = 0 then "thisArg" else sprintf "%s_arg%d" logicalName idx
+
+                    let argVals, argExprs =
+                        argTys
+                        |> List.mapi (fun idx argTy -> mkCompGenLocal tycon.Range (mkArgName idx) argTy)
+                        |> List.unzip
+
+                    let isPropertyMember =
+                        match memberKind with
+                        | SynMemberKind.PropertyGet
+                        | SynMemberKind.PropertySet
+                        | SynMemberKind.PropertyGetSet -> true
+                        | _ -> false
+
+                    let thisArgOpt, callArgs =
+                        if isStatic then
+                            None, argExprs
+                        else
+                            match argExprs with
+                            | thisExpr :: rest -> Some thisExpr, rest
+                            | [] -> None, []
+
+                    match ProvidedMethodCalls.TryMakeProvidedMemberBodyFromBinding tcVal (g, cenv.amap, Mutates.PossiblyMutates, isPropertyMember, ValUseFlag.NormalValUse, bindingWithValRef, thisArgOpt, callArgs, tycon.Range) with
+                    | Some (_, (bodyExpr, bodyTy)) ->
+                        let lambdaExpr = mkLambdas g tycon.Range [] argVals (bodyExpr, bodyTy)
+                        vspec.SetValDefn lambdaExpr
+                        if fs1023Enabled () then
+                            fs1023Trace "[tp-generated-type] attached provided body for %s" logicalName
+                    | None ->
+                        if fs1023Enabled () then
+                            fs1023Trace "[tp-generated-type] failed to attach provided body for %s" logicalName
+
+                tryAttachProvidedBody()
+
+            let safeIter label (items: _[]) action =
+                for taintedItem in items do
+                    try
+                        action taintedItem
+                    with ex ->
+                        fs1023Trace "[tp-generated-type] failed to publish %s on %s due to %s" label tycon.CompiledName ex.Message
+
+            let methodInfos = providedType.PApplyArray((fun st -> st.GetMethods()), "GetMethods", m)
+            let propertyInfos = providedType.PApplyArray((fun st -> st.GetProperties()), "GetProperties", m)
+
+            fs1023Trace "[tp-generated-type] %s publish-members methods=%d properties=%d" tycon.CompiledName methodInfos.Length propertyInfos.Length
+
+            safeIter "method" methodInfos (fun (methodInfo: Tainted<ProvidedMethodInfo>) ->
+                if not (methodInfo.PUntaint((fun mi -> mi.IsConstructor), m)) then
+                    let methodName = methodInfo.PUntaint((fun mi -> mi.Name), m)
+
+                    let isPropertyAccessor =
+                        methodName.StartsWith("get_", StringComparison.Ordinal)
+                        || methodName.StartsWith("set_", StringComparison.Ordinal)
+
+                    if not isPropertyAccessor then
+                        let binding = ProvidedMemberBindingHelpers.createForMethod m methodInfo
+                        let isStatic = methodInfo.PUntaint((fun mi -> mi.IsStatic), m)
+
+                        let parameterTypes =
+                            methodInfo
+                                .PApplyArray((fun mi -> mi.GetParameters()), "GetParameters", m)
+                            |> Array.map (fun p -> importProvidedType (p.PApply((fun info -> info.ParameterType), m)))
+                            |> Array.toList
+
+                        let args =
+                            let thisArgs = if isStatic then [] else [ thisTy ]
+                            thisArgs @ parameterTypes
+
+                        let returnTy =
+                            importProvidedType (methodInfo.PApply((fun mi -> mi.ReturnType), m))
+
+                        addMemberVal methodName SynMemberKind.Member isStatic args returnTy binding)
+
+            safeIter "property" propertyInfos (fun (propertyInfo: Tainted<ProvidedPropertyInfo>) ->
+                if propertyInfo.PUntaint((fun pi -> pi.CanRead), m) then
+                    let getterMethod = propertyInfo.PApply((fun pi -> pi.GetGetMethod()), m)
+                    match getterMethod with
+                    | Tainted.Null ->
+                        fs1023Trace "[tp-generated-type] %s getter for property %s missing" tycon.CompiledName (propertyInfo.PUntaint((fun pi -> pi.Name), m))
+                    | Tainted.NonNull getter ->
+                        let binding = ProvidedMemberBindingHelpers.createForMethod m getter
+                        let propertyName = propertyInfo.PUntaint((fun pi -> pi.Name), m)
+                        let isStatic = getter.PUntaint((fun mi -> mi.IsStatic), m)
+
+                        let indexParamTys =
+                            propertyInfo
+                                .PApplyArray((fun pi -> pi.GetIndexParameters()), "GetIndexParameters", m)
+                            |> Array.map (fun p -> importProvidedType (p.PApply((fun info -> info.ParameterType), m)))
+                            |> Array.toList
+
+                        let args =
+                            let thisArgs = if isStatic then [] else [ thisTy ]
+                            thisArgs @ indexParamTys
+
+                        let returnTy =
+                            importProvidedType (propertyInfo.PApply((fun pi -> pi.PropertyType), m))
+
+                        let logicalName = "get_" + propertyName
+                        addMemberVal logicalName SynMemberKind.PropertyGet isStatic args returnTy binding)
+
+        let registerGeneratedTycon (providedType: Tainted<ProvidedType>) (entity: Tycon) =
+#if !NO_TYPEPROVIDERS
+            let assemblyName =
+                providedType.PApply((fun st -> st.Assembly.GetName().Name), m).PUntaint(id, m)
+
+            let pathList =
+                let containerPath = GetFSharpPathToProvidedType(providedType, m)
+                let typeName = providedType.PUntaint((fun st -> st.Name), m)
+                containerPath @ [ typeName ]
+
+            let pathArray = pathList |> List.toArray
+            ProvidedGeneratedTypeRegistry.register assemblyName pathArray entity
+
+            cenv.amap.assemblyLoader.RecordGeneratedTycon entity
+
+            match entity.CompilationPathOpt with
+            | Some compPath ->
+                let consumerPath = compPath.MangledPath @ [ entity.LogicalName ]
+                ProvidedGeneratedTypeRegistry.register assemblyName (consumerPath |> List.toArray) entity
+                if fs1023Enabled () then
+                    fs1023Trace "[tp-generated-type] register assembly=%s path=%s (consumer)" assemblyName (String.concat "/" consumerPath)
+            | None -> ()
+
+            if fs1023Enabled () then
+                fs1023Trace "[tp-generated-type] register assembly=%s path=%s" assemblyName (String.concat "/" pathList)
+
+            if fs1023Enabled () then
+                let accessDesc =
+                    if entity.Accessibility.IsPublic then
+                        "public"
+                    else
+                        "non-public"
+
+                fs1023Trace "[tp-generated-type] %s accessibility=%s" entity.CompiledName accessDesc
+#else
+            ()
+#endif
+
         try 
             let resolutionEnvironment =
                 if not (isNil args) then 
@@ -3065,7 +3329,7 @@ module EstablishTypeDefinitionCores =
                 let stRootAssembly = theRootTypeWithRemapping.PApply((fun st -> st.Assembly), m)
 
                 let res = cenv.amap.assemblyLoader.GetProvidedAssemblyInfo (ctok, m, stRootAssembly)
-                printfn "[tp-generation] root assembly generated=%b hasMap=%b" (fst res) (snd res |> Option.isSome)
+                fs1023Trace "[tp-generation] root assembly generated=%b hasMap=%b" (fst res) (snd res |> Option.isSome)
                 res
 
             let isRootGenerated = isRootGenerated || theRootTypeWithRemapping.PUntaint((fun st -> not st.IsErased), m)
@@ -3083,25 +3347,24 @@ module EstablishTypeDefinitionCores =
                 errorR(Error(FSComp.SR.tcGeneratedTypesShouldBeInternalOrPrivate(), tcref.Range))
 
             let isSuppressRelocate = g.isInteractive || isForcedSuppressRelocate
-            printfn "[tp-generation] root isSuppressRelocate=%b isForced=%b interactive=%b" isSuppressRelocate isForcedSuppressRelocate g.isInteractive
+            fs1023Trace "[tp-generation] root isSuppressRelocate=%b isForced=%b interactive=%b" isSuppressRelocate isForcedSuppressRelocate g.isInteractive
     
-            let providedMethods =
-                theRootTypeWithRemapping.PApplyArray((fun st -> st.GetMethods()), "GetMethods", m)
-            let providedProperties =
-                theRootTypeWithRemapping.PApplyArray((fun st -> st.GetProperties()), "GetProperties", m)
+            if fs1023Enabled () then
+                fs1023TraceTyconSnapshot "publish-before" tycon
             let assemblyTypes =
                 theRootTypeWithRemapping.PApply((fun st -> st.Assembly), m)
                     .PUntaint((fun asm -> asm.Handle.GetTypes() |> Array.map (fun t -> t.FullName)), m)
-            printfn "[tp-generated-type] assembly types=%A" assemblyTypes
-            printfn "[tp-generated-type] provider methods=%A" (providedMethods |> Array.map (fun mem -> mem.PUntaint((fun m -> m.Name), m)))
-            printfn "[tp-generated-type] provider properties=%A" (providedProperties |> Array.map (fun mem -> mem.PUntaint((fun m -> m.Name), m)))
+            fs1023Trace "[tp-generated-type] assembly types=%A" assemblyTypes
             // Adjust the representation of the container type
             let repr =
                 Construct.NewProvidedTyconRepr(resolutionEnvironment, theRootTypeWithRemapping, 
                                                Import.ImportProvidedType cenv.amap m, 
                                                isSuppressRelocate, m)
             tycon.entity_tycon_repr <- repr
-            printfn "[tp-generated-type] root %s members=%A" tycon.CompiledName (tycon.MembersOfFSharpTyconSorted |> List.map (fun v -> v.CompiledName))
+            tcrefForContainer.ModuleOrNamespaceType.AddProvidedTypeEntity tycon
+            registerGeneratedTycon theRootTypeWithRemapping tycon
+            publishProvidedMembersForTycon tycon tcref theRootTypeWithRemapping
+            fs1023TraceTyconSnapshot "publish-after-repr" tycon
             // Record the details so we can map System.Type --> TyconRef
             let ilOrigRootTypeRef = GetOriginalILTypeRefOfProvidedType (theRootTypeWithRemapping, m)
             theRootTypeWithRemapping.PUntaint ((fun st -> ignore(lookupTyconRef.TryRemove(st)) ; ignore(lookupTyconRef.TryAdd(st, tcref))), m)
@@ -3123,7 +3386,7 @@ module EstablishTypeDefinitionCores =
 
                 let isGenerated = isGenerated || st.PUntaint((fun st -> not st.IsErased), m)
                 let nestedFullName = st.PUntaint((fun st -> st.FullName), m)
-                printfn "[tp-generation] nested type %s isGenerated=%b isSuppressRelocate=%b" nestedFullName isGenerated isSuppressRelocate
+                fs1023Trace "[tp-generation] nested type %s isGenerated=%b isSuppressRelocate=%b" nestedFullName isGenerated isSuppressRelocate
 
                 if not isGenerated then 
                     let desig = st.TypeProviderDesignation
@@ -3138,10 +3401,18 @@ module EstablishTypeDefinitionCores =
                                                              Import.ImportProvidedType cenv.amap m, 
                                                              isSuppressRelocate, 
                                                              m=m, cpath=cpath, access=access)
-                printfn "[tp-generated-type] nested add %s members=%A" nestedTycon.CompiledName (nestedTycon.MembersOfFSharpTyconSorted |> List.map (fun v -> v.CompiledName))
+                fs1023Trace "[tp-generated-type] nested add %s members=%A" nestedTycon.CompiledName (nestedTycon.MembersOfFSharpTyconSorted |> List.map (fun v -> v.CompiledName))
                 eref.ModuleOrNamespaceType.AddProvidedTypeEntity nestedTycon
 
+                let nestedAdhocMembers =
+                    nestedTycon.TypeContents.tcaug_adhoc_list
+                    |> Seq.map (fun (_, vref) -> vref.CompiledName)
+                    |> Seq.toArray
+                fs1023Trace "[tp-generated-type] nested %s adhoc=%A" nestedTycon.CompiledName nestedAdhocMembers
+
                 let nestedTyRef = eref.NestedTyconRef nestedTycon
+                registerGeneratedTycon st nestedTycon
+                publishProvidedMembersForTycon nestedTycon nestedTyRef st
                 let ilOrigTypeRef = GetOriginalILTypeRefOfProvidedType (st, m)
                                 
                 // Record the details so we can map System.Type --> TyconRef
@@ -3156,7 +3427,7 @@ module EstablishTypeDefinitionCores =
                     if not isSuppressRelocate then 
                         match provAssemStaticLinkInfoOpt with 
                         | Some provAssemStaticLinkInfo ->
-                            printfn "[tp-staticlink-map][nested] %A -> %A" ilOrigTypeRef ilTgtTyRef
+                            fs1023Trace "[tp-staticlink-map][nested] %A -> %A" ilOrigTypeRef ilTgtTyRef
                             provAssemStaticLinkInfo.ILTypeMap[ilOrigTypeRef] <- ilTgtTyRef
                             provAssemStaticLinkInfo.Dump("nested")
                         | None -> ()
@@ -3174,15 +3445,13 @@ module EstablishTypeDefinitionCores =
                 |> Array.toList
 
             let nested = doNestedTypes tcref theRootTypeWithRemapping 
-            printfn "[tp-generated-type] root %s after nested members=%A" tycon.CompiledName (tycon.MembersOfFSharpTyconSorted |> List.map (fun v -> v.CompiledName))
-            let adhocMembers = tycon.TypeContents.tcaug_adhoc_list |> Seq.map (fun (_, vref) -> vref.CompiledName) |> Seq.toArray
-            printfn "[tp-generated-type] root %s adhoc=%A" tycon.CompiledName adhocMembers
+            fs1023TraceTyconSnapshot "publish-after-nested" tycon
             if not isSuppressRelocate then 
 
                 let ilTgtRootTyRef = tycon.CompiledRepresentationForNamedType
                 match rootProvAssemStaticLinkInfoOpt with 
                 | Some provAssemStaticLinkInfo ->
-                    printfn "[tp-staticlink-map][root] %A -> %A" ilOrigRootTypeRef ilTgtRootTyRef
+                    fs1023Trace "[tp-staticlink-map][root] %A -> %A" ilOrigRootTypeRef ilTgtRootTyRef
                     provAssemStaticLinkInfo.ILTypeMap[ilOrigRootTypeRef] <- ilTgtRootTyRef
                     provAssemStaticLinkInfo.Dump("root")
                 | None -> ()

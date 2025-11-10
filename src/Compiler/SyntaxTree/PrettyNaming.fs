@@ -1024,6 +1024,29 @@ let tryDemangleStaticStringArg (mangledText: string) =
 
 exception InvalidMangledStaticArg of string
 
+let TypeStaticArgMarker = "type:"
+
+let private stringOfStaticArg (staticArg: obj) =
+    let boxed = staticArg :> obj
+    if obj.ReferenceEquals(boxed, null) then
+        ""
+    else
+        match boxed with
+        | :? Type as ty ->
+        let assemblyFullName = ty.Assembly.FullName
+
+        let typeName =
+            match ty.FullName with
+            | null -> ty.Name
+            | full -> full
+
+        let descriptor =
+            if String.IsNullOrEmpty assemblyFullName then typeName
+            else typeName + ", " + assemblyFullName
+
+        TypeStaticArgMarker + descriptor
+        | _ -> Convert.ToString(boxed, CultureInfo.InvariantCulture)
+
 /// Demangle the static parameters
 let DemangleProvidedTypeName (typeLogicalName: string) =
     if typeLogicalName.Contains "," then
@@ -1057,7 +1080,7 @@ let ComputeMangledNameWithoutDefaultArgValues (nm, staticArgs, defaultArgValues)
         (staticArgs, defaultArgValues)
         ||> Array.zip
         |> Array.choose (fun (staticArg, (defaultArgName, defaultArgValue)) ->
-            let actualArgValue = string staticArg
+            let actualArgValue = stringOfStaticArg (box staticArg)
 
             match defaultArgValue with
             | Some v when v = actualArgValue -> None

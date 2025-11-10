@@ -4,7 +4,9 @@
 /// Name environment and name resolution
 module internal FSharp.Compiler.NameResolution
 
+open System
 open System.Collections.Generic
+open System.IO
 
 open Internal.Utilities
 open Internal.Utilities.Collections
@@ -37,6 +39,24 @@ open FSharp.Compiler.TypeHierarchy
 #if !NO_TYPEPROVIDERS
 open FSharp.Compiler.TypeProviders
 #endif
+
+let private fs1023TraceEnabled () =
+    match Environment.GetEnvironmentVariable("FS1023_TRACE") with
+    | "1" -> true
+    | _ -> false
+
+let private fs1023TracePath =
+    match Environment.GetEnvironmentVariable("FS1023_TRACE_PATH") with
+    | null | "" -> "/tmp/fs1023_trace.log"
+    | path -> path
+
+let private fs1023Trace format =
+    Printf.kprintf (fun message ->
+        if fs1023TraceEnabled () then
+            let entry = sprintf "%s [fs1023][nameres] %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+            try
+                File.AppendAllText(fs1023TracePath, entry)
+            with _ -> ()) format
 
 exception NoConstructorsAvailableForType of TType * DisplayEnv * range
 
@@ -3018,6 +3038,9 @@ let rec ResolveExprLongIdentInModuleOrNamespace (ncenv: NameResolver) nenv (type
                 for e in modref.ModuleOrNamespaceType.ExceptionDefinitionsByDemangledName do
                     if IsTyconReprAccessible ncenv.amap m ad (modref.NestedTyconRef e.Value) then
                         addToBuffer e.Value.DisplayName
+
+            if fs1023TraceEnabled () && id.idText.StartsWith("get_", StringComparison.Ordinal) then
+                fs1023Trace "UndefinedName lookup for %s depth=%d scope=%s" id.idText depth modref.LogicalName
 
             raze (UndefinedName(depth, FSComp.SR.undefinedNameValueConstructorNamespaceOrType, id, suggestPossibleTypesAndNames))
         | results -> AtMostOneResult id.idRange results

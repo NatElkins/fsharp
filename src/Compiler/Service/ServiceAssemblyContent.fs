@@ -215,8 +215,16 @@ module AssemblyContent =
 
         seq { 
 #if !NO_TYPEPROVIDERS 
-              if not entity.IsProvided then
 #endif
+              if
+#if !NO_TYPEPROVIDERS
+                     (entity.IsProvided && not entity.IsProvidedAndGenerated)
+#else
+                     false
+#endif
+              then
+                     ()
+              else
                 match contentType, entity.Accessibility.IsPublic with
                 | Full, _ | Public, true ->
                     let ns = entity.Namespace |> Option.map (fun x -> x.Split '.') |> Option.orElse parent.Namespace
@@ -325,4 +333,3 @@ type EntityCache() =
 
     member _.Clear() = dic.Clear()
     member x.Locking f = lock dic <| fun _ -> f (x :> IAssemblyContentCache)
-

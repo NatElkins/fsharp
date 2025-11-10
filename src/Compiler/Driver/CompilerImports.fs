@@ -1240,6 +1240,14 @@ and [<Sealed>] TcImports
     let mutable generatedTypeRoots =
         Dictionary<ILTypeRef, int * ProviderGeneratedType>()
 
+    let mutable generatedTycons =
+        Dictionary<Stamp, Tycon>()
+
+    let mutable generatedProvidedVals =
+        Dictionary<Stamp, ResizeArray<ValRef>>()
+
+    let mutable skipProviderStaticLinking = false
+
     let tcImportsWeak = TcImportsWeakFacade(tciLock, WeakReference<_> this)
 
     let typeProviderTypeDependencies = HashSet<TyconRef>()
@@ -1641,6 +1649,57 @@ and [<Sealed>] TcImports
 
             generatedTypeRoots[ilTyRef] <- (index, root))
 
+    member _.RecordGeneratedTycon (tycon: Tycon) =
+        tciLock.AcquireLock(fun tcitok ->
+            RequireTcImportsLock(tcitok, generatedTycons)
+            let stamp = tycon.Stamp
+            if not (generatedTycons.ContainsKey stamp) then
+                generatedTycons[stamp] <- tycon
+
+            skipProviderStaticLinking <- true)
+
+        printfn "[fs1023][imports] record tycon %s" tycon.CompiledName
+
+    member _.PopProvidedGeneratedTycons() =
+        tciLock.AcquireLock(fun tcitok ->
+            RequireTcImportsLock(tcitok, generatedTycons)
+            let tycons: Tycon list = generatedTycons.Values |> Seq.toList
+            generatedTycons.Clear()
+
+            RequireTcImportsLock(tcitok, generatedTypeRoots)
+            generatedTypeRoots.Clear()
+
+            for tycon in tycons do
+                printfn "[fs1023][imports] pop tycon %s" tycon.CompiledName
+
+            tycons)
+
+    member _.RecordProvidedMemberVal (tycon: Tycon, vref: ValRef) =
+        tciLock.AcquireLock(fun tcitok ->
+            RequireTcImportsLock(tcitok, generatedProvidedVals)
+            let stamp = tycon.Stamp
+            let bucket =
+                match generatedProvidedVals.TryGetValue stamp with
+                | true, existing -> existing
+                | false, _ ->
+                    let arr = ResizeArray()
+                    generatedProvidedVals[stamp] <- arr
+                    arr
+
+            if not (bucket |> Seq.exists (fun existing -> existing.Stamp = vref.Stamp)) then
+                bucket.Add vref)
+
+    member _.PopProvidedMemberValsForTycon (tycon: Tycon) =
+        tciLock.AcquireLock(fun tcitok ->
+            RequireTcImportsLock(tcitok, generatedProvidedVals)
+            let stamp = tycon.Stamp
+            match generatedProvidedVals.TryGetValue stamp with
+            | true, bucket ->
+                let vals = bucket |> Seq.toList
+                generatedProvidedVals.Remove stamp |> ignore
+                vals
+            | false, _ -> [])
+
     member _.ProviderGeneratedTypeRoots =
         tciLock.AcquireLock(fun tcitok ->
             RequireTcImportsLock(tcitok, generatedTypeRoots)
@@ -1652,6 +1711,10 @@ and [<Sealed>] TcImports
             let results = typeProviderTypeDependencies |> Seq.toList
             typeProviderTypeDependencies.Clear()
             results)
+
+    member _.SkipProviderStaticLinking
+        with get () = skipProviderStaticLinking
+        and set v = skipProviderStaticLinking <- v
 #endif
 
     member private tcImports.AttachDisposeAction action =
@@ -1783,6 +1846,14 @@ and [<Sealed>] TcImports
                     tcImports.GetProvidedAssemblyInfo(ctok, m, assembly)
 
                 member _.RecordGeneratedTypeRoot root = tcImports.RecordGeneratedTypeRoot root
+
+                member _.RecordGeneratedTycon tycon = tcImports.RecordGeneratedTycon tycon
+
+                member _.PopProvidedGeneratedTycons() = tcImports.PopProvidedGeneratedTycons()
+
+                member _.RecordProvidedMemberVal (tycon, vref) = tcImports.RecordProvidedMemberVal(tycon, vref)
+
+                member _.PopProvidedMemberValsForTycon tycon = tcImports.PopProvidedMemberValsForTycon tycon
 
                 member _.GetTypeReflectionBuilder() =
                     tcImports.GetTypeReflectionBuilder()
