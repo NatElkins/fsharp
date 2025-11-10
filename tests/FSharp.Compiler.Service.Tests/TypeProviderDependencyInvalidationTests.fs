@@ -352,6 +352,17 @@ module UseProvided =
         if proc.ExitCode <> 0 then
             failwithf "Command '%s %s' failed with exit code %d.%s%s" fileName (String.concat " " args) proc.ExitCode stdout stderr
 
+    let private compileWithLogging log label args =
+        match log with
+        | Some f -> f (sprintf "[fs1023][compile] begin %s" label)
+        | None -> ()
+
+        compile args
+
+        match log with
+        | Some f -> f (sprintf "[fs1023][compile] end %s" label)
+        | None -> ()
+
     [<Fact>]
     let ``type provider re-runs when source type changes`` () =
         let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
@@ -688,7 +699,7 @@ module UseProvided =
         finally
             try Directory.Delete(tempDir, true) with _ -> ()
 
-    [<Fact(Skip = "Generic static arguments currently cause Fs1023 consumer compilation to hang; tracked in Phase 4 follow-up.")>]
+    [<Fact(Skip = "Generic static arguments still hang during checker.Compile; instrumentation logs to generic.log for future diagnosis.")>]
     let ``GenericInput_multipleInstantiations`` () =
         let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(tempDir) |> ignore
@@ -712,9 +723,7 @@ module UseProvided =
                     (mkProjectCommandLineArgs(providerDll, [ providerPath ]))
                     [| "-r:" + providedTypesAssembly |]
 
-            log "[fs1023][generic] compiling provider"
-            compile providerArgs
-            log "[fs1023][generic] provider compiled"
+            compileWithLogging (Some log) "generic-provider" providerArgs
 
             log "[fs1023][generic] writing generic consumer"
             writeFile consumerPath genericModelSource
@@ -724,8 +733,7 @@ module UseProvided =
                     (mkProjectCommandLineArgs(outputDll, [ consumerPath ]))
                     [| "-r:" + providerDll |]
 
-            log "[fs1023][generic] compiling consumer"
-            compile consumerArgs
+            compileWithLogging (Some log) "generic-consumer" consumerArgs
             log (sprintf "[fs1023][generic] consumer compiled -> %s" outputDll)
 
             let consumerAssembly =
