@@ -235,16 +235,16 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 
 ### 5.1 Compiler unit tests
 
-- ✅ `record input compiles generated summaries` — after restoring the source record’s `Value` field and fixing the summary helper to use a named identifier, this regression now passes for both the default and `/standalone` consumer builds. The test reflects over the emitted IL to ensure `RecordProvided.Value` and `MapParameters` survive relocation.
-- ⏳ `union input compiles generated summaries` — still pending; once IlxGen emits the union summaries we need to re-enable this test and mirror the `/standalone` coverage from the record scenario.
-- ⏳ `GenericInput_multipleInstantiations` — remains `[<Fact(Skip=...>]` until we track down the hang in `checker.Compile` when the static argument is generic. The instrumentation around `TryApplyProvidedType`/`TryApplyProvidedMethod` stays checked in so future traces show whether the provider or the compiler is stalling.
-- Negative coverage (anonymous records, type parameters, provided types as static arguments) stays enabled and green.
-- **Next:** finish the union + C# consumer regressions, then run `dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Release` to validate the broader pipeline before moving on to IDE/SDK suites.
+  - ✅ `record input compiles generated summaries` — after restoring the source record’s `Value` field and fixing the summary helper to use a named identifier, this regression now passes for both the default and `/standalone` consumer builds. The test reflects over the emitted IL to ensure `RecordProvided.Value` and `MapParameters` survive relocation.
+  - ✅ `union input compiles generated summaries` — now mirrors the record coverage: we compile/reflect both binaries and assert `ShapeProvided.MapParameters`/`Value` produce the expected strings, confirming union metadata also survives relocation.
+  - ⏳ `GenericInput_multipleInstantiations` — remains `[<Fact(Skip=...>]` until we track down the hang in `checker.Compile` when the static argument is generic. The instrumentation around `TryApplyProvidedType`/`TryApplyProvidedMethod` stays checked in so future traces show whether the provider or the compiler is stalling.
+  - Negative coverage (anonymous records, type parameters, provided types as static arguments) stays enabled and green.
+  - **Next:** re-enable the generic regression once the hang is resolved, then run `dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Release` to validate the broader pipeline before moving on to IDE/SDK suites.
 
 ### 5.2 SDK + C# consumer tests
 
 - **Goal:** add a minimal C# consumer that references the generated F# assembly, executes the relocation-safe members, and validates the IL does not reference the provider binary.
-- **Status:** The `csharp consumer executes generated member` test still fails because the temporary C# harness targets net8.0 while the Fs1023 consumer builds for net10.0 (so `System.Runtime` versions disagree). Fix by aligning the harness target or explicitly referencing the same ref-pack before expanding the assertions to cover `/standalone` binaries.
+- **Status:** ✅ `csharp consumer executes generated member` now targets `net10.0`, references the freshly built Fs1023 consumer DLL plus `FSharp.Core`, and the reflection asserts prove both `Value` and `MapParameters` flow across the language boundary. `/standalone` coverage remains a follow-up once IlxGen stop relying on provider IL entirely.
 
 ### 5.3 Negative tests
 
