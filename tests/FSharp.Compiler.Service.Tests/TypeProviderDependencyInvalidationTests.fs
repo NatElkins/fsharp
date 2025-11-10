@@ -357,11 +357,16 @@ module UseProvided =
         | Some f -> f (sprintf "[fs1023][compile] begin %s" label)
         | None -> ()
 
-        compile args
-
-        match log with
-        | Some f -> f (sprintf "[fs1023][compile] end %s" label)
-        | None -> ()
+        try
+            compile args
+            match log with
+            | Some f -> f (sprintf "[fs1023][compile] end %s" label)
+            | None -> ()
+        with ex ->
+            match log with
+            | Some f -> f (sprintf "[fs1023][compile] fail %s: %s" label ex.Message)
+            | None -> ()
+            reraise()
 
     [<Fact>]
     let ``type provider re-runs when source type changes`` () =
