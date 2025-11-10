@@ -3,10 +3,12 @@
 /// Functions to import .NET binary metadata as TAST objects
 module internal FSharp.Compiler.Import
 
+open System
 open System.Collections.Concurrent
 open System.Collections.Generic
 open System.Collections.Immutable
 open System.Diagnostics
+open System.IO
 
 open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras
@@ -31,6 +33,31 @@ open FSharp.Compiler.TastReflect
 open FSharp.Compiler.TypeProviders
 #endif
 
+let private fs1023TraceEnabled () =
+    match Environment.GetEnvironmentVariable("FS1023_TRACE") with
+    | null -> false
+    | value when String.IsNullOrWhiteSpace value -> false
+    | value when String.Equals(value.Trim(), "0", StringComparison.Ordinal) -> false
+    | _ -> true
+
+let private fs1023Trace format =
+    Printf.ksprintf
+        (fun message ->
+            if fs1023TraceEnabled () then
+                let path =
+                    match Environment.GetEnvironmentVariable("FS1023_TRACE_PATH") with
+                    | null
+                    | "" -> "/tmp/fs1023_trace.log"
+                    | custom -> custom
+
+                let entry =
+                    sprintf "%s [fs1023][import] %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+
+                try
+                    File.AppendAllText(path, entry)
+                with _ -> ())
+        format
+
 /// Represents an interface to some of the functionality of TcImports, for loading assemblies
 /// and accessing information about generated provided assemblies.
 type AssemblyLoader =
@@ -49,6 +76,18 @@ type AssemblyLoader =
 
     /// Record a root for a [<Generate>] type to help guide static linking & type relocation
     abstract RecordGeneratedTypeRoot : ProviderGeneratedType -> unit
+
+    /// Record that a provider-generated tycon needs IL emission via IlxGen.
+    abstract RecordGeneratedTycon : Tycon -> unit
+
+    /// Retrieve and clear the set of provider-generated tycons awaiting IL emission.
+    abstract PopProvidedGeneratedTycons : unit -> Tycon list
+
+    /// Record that a provided member val has been published so IlxGen can pre-register it.
+    abstract RecordProvidedMemberVal : Tycon * ValRef -> unit
+
+    /// Retrieve and clear the pending provided member vals for a specific tycon awaiting IL registration.
+    abstract PopProvidedMemberValsForTycon : Tycon -> ValRef list
 
     /// Record that a static parameter referenced the given type definition.
     abstract RecordTypeDependency : TyconRef -> unit
@@ -82,6 +121,44 @@ type ImportMap(g: TcGlobals, assemblyLoader: AssemblyLoader) =
 
     member this.ReflectType(topCcu: CcuThunk, ty: TType) =
         this.GetTypeReflectionBuilder().GetSystemType(topCcu, ty)
+
+    member this.ReflectTypeWithDependencies(topCcu: CcuThunk, ty: TType) =
+        let builder = this.GetTypeReflectionBuilder()
+        let tySummary =
+            try ty.DebugText with _ -> "<ty>"
+
+        let stopwatch =
+            if fs1023TraceEnabled () then
+                Some(Stopwatch.StartNew())
+            else
+                None
+
+        if fs1023TraceEnabled () then
+            let ccuName = topCcu.AssemblyName
+            fs1023Trace "[reflect] enter ty=%s ccu=%s" tySummary ccuName
+
+        let result, deps =
+            builder.CaptureTypeDependencies(fun () -> builder.GetSystemType(topCcu, ty))
+
+        if fs1023TraceEnabled () then
+            let elapsed =
+                match stopwatch with
+                | None -> Double.NaN
+                | Some sw ->
+                    sw.Stop()
+                    sw.Elapsed.TotalMilliseconds
+
+            let depsSummary =
+                if Array.isEmpty deps then
+                    "<none>"
+                else
+                    deps
+                    |> Array.map (fun tcref -> tcref.CompiledName)
+                    |> String.concat ","
+
+            fs1023Trace "[reflect] exit ty=%s deps=[%s] elapsedMs=%.3f" tySummary depsSummary elapsed
+
+        result, deps
 
 let CanImportILScopeRef (env: ImportMap) m scoref =
 
