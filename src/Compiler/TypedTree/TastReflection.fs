@@ -16,6 +16,7 @@ open FSharp.Compiler
 open FSharp.Compiler.CompilerGlobalState
 open FSharp.Compiler.AbstractIL.IL
 open Internal.Utilities.Library
+open Internal.Utilities.Collections
 open FSharp.Compiler.TypedTree
 open FSharp.Compiler.TypedTreeOps
 open FSharp.Compiler.TypedTreeBasics
@@ -131,6 +132,89 @@ module Utils =
         | Const.UIntPtr i -> box i
         | Const.Unit -> box ()
         | Const.Zero -> box 0
+
+#if !NO_TYPEPROVIDERS
+    module ProvidedReflectionHelpers =
+        open System.Reflection
+
+        let emptyCustomAttributesData : IList<CustomAttributeData> =
+            Array.empty<CustomAttributeData> :> IList<CustomAttributeData>
+
+        let private providedParameterAttributes (param: ProvidedParameterInfo) =
+            let mutable attrs = enum<ParameterAttributes>(0)
+            if param.IsIn then attrs <- attrs ||| ParameterAttributes.In
+            if param.IsOut then attrs <- attrs ||| ParameterAttributes.Out
+            if param.IsOptional then attrs <- attrs ||| ParameterAttributes.Optional
+            if param.HasDefaultValue then attrs <- attrs ||| ParameterAttributes.HasDefault
+            attrs
+
+        let private providedParameterType (paramType: ProvidedType MaybeNull) =
+            if obj.ReferenceEquals(paramType, null) then
+                typeof<obj>
+            else
+                paramType.RawSystemType
+
+        let private providedDefaultValue (param: ProvidedParameterInfo) =
+            if param.HasDefaultValue then
+                param.RawDefaultValue
+            else
+                Type.Missing
+
+        let makeProvidedParameterInfo (memberGetter: unit -> MemberInfo) position (param: ProvidedParameterInfo) =
+            let parameterType = providedParameterType param.ParameterType
+            let name =
+                let rawName = param.Name
+                if String.IsNullOrEmpty rawName then
+                    sprintf "arg%d" (position + 1)
+                else
+                    rawName
+            let defaultValue = providedDefaultValue param
+            let attrs = providedParameterAttributes param
+            { new ParameterInfo() with
+                override _.Member = memberGetter()
+                override _.Name = name
+                override _.ParameterType = parameterType
+                override _.Attributes = attrs
+                override _.Position = position
+                override _.RawDefaultValue = defaultValue
+                override _.DefaultValue = defaultValue
+                override _.HasDefaultValue = param.HasDefaultValue
+                override _.GetCustomAttributesData() = emptyCustomAttributesData
+                override _.GetCustomAttributes(_inherit) = notRequired "Provided parameter GetCustomAttributes"
+                override _.GetCustomAttributes(_attributeType, _inherit) = notRequired "Provided parameter GetCustomAttributesTyped"
+                override _.IsDefined(_attributeType, _inherit) = false
+                override _.ToString() = sprintf "%s %s" parameterType.Name name }
+
+        let makeProvidedReturnParameter (memberGetter: unit -> MemberInfo) (param: ProvidedParameterInfo) =
+            let parameterType = providedParameterType param.ParameterType
+            let defaultValue = providedDefaultValue param
+            let attrs = providedParameterAttributes param
+            let name =
+                let rawName = param.Name
+                if String.IsNullOrEmpty rawName then "return" else rawName
+            { new ParameterInfo() with
+                override _.Member = memberGetter()
+                override _.Name = name
+                override _.ParameterType = parameterType
+                override _.Attributes = attrs
+                override _.Position = -1
+                override _.RawDefaultValue = defaultValue
+                override _.DefaultValue = defaultValue
+                override _.HasDefaultValue = param.HasDefaultValue
+                override _.GetCustomAttributesData() = emptyCustomAttributesData
+                override _.GetCustomAttributes(_inherit) = notRequired "Provided return parameter GetCustomAttributes"
+                override _.GetCustomAttributes(_attributeType, _inherit) = notRequired "Provided return parameter GetCustomAttributesTyped"
+                override _.IsDefined(_attributeType, _inherit) = false
+                override _.ToString() = sprintf "%s %s" parameterType.Name name }
+
+        let tryGetProvidedParameters (binding: ProvidedMemberBinding) =
+            binding.Parameters
+            |> Option.map (fun parameters ->
+                if obj.ReferenceEquals(parameters, null) then
+                    [||]
+                else
+                    Unchecked.unbox<ProvidedParameterInfo[]>(parameters))
+#endif
 
     let invokeMemberCore (self: Type) name (invokeAttr: BindingFlags) (binder: Binder) target (args: obj[]) (modifiers: ParameterModifier[]) (culture: CultureInfo) (namedParameters: string[]) =
         ignore namedParameters
@@ -774,14 +858,15 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
     let computeParameterMetadata (argTy: TType) (argInfo: ArgReprInfo) =
         let isInArg = HasFSharpAttribute g g.attrib_InAttribute argInfo.Attribs && isByrefTy g argTy
         let isOutArg = HasFSharpAttribute g g.attrib_OutAttribute argInfo.Attribs && isByrefTy g argTy
-        let isOptionalArg = HasFSharpAttribute g g.attrib_OptionalArgumentAttribute argInfo.Attribs
+        let hasFSharpOptionalArg = HasFSharpAttribute g g.attrib_OptionalArgumentAttribute argInfo.Attribs
+        let hasClrOptionalArg = HasFSharpAttributeOpt g g.attrib_OptionalAttribute argInfo.Attribs
         let isParamArrayArg = HasFSharpAttribute g g.attrib_ParamArrayAttribute argInfo.Attribs
 
         let attrs =
             ParameterAttributes.None
             |> fun attrs -> if isInArg then attrs ||| ParameterAttributes.In else attrs
             |> fun attrs -> if isOutArg then attrs ||| ParameterAttributes.Out else attrs
-            |> fun attrs -> if isOptionalArg then attrs ||| ParameterAttributes.Optional else attrs
+            |> fun attrs -> if hasClrOptionalArg then attrs ||| ParameterAttributes.Optional else attrs
 
         let defaultValueFromAttribute =
             TryFindFSharpAttributeOpt g g.attrib_DefaultParameterValueAttribute argInfo.Attribs
@@ -798,11 +883,10 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         let defaultValueOpt =
             match defaultValueFromAttribute with
             | Some value -> Some value
-            | None when isOptionalArg -> Some Type.Missing
             | _ -> None
 
         let attrs = if defaultValueOpt.IsSome then attrs ||| ParameterAttributes.HasDefault else attrs
-        attrs, defaultValueOpt, isParamArrayArg, isOptionalArg
+        attrs, defaultValueOpt, isParamArrayArg, hasFSharpOptionalArg, hasClrOptionalArg
 
     let tryResolveRuntimeTypeFromTycon (tref: TyconRef) : Type option =
         let fullNames : string list =
@@ -918,11 +1002,18 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         let compiledName = vref.CompiledName compilerGlobalState
         let _typars, curriedArgInfos, _, _ = GetTypeOfMemberInFSharpForm g vref
         let parameterData = curriedArgInfos |> List.collect id
+#if !NO_TYPEPROVIDERS
+        let providedParametersOpt =
+            match vref.TryDeref with
+            | ValueSome v -> v.TryGetProvidedBinding |> Option.bind ProvidedReflectionHelpers.tryGetProvidedParameters
+            | ValueNone -> None
+#endif
 
         let createParameterInfos memberGetter =
             parameterData
             |> List.mapi (fun position (argTy, argInfo) ->
-                let attrs, defaultValueOpt, isParamArrayArg, isOptionalArg = computeParameterMetadata argTy argInfo
+                let attrs, defaultValueOpt, isParamArrayArg, hasFSharpOptionalArg, hasClrOptionalArg =
+                    computeParameterMetadata argTy argInfo
                 let normalizedArgTy = stripTyEqns g argTy
                 printfn "[tast-debug] TxMethodDef %s param[%d]=%A" compiledName position normalizedArgTy
                 let parameterType =
@@ -973,9 +1064,8 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                             isParamArrayArg && matchesKnown typeof<ParamArrayAttribute>
 
                         let optionalMatch =
-                            isOptionalArg
-                            && (matchesKnown typeof<Microsoft.FSharp.Core.OptionalArgumentAttribute>
-                                || matchesKnown typeof<System.Runtime.InteropServices.OptionalAttribute>)
+                            (hasFSharpOptionalArg && matchesKnown typeof<Microsoft.FSharp.Core.OptionalArgumentAttribute>)
+                            || (hasClrOptionalArg && matchesKnown typeof<System.Runtime.InteropServices.OptionalAttribute>)
 
                         declaredMatch || paramArrayMatch || optionalMatch
                     override _.ToString() = sprintf "%s %s" parameterType.Name name })
@@ -991,7 +1081,16 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
 
         let rec ctorInfo : ConstructorInfo =
             let parametersLazy =
-                lazy (createParameterInfos (fun () -> ctorInfo :> MemberInfo))
+                lazy (
+#if !NO_TYPEPROVIDERS
+                    match providedParametersOpt with
+                    | Some providedParams ->
+                        providedParams
+                        |> Array.mapi (fun idx param ->
+                            ProvidedReflectionHelpers.makeProvidedParameterInfo (fun () -> ctorInfo :> MemberInfo) idx param)
+                    | None ->
+#endif
+                        createParameterInfos (fun () -> ctorInfo :> MemberInfo))
 
             { new ConstructorInfo() with
                 override _.Name = compiledName
@@ -1038,11 +1137,34 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         let compiledName : string = vref.CompiledName compilerGlobalState
         let typars, curriedArgInfos, retTy, _ = GetTypeOfMemberInFSharpForm g vref
         let parameterData = curriedArgInfos |> List.collect id
+#if !NO_TYPEPROVIDERS
+        let providedBindingOpt =
+            match vref.TryDeref with
+            | ValueSome v -> v.TryGetProvidedBinding
+            | ValueNone -> None
+        let providedParametersOpt =
+            providedBindingOpt
+            |> Option.bind ProvidedReflectionHelpers.tryGetProvidedParameters
+        let providedReturnParameterOpt =
+            providedBindingOpt
+            |> Option.bind (fun binding ->
+                if obj.ReferenceEquals(binding.ReturnParameter, null) then None else Some binding.ReturnParameter)
+        let providedReturnTypeOpt =
+            providedBindingOpt
+            |> Option.bind (fun binding ->
+                let resultType = binding.ResultType
+                if obj.ReferenceEquals(resultType, null) then None else Some resultType.RawSystemType)
+#else
+        let providedParametersOpt = None
+        let providedReturnParameterOpt = None
+        let providedReturnTypeOpt = None
+#endif
 
         let createParameterInfos memberGetter =
             parameterData
             |> List.mapi (fun position (argTy, argInfo) ->
-                let attrs, defaultValueOpt, isParamArrayArg, isOptionalArg = computeParameterMetadata argTy argInfo
+                let attrs, defaultValueOpt, isParamArrayArg, hasFSharpOptionalArg, hasClrOptionalArg =
+                    computeParameterMetadata argTy argInfo
                 let normalizedArgTy = stripTyEqns g argTy
                 printfn "[tast-debug] TxMethodDef %s param[%d]=%A" compiledName position normalizedArgTy
                 let parameterType =
@@ -1093,9 +1215,8 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                             isParamArrayArg && matchesKnown typeof<ParamArrayAttribute>
 
                         let optionalMatch =
-                            isOptionalArg
-                            && (matchesKnown typeof<Microsoft.FSharp.Core.OptionalArgumentAttribute>
-                                || matchesKnown typeof<System.Runtime.InteropServices.OptionalAttribute>)
+                            (hasFSharpOptionalArg && matchesKnown typeof<Microsoft.FSharp.Core.OptionalArgumentAttribute>)
+                            || (hasClrOptionalArg && matchesKnown typeof<System.Runtime.InteropServices.OptionalAttribute>)
 
                         declaredMatch || paramArrayMatch || optionalMatch
                     override _.ToString() = sprintf "%s %s" parameterType.Name name })
@@ -1114,12 +1235,26 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         let methodAttributes = computeMethodAttributes vref compiledName false
         let callingConvention = computeCallingConvention isStatic
         let returnType =
-            if isUnitTy g retTy then typeof<Void>
-            else asm.TxTType retTy
+#if !NO_TYPEPROVIDERS
+            match providedReturnTypeOpt with
+            | Some providedType -> providedType
+            | None ->
+#endif
+                if isUnitTy g retTy then typeof<Void>
+                else asm.TxTType retTy
 
         let rec methodInfo : MethodInfo =
             let parametersLazy =
-                lazy (createParameterInfos (fun () -> methodInfo :> MemberInfo))
+                lazy (
+#if !NO_TYPEPROVIDERS
+                    match providedParametersOpt with
+                    | Some providedParams ->
+                        providedParams
+                        |> Array.mapi (fun idx param ->
+                            ProvidedReflectionHelpers.makeProvidedParameterInfo (fun () -> methodInfo :> MemberInfo) idx param)
+                    | None ->
+#endif
+                        createParameterInfos (fun () -> methodInfo :> MemberInfo))
 
             { new MethodInfo() with 
 
@@ -1153,7 +1288,6 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
 
             // unused
             override __.MethodHandle = notRequired "MethodHandle"
-            override __.ReturnParameter = notRequired "ReturnParameter" 
             override __.IsDefined(attributeType, _inherited) =
                 vref.Attribs
                 |> List.exists (fun (Attrib(tref, _, _, _, _, _, _)) ->
@@ -1166,7 +1300,15 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             override __.ReflectedType = declTy
             override __.GetCustomAttributes(inherited) = notRequired "GetCustomAttributes"
             override __.GetCustomAttributes(attributeType, inherited) = notRequired "GetCustomAttributes" 
-
+#if !NO_TYPEPROVIDERS
+            override __.ReturnParameter =
+                match providedReturnParameterOpt with
+                | Some providedParam ->
+                    ProvidedReflectionHelpers.makeProvidedReturnParameter (fun () -> methodInfo :> MemberInfo) providedParam
+                | None -> notRequired "ReturnParameter"
+#else
+            override __.ReturnParameter = notRequired "ReturnParameter"
+#endif
             override __.ToString() = sprintf "ctxt method %s(...) in type %s" compiledName declTy.FullName  }
 
         methodInfo
@@ -2016,6 +2158,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectAssembly(builder: TypeReflectionBui
         else
             match typ with 
             | AppTy g (tcref, tinst) -> 
+                builder.RecordDependency tcref
                 let ccuofTyconRef = 
                     match ccuOfTyconRef tcref with 
                     | Some ccuofTyconRef -> ccuofTyconRef
@@ -2058,6 +2201,8 @@ and TypeReflectionBuilder(g: TcGlobals) as this =
         let typeCount = ref 0
         let projectionTicks = ref 0L
         let profilingEnabled = ref false
+        let dependencyScopes =
+            new ThreadLocal<ResizeArray<ResizeArray<TyconRef>>>(fun () -> ResizeArray())
 
         let recordProjection duration =
             Interlocked.Increment(&typeCount.contents) |> ignore
@@ -2070,6 +2215,83 @@ and TypeReflectionBuilder(g: TcGlobals) as this =
             let location = defaultArg ccu.FileName ""
             Interlocked.Increment(&assemblyCount.contents) |> ignore
             ReflectAssembly(this, g, ccu, location)
+
+        let fs1023TraceEnabled () =
+            match Environment.GetEnvironmentVariable("FS1023_TRACE") with
+            | null -> false
+            | value when String.IsNullOrWhiteSpace value -> false
+            | value when String.Equals(value.Trim(), "0", StringComparison.Ordinal) -> false
+            | _ -> true
+
+        let fs1023Trace format =
+            Printf.ksprintf
+                (fun message ->
+                    if fs1023TraceEnabled () then
+                        let path =
+                            match Environment.GetEnvironmentVariable("FS1023_TRACE_PATH") with
+                            | null
+                            | "" -> "/tmp/fs1023_trace.log"
+                            | custom -> custom
+
+                        let entry =
+                            sprintf "%s [fs1023][tastreflection] %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+
+                        try
+                            File.AppendAllText(path, entry)
+                        with _ -> ())
+                format
+
+        member this.CaptureTypeDependencies<'T>(projection: unit -> 'T) =
+            let scopes = dependencyScopes.Value
+            let scope = ResizeArray<TyconRef>()
+            scopes.Add scope
+            let entering = fs1023TraceEnabled ()
+            if entering then
+                fs1023Trace "[capture] begin depth=%d" scopes.Count
+            let stopwatch =
+                if entering then
+                    let sw = Stopwatch.StartNew()
+                    box sw
+                else
+                    null
+            try
+                let result = projection()
+                let seen = HashSet<Stamp>()
+                let deps =
+                    scope
+                    |> Seq.fold
+                        (fun acc tcref ->
+                            if seen.Add tcref.Stamp then
+                                tcref :: acc
+                            else
+                                acc)
+                        []
+                    |> List.toArray
+                    |> Array.rev
+                result, deps
+            finally
+                if entering then
+                    let elapsed =
+                        match stopwatch with
+                        | null -> Double.NaN
+                        | :? Stopwatch as sw ->
+                            sw.Stop()
+                            sw.Elapsed.TotalMilliseconds
+                        | _ -> Double.NaN
+
+                    let depNames =
+                        scope
+                        |> Seq.map (fun t -> t.CompiledName)
+                        |> String.concat ","
+
+                    fs1023Trace "[capture] end depth=%d deps=[%s] elapsedMs=%.3f" (scopes.Count - 1) depNames elapsed
+
+                scopes.RemoveAt(scopes.Count - 1)
+
+        member private this.TryAddDependency(tcref: TyconRef) =
+            let scopes = dependencyScopes.Value
+            if scopes.Count > 0 then
+                scopes[scopes.Count - 1].Add tcref
 
         member internal this.NotifyTypeCreated(duration: TimeSpan option) =
             recordProjection duration
@@ -2085,6 +2307,9 @@ and TypeReflectionBuilder(g: TcGlobals) as this =
 
         member internal this.GetOrAddAssembly(ccu: CcuThunk) =
             assemblies.GetOrAdd(ccu.Stamp, fun _ -> createAssembly ccu)
+
+        member internal this.RecordDependency(tcref: TyconRef) =
+            this.TryAddDependency tcref
 
         member this.GetSystemType(topCcu: CcuThunk, ty: TType) =
             let assembly = this.GetOrAddAssembly(topCcu)
