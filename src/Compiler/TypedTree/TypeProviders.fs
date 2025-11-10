@@ -47,6 +47,27 @@ exception ProvidedTypeResolutionNoRange of exn
 
 let toolingCompatiblePaths() = Internal.Utilities.FSharpEnvironment.toolingCompatiblePaths ()
 
+let private fs1023TraceEnabled () =
+    let value = Environment.GetEnvironmentVariable("FS1023_TRACE")
+    not (String.IsNullOrWhiteSpace value) && not (String.Equals(value.Trim(), "0", StringComparison.Ordinal))
+
+let private fs1023Trace format =
+    Printf.kprintf
+        (fun message ->
+            if fs1023TraceEnabled () then
+                let path =
+                    match Environment.GetEnvironmentVariable("FS1023_TRACE_PATH") with
+                    | null
+                    | "" -> "/tmp/fs1023_trace.log"
+                    | custom -> custom
+
+                let entry = sprintf "%s [fs1023][typeproviders] %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+
+                try
+                    File.AppendAllText(path, entry)
+                with _ -> ())
+        format
+
 /// Represents some of the configuration parameters passed to type provider components 
 type ResolutionEnvironment =
     { ResolutionFolder: string
@@ -1283,6 +1304,10 @@ let TryApplyProvidedMethod(methBeforeArgs: Tainted<ProvidedMethodBase>, staticAr
     if staticArgs.Length = 0 then 
         Some methBeforeArgs
     else
+        if fs1023TraceEnabled () then
+            let name = methBeforeArgs.PUntaint((fun x -> x.Name), m)
+            fs1023Trace "[apply-static-method] begin method=%s args=%d" name staticArgs.Length
+
         let mangledName = 
             let nm = methBeforeArgs.PUntaint((fun x -> x.Name), m)
             let staticParams = 
@@ -1292,6 +1317,10 @@ let TryApplyProvidedMethod(methBeforeArgs: Tainted<ProvidedMethodBase>, staticAr
         match methBeforeArgs.PApplyWithProvider((fun (mb, provider) -> mb.ApplyStaticArgumentsForMethod(provider, mangledName, staticArgs)), range=m) with 
         | Tainted.Null -> None
         | Tainted.NonNull methWithArguments -> 
+            if fs1023TraceEnabled () then
+                let actual = methWithArguments.PUntaint((fun x -> x.Name), m)
+                fs1023Trace "[apply-static-method] end expected=%s actual=%s" mangledName actual
+
             let actualName = methWithArguments.PUntaint((fun x -> x.Name), m)
             if actualName <> mangledName then 
                 error(Error(FSComp.SR.etProvidedAppliedMethodHadWrongName(methWithArguments.TypeProviderDesignation, mangledName, actualName), m))
@@ -1303,7 +1332,10 @@ let TryApplyProvidedType(typeBeforeArguments: Tainted<ProvidedType>, optGenerate
     if staticArgs.Length = 0 then 
         Some (typeBeforeArguments, (fun () -> ()))
     else 
-        
+        if fs1023TraceEnabled () then
+            let name = typeBeforeArguments.PUntaint((fun x -> x.FullName), m)
+            fs1023Trace "[apply-static-type] begin type=%s args=%d generatedPath=%b" name staticArgs.Length optGeneratedTypePath.IsSome
+
         let fullTypePathAfterArguments = 
             // If there is a generated type name, then use that
             match optGeneratedTypePath with 
@@ -1319,6 +1351,10 @@ let TryApplyProvidedType(typeBeforeArguments: Tainted<ProvidedType>, optGenerate
         match typeBeforeArguments.PApplyWithProvider((fun (typeBeforeArguments, provider) -> typeBeforeArguments.ApplyStaticArguments(provider, Array.ofList fullTypePathAfterArguments, staticArgs)), range=m) with 
         | Tainted.Null -> None
         | Tainted.NonNull typeWithArguments -> 
+            if fs1023TraceEnabled () then
+                let actual = typeWithArguments.PUntaint((fun x -> x.FullName), m)
+                fs1023Trace "[apply-static-type] end path=%s actual=%s" (String.concat "/" fullTypePathAfterArguments) actual
+
             let actualName = typeWithArguments.PUntaint((fun x -> x.Name), m)
             let checkTypeName() = 
                 let expectedTypeNameAfterArguments = fullTypePathAfterArguments[fullTypePathAfterArguments.Length-1]
