@@ -303,6 +303,278 @@ module FSharpDeltaMetadataWriterTests =
             (mkILExportedTypes [])
             "v4.0.30319"
 
+    let private createMethodModule () =
+        let ilg = ilGlobals
+        let stringType = ilg.typ_String
+
+        let body =
+            mkMethodBody(
+                false,
+                [],
+                2,
+                nonBranchingInstrsToCode [ I_ldstr "format"; I_ret ],
+                None,
+                None)
+
+        let methodDef =
+            mkILNonGenericStaticMethod(
+                "FormatMessage",
+                ILMemberAccess.Public,
+                [ mkILParamNamed("count", ilg.typ_Int32) ],
+                mkILReturn stringType,
+                body)
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    "Sample.MethodHost",
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ methodDef ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
+    let private createClosureModule () =
+        let ilg = ilGlobals
+        let stringType = ilg.typ_String
+
+        let makeMethod name literal =
+            let body =
+                mkMethodBody(
+                    false,
+                    [],
+                    2,
+                    nonBranchingInstrsToCode [ I_ldstr literal; I_ret ],
+                    None,
+                    None)
+
+            mkILNonGenericStaticMethod(
+                name,
+                ILMemberAccess.Public,
+                [ mkILParamNamed("value", stringType) ],
+                mkILReturn stringType,
+                body)
+
+        let outerMethod = makeMethod "InvokeOuter" "outer"
+        let closureMethod = makeMethod "Invoke@40-1" "closure"
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    "Sample.ClosureHost",
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ outerMethod; closureMethod ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
+    let private createAsyncModule () =
+        let ilg = ilGlobals
+        let stringType = ilg.typ_String
+        let boolType = ilg.typ_Bool
+
+        let runBody =
+            mkMethodBody(
+                false,
+                [],
+                2,
+                nonBranchingInstrsToCode [ I_ldstr "async"; I_ret ],
+                None,
+                None)
+
+        let runMethod =
+            mkILNonGenericStaticMethod(
+                "RunAsync",
+                ILMemberAccess.Public,
+                [ mkILParamNamed("token", ilg.typ_Int32) ],
+                mkILReturn stringType,
+                runBody)
+
+        let moveNextBody =
+            mkMethodBody(
+                false,
+                [],
+                2,
+                nonBranchingInstrsToCode [ I_ldc(DT_I4, ILConst.I4 1); I_ret ],
+                None,
+                None)
+
+        let moveNextMethod =
+            mkILNonGenericInstanceMethod(
+                "MoveNext",
+                ILMemberAccess.Public,
+                [],
+                mkILReturn boolType,
+                moveNextBody)
+
+        let hostType =
+            mkILSimpleClass
+                ilg
+                (
+                    "Sample.AsyncHost",
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ runMethod ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField )
+
+        let stateMachineType =
+            mkILSimpleClass
+                ilg
+                (
+                    "Sample.AsyncHostStateMachine",
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ moveNextMethod ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ hostType; stateMachineType ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
+    let private simpleTypeName (fullName: string) =
+        match fullName.LastIndexOf '.' with
+        | -1 -> fullName
+        | idx when idx = fullName.Length - 1 -> ""
+        | idx -> fullName.Substring(idx + 1)
+
+    let private findMethodHandle (metadataReader: MetadataReader) (typeFullName: string) (methodName: string) =
+        let expectedType = simpleTypeName typeFullName
+
+        metadataReader.MethodDefinitions
+        |> Seq.find (fun handle ->
+            let methodDef = metadataReader.GetMethodDefinition handle
+            let declaringType = metadataReader.GetTypeDefinition methodDef.GetDeclaringType()
+            let declaringName = metadataReader.GetString declaringType.Name
+            declaringName = expectedType
+            && metadataReader.GetString(methodDef.Name) = methodName)
+
+    type AddedMethodArtifacts =
+        { MethodRow: DeltaWriter.MethodDefinitionRowInfo
+          ParameterRows: DeltaWriter.ParameterDefinitionRowInfo list
+          Update: DeltaWriter.MethodMetadataUpdate }
+
+    let private buildAddedMethod
+        (metadataReader: MetadataReader)
+        (nextMethodRowId: int ref)
+        (nextParamRowId: int ref)
+        (typeName: string)
+        (methodName: string)
+        (parameterTypes: ILType list)
+        (returnType: ILType)
+        =
+        let methodHandle = findMethodHandle metadataReader typeName methodName
+        let methodDef = metadataReader.GetMethodDefinition methodHandle
+
+        let methodKey =
+            { DeclaringType = typeName
+              Name = methodName
+              GenericArity = 0
+              ParameterTypes = parameterTypes
+              ReturnType = returnType }
+
+        let methodRowId = !nextMethodRowId
+        incr nextMethodRowId
+
+        let parameterRows =
+            methodDef.GetParameters()
+            |> Seq.map metadataReader.GetParameter
+            |> Seq.filter (fun paramDef -> paramDef.SequenceNumber <> 0)
+            |> Seq.map (fun paramDef ->
+                let rowId = !nextParamRowId
+                incr nextParamRowId
+                { Key =
+                    { Method = methodKey
+                      SequenceNumber = paramDef.SequenceNumber }
+                  RowId = rowId
+                  IsAdded = true
+                  Attributes = paramDef.Attributes
+                  SequenceNumber = paramDef.SequenceNumber
+                  Name =
+                      if paramDef.Name.IsNil then
+                          None
+                      else
+                          Some(metadataReader.GetString paramDef.Name) })
+            |> Seq.toList
+
+        let firstParamRowId = parameterRows |> List.tryHead |> Option.map (fun row -> row.RowId)
+
+        let methodRow =
+            { Key = methodKey
+              RowId = methodRowId
+              IsAdded = true
+              Attributes = methodDef.Attributes
+              ImplAttributes = methodDef.ImplAttributes
+              Name = metadataReader.GetString methodDef.Name
+              Signature = metadataReader.GetBlobBytes methodDef.Signature
+              FirstParameterRowId = firstParamRowId }
+
+        let methodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle)
+
+        let update =
+            { MethodKey = methodKey
+              MethodToken = methodToken
+              MethodHandle = methodHandle
+              Body =
+                { MethodToken = methodToken
+                  LocalSignatureToken = 0
+                  CodeOffset = 0
+                  CodeLength = 4 } }
+
+        { MethodRow = methodRow
+          ParameterRows = parameterRows
+          Update = update }
+
     [<Fact>]
     let ``metadata writer emits property rows`` () =
         let moduleDef = createPropertyModule ()
@@ -593,12 +865,138 @@ module FSharpDeltaMetadataWriterTests =
             withAbstractIlSerializer true emitDelta
 
         Assert.Equal<byte>(defaultDelta.Metadata, abstractDelta.Metadata)
+        Assert.Equal<byte>(defaultDelta.TableStream.Bytes, abstractDelta.TableStream.Bytes)
 
-        let tryOperation table =
-            metadataDelta.EncLog
-            |> Array.tryFind (fun (encTable, _, _) -> encTable = table)
-            |> Option.map (fun (_, _, op) -> op)
+    [<Fact>]
+    let ``abstract metadata serializer matches default output for method rows`` () =
+        let moduleDef = createMethodModule ()
+        let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
+        use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+        let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
 
-        Assert.Equal(Some EditAndContinueOperation.AddEvent, tryOperation TableIndex.Event)
-        Assert.Equal(Some EditAndContinueOperation.Default, tryOperation TableIndex.EventMap)
-        Assert.Equal(Some EditAndContinueOperation.Default, tryOperation TableIndex.MethodSemantics)
+        let nextMethodRowId = ref 1
+        let nextParamRowId = ref 1
+
+        let artifacts =
+            [ buildAddedMethod metadataReader nextMethodRowId nextParamRowId "Sample.MethodHost" "FormatMessage" [ ilGlobals.typ_Int32 ] ilGlobals.typ_String ]
+
+        let methodRows = artifacts |> List.map (fun a -> a.MethodRow)
+        let parameterRows = artifacts |> List.collect (fun a -> a.ParameterRows)
+        let updates = artifacts |> List.map (fun a -> a.Update)
+
+        let emitDelta () =
+            let builder = IlDeltaStreamBuilder None
+
+            DeltaWriter.emit
+                builder.MetadataBuilder
+                moduleName
+                (Guid.NewGuid())
+                (Guid.NewGuid())
+                (Guid.NewGuid())
+                methodRows
+                parameterRows
+                []
+                []
+                []
+                []
+                []
+                updates
+
+        let defaultDelta = emitDelta ()
+        let abstractDelta = withAbstractIlSerializer true emitDelta
+
+        Assert.Equal<byte>(defaultDelta.Metadata, abstractDelta.Metadata)
+        Assert.Equal<byte>(defaultDelta.TableStream.Bytes, abstractDelta.TableStream.Bytes)
+        Assert.Equal(1, defaultDelta.TableRowCounts.[int TableIndex.MethodDef])
+        Assert.Equal(1, defaultDelta.TableRowCounts.[int TableIndex.Param])
+
+    [<Fact>]
+    let ``abstract metadata serializer matches default output for closure methods`` () =
+        let moduleDef = createClosureModule ()
+        let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
+        use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+        let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
+
+        let nextMethodRowId = ref 1
+        let nextParamRowId = ref 1
+
+        let artifacts =
+            [ buildAddedMethod metadataReader nextMethodRowId nextParamRowId "Sample.ClosureHost" "InvokeOuter" [ ilGlobals.typ_String ] ilGlobals.typ_String
+              buildAddedMethod metadataReader nextMethodRowId nextParamRowId "Sample.ClosureHost" "Invoke@40-1" [ ilGlobals.typ_String ] ilGlobals.typ_String ]
+
+        let methodRows = artifacts |> List.map (fun a -> a.MethodRow)
+        let parameterRows = artifacts |> List.collect (fun a -> a.ParameterRows)
+        let updates = artifacts |> List.map (fun a -> a.Update)
+
+        let emitDelta () =
+            let builder = IlDeltaStreamBuilder None
+
+            DeltaWriter.emit
+                builder.MetadataBuilder
+                moduleName
+                (Guid.NewGuid())
+                (Guid.NewGuid())
+                (Guid.NewGuid())
+                methodRows
+                parameterRows
+                []
+                []
+                []
+                []
+                []
+                updates
+
+        let defaultDelta = emitDelta ()
+        let abstractDelta = withAbstractIlSerializer true emitDelta
+
+        Assert.Equal<byte>(defaultDelta.Metadata, abstractDelta.Metadata)
+        Assert.Equal<byte>(defaultDelta.TableStream.Bytes, abstractDelta.TableStream.Bytes)
+        Assert.Equal(2, defaultDelta.TableRowCounts.[int TableIndex.MethodDef])
+        Assert.Equal(2, defaultDelta.TableRowCounts.[int TableIndex.Param])
+
+    [<Fact>]
+    let ``abstract metadata serializer matches default output for async methods`` () =
+        let moduleDef = createAsyncModule ()
+        let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
+        use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+        let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
+
+        let nextMethodRowId = ref 1
+        let nextParamRowId = ref 1
+
+        let artifacts =
+            [ buildAddedMethod metadataReader nextMethodRowId nextParamRowId "Sample.AsyncHost" "RunAsync" [ ilGlobals.typ_Int32 ] ilGlobals.typ_String
+              buildAddedMethod metadataReader nextMethodRowId nextParamRowId "Sample.AsyncHostStateMachine" "MoveNext" [] ilGlobals.typ_Bool ]
+
+        let methodRows = artifacts |> List.map (fun a -> a.MethodRow)
+        let parameterRows = artifacts |> List.collect (fun a -> a.ParameterRows)
+        let updates = artifacts |> List.map (fun a -> a.Update)
+
+        let emitDelta () =
+            let builder = IlDeltaStreamBuilder None
+
+            DeltaWriter.emit
+                builder.MetadataBuilder
+                moduleName
+                (Guid.NewGuid())
+                (Guid.NewGuid())
+                (Guid.NewGuid())
+                methodRows
+                parameterRows
+                []
+                []
+                []
+                []
+                []
+                updates
+
+        let defaultDelta = emitDelta ()
+        let abstractDelta = withAbstractIlSerializer true emitDelta
+
+        Assert.Equal<byte>(defaultDelta.Metadata, abstractDelta.Metadata)
+        Assert.Equal<byte>(defaultDelta.TableStream.Bytes, abstractDelta.TableStream.Bytes)
+        Assert.Equal(2, defaultDelta.TableRowCounts.[int TableIndex.MethodDef])
+        Assert.Equal(1, defaultDelta.TableRowCounts.[int TableIndex.Param])
