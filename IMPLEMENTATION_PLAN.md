@@ -239,7 +239,8 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
   - ✅ `union input compiles generated summaries` — now mirrors the record coverage: we compile/reflect both binaries and assert `ShapeProvided.MapParameters`/`Value` produce the expected strings, confirming union metadata also survives relocation.
   - ⏳ `GenericInput_multipleInstantiations` — remains `[<Fact(Skip=...>]` until we track down the hang in `checker.Compile` when the static argument is generic. The instrumentation around `TryApplyProvidedType`/`TryApplyProvidedMethod` stays checked in so future traces show whether the provider or the compiler is stalling.
   - Negative coverage (anonymous records, type parameters, provided types as static arguments) stays enabled and green.
-  - **Next:** re-enable the generic regression once the hang is resolved, then run `dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Release` to validate the broader pipeline before moving on to IDE/SDK suites.
+  - ✅ Component sweep: `dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Release` now runs cleanly, so the Fs1023 plumbing no longer regresses the broader suite.
+  - **Next:** re-enable the generic regression once the hang is resolved, then expand coverage toward IDE scenarios (`tests/fsharp/typeProviders/**`) and TPSDK samples.
 
 ### 5.2 SDK + C# consumer tests
 
