@@ -7,6 +7,7 @@ module internal FSharp.Compiler.CheckExpressions
 open System
 open System.Collections.Generic
 open System.Text.RegularExpressions
+open System.IO
 
 open Internal.Utilities.Collections
 open Internal.Utilities.Library
@@ -48,6 +49,29 @@ open Import
 #if !NO_TYPEPROVIDERS
 open FSharp.Compiler.TypeProviders
 #endif
+
+let private fs1023TraceEnabled () =
+    match Environment.GetEnvironmentVariable("FS1023_TRACE") with
+    | null -> false
+    | value when String.IsNullOrWhiteSpace value -> false
+    | value when String.Equals(value.Trim(), "0", StringComparison.Ordinal) -> false
+    | _ -> true
+
+let private fs1023Trace format =
+    Printf.ksprintf
+        (fun message ->
+            if fs1023TraceEnabled () then
+                let path =
+                    match Environment.GetEnvironmentVariable("FS1023_TRACE_PATH") with
+                    | null | "" -> "/tmp/fs1023_trace.log"
+                    | custom -> custom
+
+                let entry = sprintf "%s [fs1023][checkexpr] %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+
+                try
+                    File.AppendAllText(path, entry)
+                with _ -> ())
+        format
 
 //-------------------------------------------------------------------------
 // Errors.
@@ -4898,57 +4922,81 @@ and TcStaticConstantParameter (cenv: cenv) (env: TcEnv) tpenv kind (StripParenTy
             TcTypeAndRecover cenv NewTyparsOK CheckCxs ItemOccurrence.UseInType WarnOnIWSAM.No env tpenv typeSyn
 
 #if !NO_TYPEPROVIDERS
-        let typeDependencies = HashSet<TyconRef>()
+        if fs1023TraceEnabled () then
+            let tyString = NicePrint.prettyStringOfTy env.DisplayEnv ty
+            fs1023Trace "[fs1023][staticarg] System.Type candidate ty=%s" tyString
 
-        let rec addMeasureDependencies measure =
+        let describeStaticArgType ty =
+            match ty with
+            | TType_app(tcref, tyargs, _) ->
+                let hasTypars = tyargs |> List.exists (function TType_var _ -> true | _ -> false)
+                let source = if tcref.IsProvided then "provided" else "clr"
+                sprintf "app:%s source=%s args=%d hasTypars=%b" tcref.DisplayName source (List.length tyargs) hasTypars
+            | TType_tuple(_, tys) -> sprintf "tuple:%d" (List.length tys)
+            | TType_fun _ -> "fun"
+            | TType_forall _ -> "forall"
+            | TType_ucase(ucref, _) -> sprintf "union:%s" ucref.CaseName
+            | TType_anon _ -> "anon-record"
+            | TType_measure _ -> "measure"
+            | TType_var(tp, _) -> sprintf "typar:%s" tp.Name
+            | _ -> "other"
+
+        let rec ensureMeasureSupported measure =
             match measure with
             | Measure.Var _ -> ()
-            | Measure.Const(tcref, _) ->
-                typeDependencies.Add tcref |> ignore
+            | Measure.Const(_, _) -> ()
             | Measure.Prod(m1, m2, _) ->
-                addMeasureDependencies m1
-                addMeasureDependencies m2
+                ensureMeasureSupported m1
+                ensureMeasureSupported m2
             | Measure.Inv m ->
-                addMeasureDependencies m
+                ensureMeasureSupported m
             | Measure.One _ -> ()
             | Measure.RationalPower(m, _) ->
-                addMeasureDependencies m
+                ensureMeasureSupported m
 
-        let rec addTypeDependencies ty =
-            match stripTyEqnsWrtErasure Erasure.EraseAll g ty with
+        let rec ensureTypeSupported ty =
+            let strippedTy = stripTyEqnsWrtErasure Erasure.EraseAll g ty
+
+            if fs1023TraceEnabled () then
+                let summary = describeStaticArgType strippedTy
+                let tyString = NicePrint.prettyStringOfTy env.DisplayEnv strippedTy
+                fs1023Trace "[fs1023][staticarg] ensureTypeSupported node=%s ty=%s" summary tyString
+
+            match strippedTy with
             | TType_app(tcref, tyargs, _) ->
-#if !NO_TYPEPROVIDERS
                 if tcref.IsProvided then
                     failWithReason (Some "provided types cannot be used as static arguments")
-#endif
-                typeDependencies.Add tcref |> ignore
-                tyargs |> List.iter addTypeDependencies
+                tyargs |> List.iter ensureTypeSupported
             | TType_tuple(_, tys) ->
-                tys |> List.iter addTypeDependencies
+                tys |> List.iter ensureTypeSupported
             | TType_fun(domainTy, rangeTy, _) ->
-                addTypeDependencies domainTy
-                addTypeDependencies rangeTy
+                ensureTypeSupported domainTy
+                ensureTypeSupported rangeTy
             | TType_forall(_, bodyTy) ->
-                addTypeDependencies bodyTy
-            | TType_ucase(ucref, tyinst) ->
-                typeDependencies.Add ucref.TyconRef |> ignore
-                tyinst |> List.iter addTypeDependencies
+                ensureTypeSupported bodyTy
+            | TType_ucase(_, tyinst) ->
+                tyinst |> List.iter ensureTypeSupported
             | TType_anon _ ->
                 failWithReason (Some "anonymous record types are not supported as static arguments")
             | TType_measure m ->
-                addMeasureDependencies m
-            | TType_var _ -> failWithReason (Some "type parameters are not supported as static arguments")
-        addTypeDependencies ty
+                ensureMeasureSupported m
+            | TType_var(_, _) ->
+                failWithReason (Some "type parameters are not supported as static arguments")
 
-        for dep in typeDependencies do
-            cenv.amap.assemblyLoader.RecordTypeDependency dep
+        ensureTypeSupported ty
 #else
         match stripTyEqnsWrtErasure Erasure.EraseAll g ty with
         | TType_anon _ -> failWithReason (Some "anonymous record types are not supported as static arguments")
         | _ -> ()
 #endif
 
-        let systemTy = cenv.amap.ReflectType(cenv.thisCcu, ty)
+        let systemTy, dependencies = cenv.amap.ReflectTypeWithDependencies(cenv.thisCcu, ty)
+#if !NO_TYPEPROVIDERS
+        for dep in dependencies do
+            cenv.amap.assemblyLoader.RecordTypeDependency dep
+#else
+        ignore dependencies
+#endif
         record g.system_Type_ty
         box systemTy, tpenv'
 
