@@ -162,6 +162,16 @@ module private MetadataWriterTestHelpers =
 module FSharpDeltaMetadataWriterTests =
     open MetadataWriterTestHelpers
 
+    let private withAbstractIlSerializer enabled action =
+        let variable = "FSHARP_HOTRELOAD_USE_ABSTRACTIL"
+        let previous = Environment.GetEnvironmentVariable(variable)
+        let value = if enabled then "1" else null
+        Environment.SetEnvironmentVariable(variable, value)
+        try
+            action()
+        finally
+            Environment.SetEnvironmentVariable(variable, previous)
+
     let private assertTableStreamMatches metadataDelta =
         let size, padded = extractTablesStream metadataDelta.Metadata
         Assert.Equal(size, metadataDelta.TableStream.UnpaddedSize)
@@ -492,6 +502,97 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(1, tableCount TableIndex.MethodSemantics)
         Assert.Contains("OnChanged", Encoding.UTF8.GetString(metadataDelta.StringHeap))
         assertTableStreamMatches metadataDelta
+
+    [<Fact>]
+    let ``abstract metadata serializer matches default output`` () =
+        let moduleDef = createPropertyModule ()
+        let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
+        use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+
+        let typeHandle =
+            metadataReader.TypeDefinitions
+            |> Seq.find (fun handle -> metadataReader.GetString(metadataReader.GetTypeDefinition(handle).Name) = "PropertyHost")
+
+        let getterHandle =
+            metadataReader.MethodDefinitions
+            |> Seq.find (fun handle -> metadataReader.GetString(metadataReader.GetMethodDefinition(handle).Name) = "get_Message")
+
+        let propertyHandle =
+            metadataReader.PropertyDefinitions
+            |> Seq.find (fun handle -> metadataReader.GetString(metadataReader.GetPropertyDefinition(handle).Name) = "Message")
+
+        let emitDelta () =
+            let builder = IlDeltaStreamBuilder None
+
+            let stringType = ilGlobals.typ_String
+            let methodKey = methodKey "Sample.PropertyHost" "get_Message" stringType
+
+            let getterDef = metadataReader.GetMethodDefinition getterHandle
+            let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
+                [ { Key = methodKey
+                    RowId = 1
+                    IsAdded = true
+                    Attributes = getterDef.Attributes
+                    ImplAttributes = getterDef.ImplAttributes
+                    Name = metadataReader.GetString getterDef.Name
+                    Signature = metadataReader.GetBlobBytes getterDef.Signature
+                    FirstParameterRowId = None } ]
+
+            let updates: DeltaWriter.MethodMetadataUpdate list =
+                [ { MethodKey = methodKey
+                    MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit getterHandle)
+                    MethodHandle = getterHandle
+                    Body =
+                        { MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit getterHandle)
+                          LocalSignatureToken = 0
+                          CodeOffset = 0
+                          CodeLength = 1 } } ]
+
+            let propertyKey =
+                { DeclaringType = "Sample.PropertyHost"
+                  Name = "Message"
+                  PropertyType = stringType
+                  IndexParameterTypes = [] }
+
+            let propertyDef = metadataReader.GetPropertyDefinition propertyHandle
+            let propertyRows: DeltaWriter.PropertyDefinitionRowInfo list =
+                [ { Key = propertyKey
+                    RowId = 1
+                    IsAdded = true
+                    Name = metadataReader.GetString propertyDef.Name
+                    Signature = metadataReader.GetBlobBytes propertyDef.Signature
+                    Attributes = propertyDef.Attributes } ]
+
+            let propertyMapRows: DeltaWriter.PropertyMapRowInfo list =
+                [ { DeclaringType = "Sample.PropertyHost"
+                    RowId = 1
+                    TypeDefRowId = MetadataTokens.GetRowNumber typeHandle
+                    FirstPropertyRowId = Some 1
+                    IsAdded = true } ]
+
+            let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
+
+            DeltaWriter.emit
+                builder.MetadataBuilder
+                moduleName
+                (Guid.NewGuid())
+                (Guid.NewGuid())
+                (Guid.NewGuid())
+                methodDefinitionRows
+                []
+                propertyRows
+                []
+                propertyMapRows
+                []
+                []
+                updates
+
+        let defaultDelta = emitDelta ()
+        let abstractDelta =
+            withAbstractIlSerializer true emitDelta
+
+        Assert.Equal<byte>(defaultDelta.Metadata, abstractDelta.Metadata)
 
         let tryOperation table =
             metadataDelta.EncLog
