@@ -3,6 +3,7 @@ module internal FSharp.Compiler.CodeGen.DeltaMetadataSerializer
 open System
 open System.Collections.Generic
 open System.IO
+open System.Text
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
@@ -23,21 +24,33 @@ let private emptyUserStringHeap = padTo4 [| 0uy |]
 /// Represents the aligned heap streams that will be written into the delta metadata.
 type DeltaHeapStreams =
     { Strings: byte[]
+      StringsLength: int
       Blobs: byte[]
+      BlobsLength: int
       Guids: byte[]
-      UserStrings: byte[] }
+      GuidsLength: int
+      UserStrings: byte[]
+      UserStringsLength: int }
 
     static member Empty =
         { Strings = padTo4 [||]
+          StringsLength = 0
           Blobs = padTo4 [||]
+          BlobsLength = 0
           Guids = padTo4 [||]
-          UserStrings = emptyUserStringHeap }
+          GuidsLength = 0
+          UserStrings = emptyUserStringHeap
+          UserStringsLength = 1 }
 
 let buildHeapStreams (mirror: DeltaMetadataTables) : DeltaHeapStreams =
     { Strings = padTo4 mirror.StringHeapBytes
+      StringsLength = mirror.StringHeapBytes.Length
       Blobs = padTo4 mirror.BlobHeapBytes
+      BlobsLength = mirror.BlobHeapBytes.Length
       Guids = padTo4 mirror.GuidHeapBytes
-      UserStrings = emptyUserStringHeap }
+      GuidsLength = mirror.GuidHeapBytes.Length
+      UserStrings = emptyUserStringHeap
+      UserStringsLength = 1 }
 
 /// Represents the serialized `#~` stream (metadata tables) including its padded bytes.
 type DeltaTableStream =
@@ -193,6 +206,80 @@ let buildTableStream (input: DeltaTableSerializerInput) : DeltaTableStream =
         { Bytes = padded
           UnpaddedSize = unpaddedSize
           PaddedSize = paddedSize }
+
+type private StreamDescriptor =
+    { Name: string
+      Offset: int
+      Size: int
+      Bytes: byte[] }
+
+let private versionString = "v4.0.30319"
+
+let private encodeName (writer: BinaryWriter) (name: string) =
+    let bytes = Text.Encoding.UTF8.GetBytes(name)
+    writer.Write(bytes)
+    writer.Write(byte 0)
+    while writer.BaseStream.Position % 4L <> 0L do
+        writer.Write(byte 0)
+
+let private streamHeaderSize (name: string) =
+    let nameLength = Text.Encoding.UTF8.GetByteCount(name) + 1
+    8 + align4 nameLength
+
+let private serializeMetadataRoot (input: DeltaTableSerializerInput) (heaps: DeltaHeapStreams) (tableStream: DeltaTableStream) : byte[] =
+    let streams =
+        [ "#~", tableStream.UnpaddedSize, tableStream.Bytes
+          "#Strings", heaps.StringsLength, heaps.Strings
+          "#US", heaps.UserStringsLength, heaps.UserStrings
+          "#GUID", heaps.GuidsLength, heaps.Guids
+          "#Blob", heaps.BlobsLength, heaps.Blobs ]
+
+    let versionBytes = Text.Encoding.UTF8.GetBytes(versionString)
+    let versionLength = versionBytes.Length + 1
+    let versionPadded = align4 versionLength
+
+    let headerBaseSize = 4 + 2 + 2 + 4 + 4 + versionPadded + 2 + 2
+    let streamsHeaderSize = streams |> List.sumBy (fun (name, _, _) -> streamHeaderSize name)
+    let headerSize = headerBaseSize + streamsHeaderSize
+
+    let mutable offset = headerSize
+    let descriptors =
+        streams
+        |> List.map (fun (name, size, bytes) ->
+            let descriptor = { Name = name; Offset = offset; Size = size; Bytes = bytes }
+            offset <- offset + bytes.Length
+            descriptor)
+
+    use ms = new MemoryStream()
+    use writer = new BinaryWriter(ms)
+
+    writer.Write(0x424A5342u)
+    writer.Write(uint16 1)
+    writer.Write(uint16 1)
+    writer.Write(0u)
+    writer.Write(uint32 versionLength)
+    writer.Write(versionBytes)
+    writer.Write(byte 0)
+    while ms.Position % 4L <> 0L do
+        writer.Write(byte 0)
+
+    writer.Write(uint16 0)
+    writer.Write(uint16 descriptors.Length)
+
+    for descriptor in descriptors do
+        writer.Write(uint32 descriptor.Offset)
+        writer.Write(uint32 descriptor.Size)
+        encodeName writer descriptor.Name
+
+    for descriptor in descriptors do
+        writer.Write(descriptor.Bytes)
+
+    ms.ToArray()
+
+let trySerializeMetadataRoot (input: DeltaTableSerializerInput) (heaps: DeltaHeapStreams) (tableStream: DeltaTableStream) : byte[] option =
+    match serializationStrategy () with
+    | UseAbstractIL -> Some(serializeMetadataRoot input heaps tableStream)
+    | UseMetadataBuilder -> None
 
 // Env-var guard
 

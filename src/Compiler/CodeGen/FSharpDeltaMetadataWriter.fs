@@ -428,6 +428,8 @@ let emit
                 heapSizes.BlobHeapSize
                 heapSizes.GuidHeapSize
 
+        let heapStreams = DeltaMetadataSerializer.buildHeapStreams tableMirror
+
         let tableStreamInput =
             { DeltaMetadataSerializer.DeltaTableSerializerInput.Tables = tableMirror.TableRows
               RowCounts = tableRowCounts
@@ -439,10 +441,15 @@ let emit
 
         let tableStream = DeltaMetadataSerializer.buildTableStream tableStreamInput
 
+        let metadataBytes =
+            match DeltaMetadataSerializer.trySerializeMetadataRoot tableStreamInput heapStreams tableStream with
+            | Some bytes -> bytes
+            | None -> metadataBlob.ToArray()
+
         if shouldTraceMetadata () then
             printfn "[fsharp-hotreload][metadata-writer] tableCounts method=%d param=%d" methodUpdateCount parameterUpdateCount
 
-        { Metadata = metadataBlob.ToArray()
+        { Metadata = metadataBytes
           StringHeap = tableMirror.StringHeapBytes
           BlobHeap = tableMirror.BlobHeapBytes
           GuidHeap = tableMirror.GuidHeapBytes
