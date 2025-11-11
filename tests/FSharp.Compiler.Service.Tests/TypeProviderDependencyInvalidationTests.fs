@@ -15,7 +15,7 @@ open FSharp.Compiler.Symbols
 
 module TypeProviderDependencyInvalidationTests =
 
-    [<Fact(Skip = "Generic static arguments still hang during checker.Compile; instrumentation logs to generic.log for future diagnosis.")>]
+    [<Fact>]
     let ``provided binding defaults to None`` () =
         let optData = FSharp.Compiler.TypedTree.Val.NewEmptyValOptData()
 #if !NO_TYPEPROVIDERS
@@ -353,19 +353,19 @@ module UseProvided =
             failwithf "Command '%s %s' failed with exit code %d.%s%s" fileName (String.concat " " args) proc.ExitCode stdout stderr
 
     let private compileWithLogging log label args =
-        match log with
-        | Some f -> f (sprintf "[fs1023][compile] begin %s" label)
-        | None -> ()
+        let logMsg message =
+            match log with
+            | Some f -> f message
+            | None -> ()
+
+        logMsg (sprintf "[fs1023][compile] begin %s" label)
+        logMsg (sprintf "[fs1023][compile] args(%s): %s" label (String.concat " " args))
 
         try
             compile args
-            match log with
-            | Some f -> f (sprintf "[fs1023][compile] end %s" label)
-            | None -> ()
+            logMsg (sprintf "[fs1023][compile] end %s" label)
         with ex ->
-            match log with
-            | Some f -> f (sprintf "[fs1023][compile] fail %s: %s" label ex.Message)
-            | None -> ()
+            logMsg (sprintf "[fs1023][compile] fail %s: %s" label ex.Message)
             reraise()
 
     [<Fact>]
@@ -704,7 +704,7 @@ module UseProvided =
         finally
             try Directory.Delete(tempDir, true) with _ -> ()
 
-    [<Fact(Skip = "Generic static arguments still hang during checker.Compile; instrumentation logs to generic.log for future diagnosis.")>]
+    [<Fact>]
     let ``GenericInput_multipleInstantiations`` () =
         let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(tempDir) |> ignore
