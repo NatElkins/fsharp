@@ -28,6 +28,10 @@ open FSharp.Compiler.Syntax
 open FSharp.Compiler.TypeProviders
 #endif
 
+type private TyparScope =
+    { ByStamp: Dictionary<Stamp, Type>
+      ByKey: Dictionary<string, Type> }
+
 
 [<AutoOpen>]
 module Utils = 
@@ -699,7 +703,14 @@ and ReflectTypeSymbol(kind: ReflectTypeSymbolKind, args: Type[]) =
         | ReflectTypeSymbolKind.Generic gtd, _ -> gtd.GetProperties(_bindingAttr)
         | _ -> failwith "unreachable"
 
-    override this.GetPropertyImpl(_name, _bindingAttr, _binder, _returnType, _types, _modifiers)    = notRequired "GetPropertyImpl" this.Name
+    override this.GetPropertyImpl(name, bindingAttr, _binder, _returnType, _types, _modifiers) =
+        match kind, args with
+        | ReflectTypeSymbolKind.SDArray, [| arg |]
+        | ReflectTypeSymbolKind.Array _, [| arg |]
+        | ReflectTypeSymbolKind.Pointer, [| arg |]
+        | ReflectTypeSymbolKind.ByRef, [| arg |] -> arg.GetProperty(name, bindingAttr)
+        | ReflectTypeSymbolKind.Generic gtd, _ -> gtd.GetProperty(name, bindingAttr)
+        | _ -> notRequired "GetPropertyImpl" this.Name
     override this.GetNestedTypes _bindingAttr =
         match kind,args with 
         | ReflectTypeSymbolKind.SDArray,[| arg |] 
@@ -1645,6 +1656,29 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         }
 
     let rec gps = tcref.TyparsNoRange |> List.mapi (fun i gp -> TxGenericParam asm (fun () -> gps, [| |]) i gp) |> List.toArray
+    let typarScopePairsOpt =
+        match tcref.TyparsNoRange with
+        | [] -> None
+        | typars -> Some(List.zip typars (gps |> Array.toList))
+
+    let pushTyparScope () =
+        match typarScopePairsOpt with
+        | None ->
+            if asm.Fs1023TraceEnabled() then
+                asm.Fs1023TraceMessage(
+                    sprintf "[typeproxy] push-typar-scope skipped ty=%s reason=empty" tcref.CompiledName)
+
+            { new IDisposable with member _.Dispose() = () }
+        | Some pairs ->
+            if asm.Fs1023TraceEnabled() then
+                let summary =
+                    pairs
+                    |> List.map (fun (tp, _) -> sprintf "%s/%A" tp.DisplayName tp.Stamp)
+                    |> String.concat ","
+                asm.Fs1023TraceMessage(
+                    sprintf "[typeproxy] push-typar-scope ty=%s pairs=[%s]" tcref.CompiledName summary)
+
+            asm.PushTyparScope pairs
 
     let isNested = declTyOpt.IsSome
 
@@ -1660,6 +1694,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
     override __.GetInterfaces() = tcref.ImmediateInterfaceTypesOfFSharpTycon |> List.map asm.TxTType |> List.toArray
 
     override this.GetConstructors(_bindingFlags) = 
+        use _ = pushTyparScope ()
         let members: ValRef list = tcref.MembersOfFSharpTyconSorted
         members
         |> List.filter (fun (vref: ValRef) -> vref.IsConstructor)
@@ -1667,6 +1702,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         |> List.toArray
 
     override this.GetMethods(bindingFlags) =
+        use _ = pushTyparScope ()
         let entering = asm.Fs1023TraceEnabled()
         let stopwatch =
             if entering then Stopwatch.StartNew() else null
@@ -1702,21 +1738,25 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         methods
 
     override this.GetField(name, _bindingFlags) = 
+        use _ = pushTyparScope ()
         let fieldOpt: RecdField option = tcref.AllFieldTable.FieldByName(name)
         fieldOpt
         |> Option.map (fun field -> TxFieldDefinition asm this gps field) 
         |> optionToNull
 
     override this.GetFields(_bindingFlags) = 
+        use _ = pushTyparScope ()
         tcref.AllFieldsArray
         |> Array.map (fun field -> TxFieldDefinition asm this gps field)
 
     override this.GetEvent(name, bindingFlags) =
+        use _ = pushTyparScope ()
         this.GetEvents(bindingFlags)
         |> Array.tryFind (fun ev -> String.Equals(ev.Name, name, StringComparison.Ordinal))
         |> optionToNull
 
     override this.GetEvents(_bindingFlags) =
+        use _ = pushTyparScope ()
         let g = asm.TcGlobals
         let eventMap = Dictionary<string, ValRef option ref * ValRef option ref * ValRef option ref>()
 
@@ -1759,6 +1799,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         |> Seq.toArray
 
     override this.GetProperties(_bindingFlags) =
+        use _ = pushTyparScope ()
         let propertyValRefs =
             tcref.MembersOfFSharpTyconSorted
             |> List.choose (fun x ->
@@ -2107,6 +2148,30 @@ and [<DebuggerDisplay("{FullName}")>] ReflectAssembly(builder: TypeReflectionBui
 
     // A table tracking how type definition objects are translated.
     let txTable = TxTable<Type>()
+    let typarScopeStack =
+        ThreadLocal<ResizeArray<TyparScope>>(fun () -> ResizeArray())
+    let globalTyparByKey = ConcurrentDictionary<string, Type>(StringComparer.Ordinal)
+
+    let typarScopeKey (tp: Typar) =
+        tp.DisplayName + "|" + string tp.Kind
+
+    let pushTyparScope (pairs: seq<Typar * Type>) =
+        let enumerated = pairs |> Seq.toArray
+        if enumerated.Length = 0 then
+            { new IDisposable with member _.Dispose() = () }
+        else
+            let scope =
+                { ByStamp = Dictionary<Stamp, Type>(enumerated.Length)
+                  ByKey = Dictionary<string, Type>(StringComparer.Ordinal) }
+            for (tp, ty) in enumerated do
+                let key = typarScopeKey tp
+                scope.ByStamp[tp.Stamp] <- ty
+                scope.ByKey[key] <- ty
+                globalTyparByKey[key] <- ty
+            let stack = typarScopeStack.Value
+            stack.Add scope
+            { new IDisposable with member _.Dispose() = stack.RemoveAt(stack.Count - 1) }
+
     let txTypeDef (declTyOpt: Type option) (inp: TyconRef) =
         txTable.Get inp.Stamp (fun () ->
             let stopwatch =
@@ -2181,6 +2246,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectAssembly(builder: TypeReflectionBui
     member internal _.Builder = builder
     member internal _.Fs1023TraceEnabled() = builder.Fs1023TraceEnabled()
     member internal _.Fs1023TraceMessage(message: string) = builder.Fs1023TraceMessage(message)
+    member internal _.PushTyparScope(pairs: seq<Typar * Type>) = pushTyparScope pairs
 
         /// Makes a field definition read from a binary available as a FieldInfo. Not all methods are implemented.
     member asm.TxTType (typ:TType) = 
@@ -2216,7 +2282,37 @@ and [<DebuggerDisplay("{FullName}")>] ReflectAssembly(builder: TypeReflectionBui
                 etyR.MakeByRefType()  
             | ty when isTyparTy g ty -> 
                 let tp = destTyparTy g ty  
-                asm.TxTType (mkTyparTy tp)
+                match tp.Solution with
+                | Some solvedTy ->
+                    asm.TxTType solvedTy
+                | None ->
+                    let stack = typarScopeStack.Value
+                    let mutable resolved: Type = null
+                    let mutable idx = stack.Count - 1
+                    while idx >= 0 && isNull resolved do
+                        let scope = stack[idx]
+                        match scope.ByStamp.TryGetValue tp.Stamp with
+                        | true, ty -> resolved <- ty
+                        | _ ->
+                            let key = typarScopeKey tp
+                            match scope.ByKey.TryGetValue key with
+                            | true, ty -> resolved <- ty
+                            | _ -> ()
+                        idx <- idx - 1
+
+                    if isNull resolved then
+                        let key = typarScopeKey tp
+                        match globalTyparByKey.TryGetValue key with
+                        | true, ty -> resolved <- ty
+                        | _ -> ()
+
+                    if isNull resolved then
+                        if builder.Fs1023TraceEnabled() then
+                            builder.Fs1023TraceMessage(
+                                sprintf "[typeproxy] typar-lookup miss name=%s stamp=%A" tp.DisplayName tp.Stamp)
+                        failwithf "TxTType: unresolved typar %s (stamp=%A)" tp.DisplayName tp.Stamp
+                    else
+                        resolved
             | _ -> failwithf "Unsupported TxTType %+A" typ
      
     member _.TcGlobals = g
