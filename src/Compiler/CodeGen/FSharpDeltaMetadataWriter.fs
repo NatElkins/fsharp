@@ -54,7 +54,7 @@ type MetadataDelta =
         EncMap: (TableIndex * int) array
         TableRowCounts: int[]
         HeapSizes: MetadataHeapSizes
-        Tables: DeltaMetadataTables.TableRows
+        Tables: TableRows
         TableBitMasks: TableBitMasks
         IndexSizes: CodedIndexSizes
         TableStream: DeltaTableStream
@@ -84,7 +84,7 @@ let emit
               BlobHeapSize = 0
               GuidHeapSize = 0 }
 
-        let emptyTableRows : DeltaMetadataTables.TableRows =
+        let emptyTableRows : TableRows =
             { Module = Array.empty
               MethodDef = Array.empty
               Param = Array.empty

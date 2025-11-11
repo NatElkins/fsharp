@@ -66,3 +66,13 @@ type MethodSemanticsMetadataUpdate =
       Attributes: MethodSemanticsAttributes
       IsAdded: bool
       AssociationInfo: MethodSemanticsAssociation option }
+
+type TableRows =
+    { Module: RowElementData[][]
+      MethodDef: RowElementData[][]
+      Param: RowElementData[][]
+      Property: RowElementData[][]
+      Event: RowElementData[][]
+      PropertyMap: RowElementData[][]
+      EventMap: RowElementData[][]
+      MethodSemantics: RowElementData[][] }

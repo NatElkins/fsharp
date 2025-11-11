@@ -28,15 +28,13 @@ type DeltaMetadataTables() =
     let eventMapTable = MetadataTable<UnsharedRow>.New("EventMap", HashIdentity.Structural)
     let methodSemanticsTable = MetadataTable<UnsharedRow>.New("MethodSemantics", HashIdentity.Structural)
 
-    type TableRows =
-        { Module: UnsharedRow[]
-          MethodDef: UnsharedRow[]
-          Param: UnsharedRow[]
-          Property: UnsharedRow[]
-          Event: UnsharedRow[]
-          PropertyMap: UnsharedRow[]
-          EventMap: UnsharedRow[]
-          MethodSemantics: UnsharedRow[] }
+    let convertRowElements (rows: UnsharedRow[]) =
+        rows
+        |> Array.map (fun row ->
+            row.GenericRow
+            |> Array.map (fun elem ->
+                { Tag = elem.Tag
+                  Value = elem.Val }))
 
     let inline addStringValue (value: string) =
         if String.IsNullOrEmpty value then 0 else strings.FindOrAddSharedEntry value
@@ -264,14 +262,14 @@ type DeltaMetadataTables() =
           GuidHeapSize = _.GuidHeapSize }
 
     member _.TableRows : TableRows =
-        { Module = moduleTable.EntriesAsArray
-          MethodDef = methodTable.EntriesAsArray
-          Param = paramTable.EntriesAsArray
-          Property = propertyTable.EntriesAsArray
-          Event = eventTable.EntriesAsArray
-          PropertyMap = propertyMapTable.EntriesAsArray
-          EventMap = eventMapTable.EntriesAsArray
-          MethodSemantics = methodSemanticsTable.EntriesAsArray }
+        { Module = moduleTable.EntriesAsArray |> convertRowElements
+          MethodDef = methodTable.EntriesAsArray |> convertRowElements
+          Param = paramTable.EntriesAsArray |> convertRowElements
+          Property = propertyTable.EntriesAsArray |> convertRowElements
+          Event = eventTable.EntriesAsArray |> convertRowElements
+          PropertyMap = propertyMapTable.EntriesAsArray |> convertRowElements
+          EventMap = eventMapTable.EntriesAsArray |> convertRowElements
+          MethodSemantics = methodSemanticsTable.EntriesAsArray |> convertRowElements }
 
     member _.TableRowCounts : int[] =
         let counts = Array.zeroCreate MetadataTokens.TableCount
