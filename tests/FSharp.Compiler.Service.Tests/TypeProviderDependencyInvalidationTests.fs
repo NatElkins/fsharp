@@ -917,6 +917,25 @@ module UseProvided =
                     Assert.NotNull(propertyInfo)
                     propertyInfo.GetValue(null) :?> string
 
+                let assertStaticStringProperty name expected =
+                    let propertyInfo = providedType.GetProperty(name, BindingFlags.Public ||| BindingFlags.Static)
+                    Assert.NotNull(propertyInfo)
+                    Assert.Equal(typeof<string>, propertyInfo.PropertyType)
+                    Assert.Equal(expected, propertyInfo.GetValue(null) :?> string)
+
+                let assertValueProperty () =
+                    let valueProp = providedType.GetProperty("Value", BindingFlags.Public ||| BindingFlags.Static)
+                    Assert.NotNull(valueProp)
+                    Assert.Equal(typeof<string>, valueProp.PropertyType)
+                    Assert.Empty(valueProp.GetIndexParameters())
+                    Assert.Equal("Value", valueProp.GetValue(null) :?> string)
+
+                assertValueProperty()
+                assertStaticStringProperty "MapParameters" "value:required:normal;rest:required:paramarray"
+                assertStaticStringProperty "OptionalParameter" "value:true:true"
+                assertStaticStringProperty "OptionalLiteralParameter" "value:true:true:42"
+                assertStaticStringProperty "IndexerParameters" "index:Int32"
+
                 Assert.Equal("Value", getStaticStringProperty "Value")
 
             assertProvidedType "Fs1023Consumer.ProvidedGenericInt"
