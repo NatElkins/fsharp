@@ -85,7 +85,7 @@ module MdvValidationTests =
         Assert.True(methodEntry, "Expected EncLog entry for updated method definition")
 
     let private createTempProject () =
-        let root = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-tests", Guid.NewGuid().ToString("N"))
+        let root = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-tests", System.Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(root) |> ignore
         let fsPath = Path.Combine(root, "Library.fs")
         let dllPath = Path.Combine(root, "Library.dll")
@@ -132,7 +132,7 @@ module MdvValidationTests =
             printfn "[mdv][synthesized] updated helpers introduced: %s" message
 
     type private TemporaryDirectory() =
-        let path = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-build", Guid.NewGuid().ToString("N"))
+        let path = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-build", System.Guid.NewGuid().ToString("N"))
         do Directory.CreateDirectory(path) |> ignore
         member _.Path = path
         interface IDisposable with
@@ -383,7 +383,7 @@ module MdvValidationTests =
             use peReader = new System.Reflection.PortableExecutable.PEReader(new MemoryStream(assemblyBytes, false))
             let metadataReader = peReader.GetMetadataReader()
             let moduleDef = metadataReader.GetModuleDefinition()
-            let moduleId = if moduleDef.Mvid.IsNil then Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
+            let moduleId = if moduleDef.Mvid.IsNil then System.Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
             moduleId, HotReloadBaseline.metadataSnapshotFromReader metadataReader
 
         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
@@ -531,7 +531,7 @@ type Greeter =
             try Directory.Delete(projectDir, true) with _ -> ()
 
     let private createMsbuildProject () =
-        let root = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-project", Guid.NewGuid().ToString("N"))
+        let root = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-project", System.Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(root) |> ignore
         let projectPath = Path.Combine(root, "WatchLoop.fsproj")
         let fsPath = Path.Combine(root, "Program.fs")
@@ -1348,6 +1348,98 @@ type EventDemo() =
             | None -> ()
 
     [<Fact>]
+    let ``mdv helper validates multi-generation property accessor metadata`` () =
+        let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createPropertyModule "Property helper baseline message")
+        let typeName = "Sample.PropertyDemo"
+        let accessorName = "Message"
+        let methodKey = TestHelpers.methodKeyByName baselineArtifacts.Baseline typeName "get_Message"
+        let methodToken = baselineArtifacts.Baseline.MethodTokens[methodKey]
+
+        use deltaDir = new TemporaryDirectory()
+        let meta1Path = Path.Combine(deltaDir.Path, "1.meta")
+        let il1Path = Path.Combine(deltaDir.Path, "1.il")
+        let meta2Path = Path.Combine(deltaDir.Path, "2.meta")
+        let il2Path = Path.Combine(deltaDir.Path, "2.il")
+
+        let mkAccessorUpdate () =
+            TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.PropertyGet accessorName) methodKey
+
+        try
+            let request1 : IlxDeltaRequest =
+                { Baseline = baselineArtifacts.Baseline
+                  UpdatedTypes = [ typeName ]
+                  UpdatedMethods = [ methodKey ]
+                  UpdatedAccessors = [ mkAccessorUpdate () ]
+                  Module = TestHelpers.createPropertyModule "Property helper generation 1"
+                  SymbolChanges = None
+                  CurrentGeneration = 1
+                  PreviousGenerationId = None
+                  SynthesizedNames = None }
+
+            let delta1 = emitDelta request1
+            File.WriteAllBytes(meta1Path, delta1.Metadata)
+            File.WriteAllBytes(il1Path, delta1.IL)
+
+            let expectedLiteral1 = Text.Encoding.Unicode.GetBytes "Property helper generation 1"
+            Assert.True(
+                containsSubsequence delta1.Metadata expectedLiteral1,
+                "Expected generation 1 metadata to contain updated property literal."
+            )
+
+            assertMethodEncLog delta1 methodToken
+
+            match runMdv baselineArtifacts.AssemblyPath meta1Path il1Path with
+            | Some output ->
+                Assert.Contains("Generation 1", output)
+                assertGenerationContains output 1 "Property helper generation 1"
+            | None ->
+                printfn "mdv not available; skipping Generation 1 verification for multi-generation property edit."
+
+            let baseline2 =
+                match delta1.UpdatedBaseline with
+                | Some b -> b
+                | None -> failwith "First property delta did not provide an updated baseline."
+
+            let request2 : IlxDeltaRequest =
+                { Baseline = baseline2
+                  UpdatedTypes = [ typeName ]
+                  UpdatedMethods = [ methodKey ]
+                  UpdatedAccessors = [ mkAccessorUpdate () ]
+                  Module = TestHelpers.createPropertyModule "Property helper generation 2"
+                  SymbolChanges = None
+                  CurrentGeneration = 2
+                  PreviousGenerationId = Some delta1.GenerationId
+                  SynthesizedNames = None }
+
+            let delta2 = emitDelta request2
+            File.WriteAllBytes(meta2Path, delta2.Metadata)
+            File.WriteAllBytes(il2Path, delta2.IL)
+
+            let expectedLiteral2 = Text.Encoding.Unicode.GetBytes "Property helper generation 2"
+            Assert.True(
+                containsSubsequence delta2.Metadata expectedLiteral2,
+                "Expected generation 2 metadata to contain updated property literal."
+            )
+
+            assertMethodEncLog delta2 methodToken
+            Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
+
+            match runMdv baselineArtifacts.AssemblyPath meta2Path il2Path with
+            | Some output ->
+                Assert.Contains("Generation 2", output)
+                assertGenerationContains output 2 "Property helper generation 2"
+            | None ->
+                printfn "mdv not available; skipping Generation 2 verification for multi-generation property edit."
+        finally
+            if not (keepArtifacts ()) then
+                for path in [ meta1Path; meta2Path; il1Path; il2Path ] do
+                    try File.Delete(path) with _ -> ()
+                try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
+                match baselineArtifacts.PdbPath with
+                | Some path -> try File.Delete(path) with _ -> ()
+                | None -> ()
+
+    [<Fact>]
     let ``mdv helper validates multi-generation event accessor metadata`` () =
         let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createEventHostBaselineModule ())
         let typeName = "Sample.EventDemo"
@@ -1625,7 +1717,7 @@ module Demo =
                 | Error error -> failwithf "EmitHotReloadDelta (generation 2) failed: %A" error
                 | Ok delta -> delta
 
-            Assert.NotEqual(Guid.Empty, delta2.BaseGenerationId)
+            Assert.NotEqual(System.Guid.Empty, delta2.BaseGenerationId)
 
             let meta2Path = Path.Combine(deltaDir, "2.meta")
             let il2Path = Path.Combine(deltaDir, "2.il")
@@ -1732,7 +1824,7 @@ module Demo =
                 | Error error -> failwithf "EmitHotReloadDelta (generation 2) failed: %A" error
                 | Ok delta -> delta
 
-            Assert.NotEqual(Guid.Empty, delta2.BaseGenerationId)
+            Assert.NotEqual(System.Guid.Empty, delta2.BaseGenerationId)
 
             let meta2Path = Path.Combine(deltaDir, "2.meta")
             let il2Path = Path.Combine(deltaDir, "2.il")
@@ -1916,7 +2008,7 @@ module Demo =
                 | Error error -> failwithf "EmitHotReloadDelta (generation 2) failed: %A" error
                 | Ok delta -> delta
 
-            Assert.NotEqual(Guid.Empty, delta2.BaseGenerationId)
+            Assert.NotEqual(System.Guid.Empty, delta2.BaseGenerationId)
             Assert.NotEqual(delta1.GenerationId, delta2.GenerationId)
 
             let meta2Path = Path.Combine(deltaDir, "2.meta")
