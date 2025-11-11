@@ -16,6 +16,29 @@ open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 /// Mirrors the AbstractIL metadata tables for the subset of rows emitted by
 /// hot reload deltas. The tables are populated alongside the SRM metadata
 /// builder so we can eventually serialize deltas directly via AbstractIL.
+let private byteArrayComparer : IEqualityComparer<byte[]> =
+    { new IEqualityComparer<byte[]> with
+        member _.Equals(x, y) =
+            if obj.ReferenceEquals(x, y) then true
+            elif isNull (box x) || isNull (box y) then false
+            elif x.Length <> y.Length then false
+            else
+                let mutable idx = 0
+                let mutable equal = true
+                while equal && idx < x.Length do
+                    if x[idx] <> y[idx] then
+                        equal <- false
+                    idx <- idx + 1
+                equal
+
+        member _.GetHashCode(array: byte[]) =
+            if isNull (box array) then 0
+            else
+                let mutable hash = 17
+                for value in array do
+                    hash <- (hash * 23) + int value
+                hash }
+
 type private RowTableBuilder() =
     let rows = ResizeArray<RowElementData[]>()
 
@@ -23,11 +46,41 @@ type private RowTableBuilder() =
     member _.Entries = rows.ToArray()
     member _.Count = rows.Count
 
+type private StringHeapBuilder() =
+    let entries = ResizeArray<string>()
+    let lookup = Dictionary<string, int>(StringComparer.Ordinal)
+
+    member _.AddSharedEntry(value: string) : int =
+        match lookup.TryGetValue value with
+        | true, index -> index
+        | _ ->
+            let index = entries.Count + 1
+            entries.Add value
+            lookup[value] <- index
+            index
+
+    member _.Entries = entries.ToArray()
+
+type private ByteArrayHeapBuilder() =
+    let entries = ResizeArray<byte[]>()
+    let lookup = Dictionary<byte[], int>(byteArrayComparer)
+
+    member _.AddSharedEntry(value: byte[]) : int =
+        match lookup.TryGetValue value with
+        | true, index -> index
+        | _ ->
+            let index = entries.Count + 1
+            entries.Add value
+            lookup[value] <- index
+            index
+
+    member _.Entries = entries.ToArray()
+
 type DeltaMetadataTables() =
     let utf8 = Encoding.UTF8
-    let strings = MetadataTable<string>.New("#Strings", HashIdentity.Structural)
-    let blobs = MetadataTable<byte[]>.New("#Blob", HashIdentity.Structural)
-    let guids = MetadataTable<byte[]>.New("#Guid", HashIdentity.Structural)
+    let strings = StringHeapBuilder()
+    let blobs = ByteArrayHeapBuilder()
+    let guids = ByteArrayHeapBuilder()
 
     let moduleRows = RowTableBuilder()
     let methodRows = RowTableBuilder()
@@ -52,18 +105,18 @@ type DeltaMetadataTables() =
     let rowElementHasSemantics tag value = rowElement (RowElementTags.HasSemantics tag) value
 
     let addStringValue (value: string) =
-        if String.IsNullOrEmpty value then 0 else strings.FindOrAddSharedEntry value
+        if String.IsNullOrEmpty value then 0 else strings.AddSharedEntry value
 
     let addStringOption (value: string option) =
         match value with
-        | Some v when not (String.IsNullOrEmpty v) -> strings.FindOrAddSharedEntry v
+        | Some v when not (String.IsNullOrEmpty v) -> strings.AddSharedEntry v
         | _ -> 0
 
     let addBlobBytes (bytes: byte[]) =
-        if obj.ReferenceEquals(bytes, null) || bytes.Length = 0 then 0 else blobs.FindOrAddSharedEntry bytes
+        if obj.ReferenceEquals(bytes, null) || bytes.Length = 0 then 0 else blobs.AddSharedEntry bytes
 
     let addGuidValue (value: Guid) =
-        if value = System.Guid.Empty then 0 else guids.FindOrAddSharedEntry(value.ToByteArray())
+        if value = System.Guid.Empty then 0 else guids.AddSharedEntry(value.ToByteArray())
 
     let encodeTypeDefOrRef (handle: EntityHandle) =
         if handle.IsNil then
