@@ -28,3 +28,11 @@ type ParameterDefinitionRowInfo =
       Attributes: ParameterAttributes
       SequenceNumber: int
       Name: string option }
+
+type PropertyDefinitionRowInfo =
+    { Key: PropertyDefinitionKey
+      RowId: int
+      IsAdded: bool
+      Name: string
+      Signature: byte[]
+      Attributes: PropertyAttributes }

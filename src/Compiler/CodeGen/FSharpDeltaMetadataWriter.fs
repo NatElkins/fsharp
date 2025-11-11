@@ -34,15 +34,7 @@ type MethodMetadataUpdate =
         Body: MethodBodyUpdate
     }
 
-type PropertyDefinitionRowInfo =
-    {
-        Key: PropertyDefinitionKey
-        RowId: int
-        IsAdded: bool
-        Name: string
-        Signature: byte[]
-        Attributes: PropertyAttributes
-    }
+type PropertyDefinitionRowInfo = DeltaMetadataTypes.PropertyDefinitionRowInfo
 
 type EventDefinitionRowInfo =
     {
