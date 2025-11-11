@@ -275,7 +275,7 @@ module DeltaEmitterTests =
                 GuidHeapStart = 0
             }
 
-        let moduleId = Guid.Parse("55555555-6666-7777-8888-999999999999")
+        let moduleId = System.Guid.Parse("55555555-6666-7777-8888-999999999999")
         moduleDef, FSharp.Compiler.HotReloadBaseline.create moduleDef tokenMappings metadataSnapshot moduleId None
 
     let private createBaseline () =
@@ -303,7 +303,7 @@ module DeltaEmitterTests =
                 GuidHeapStart = 0
             }
 
-        let moduleId = Guid.Parse("11111111-2222-3333-4444-555555555555")
+        let moduleId = System.Guid.Parse("11111111-2222-3333-4444-555555555555")
         let baseline = FSharp.Compiler.HotReloadBaseline.create baselineModule tokenMappings metadataSnapshot moduleId None
         baselineModule, baseline
 
@@ -337,7 +337,7 @@ module DeltaEmitterTests =
                 GuidHeapStart = 0
             }
 
-        let moduleId = Guid.Parse("22222222-3333-4444-5555-666666666666")
+        let moduleId = System.Guid.Parse("22222222-3333-4444-5555-666666666666")
         let baseline = FSharp.Compiler.HotReloadBaseline.create baselineModule tokenMappings metadataSnapshot moduleId None
         baselineModule, baseline
 
@@ -366,7 +366,7 @@ module DeltaEmitterTests =
                 GuidHeapStart = 0
             }
 
-        let moduleId = Guid.Parse("33333333-4444-5555-6666-777777777777")
+        let moduleId = System.Guid.Parse("33333333-4444-5555-6666-777777777777")
         moduleDef, FSharp.Compiler.HotReloadBaseline.create moduleDef tokenMappings metadataSnapshot moduleId None
 
     let private methodKey (baseline: FSharpEmitBaseline) name =
@@ -445,8 +445,8 @@ module DeltaEmitterTests =
         let bodyInfo = Assert.Single(delta.MethodBodies)
         Assert.Equal(0x06000001, bodyInfo.MethodToken)
         Assert.True(bodyInfo.CodeLength > 0)
-        Assert.NotEqual(Guid.Empty, delta.GenerationId)
-        Assert.NotEqual(Guid.Empty, delta.BaseGenerationId)
+        Assert.NotEqual(System.Guid.Empty, delta.GenerationId)
+        Assert.NotEqual(System.Guid.Empty, delta.BaseGenerationId)
         let expectedEncLog =
             [|
                 (TableIndex.Module, 0x00000001, EditAndContinueOperation.Default)
@@ -808,8 +808,8 @@ module DeltaEmitterTests =
         Assert.NotEmpty(delta.Metadata)
         Assert.NotEmpty(delta.IL)
         Assert.Single(delta.MethodBodies) |> ignore
-        Assert.NotEqual(Guid.Empty, delta.GenerationId)
-        Assert.NotEqual(Guid.Empty, delta.BaseGenerationId)
+        Assert.NotEqual(System.Guid.Empty, delta.GenerationId)
+        Assert.NotEqual(System.Guid.Empty, delta.BaseGenerationId)
 
         match tryRunMdv "--version" with
         | ValueNone ->
@@ -901,7 +901,7 @@ module DeltaEmitterTests =
 
         let delta1 = emitDelta requestGen1
         Assert.Equal(baseline.ModuleId, delta1.BaseGenerationId)
-        Assert.NotEqual(Guid.Empty, delta1.GenerationId)
+        Assert.NotEqual(System.Guid.Empty, delta1.GenerationId)
 
         service.OnDeltaApplied delta1.GenerationId
 
@@ -929,7 +929,7 @@ module DeltaEmitterTests =
 
         let delta2 = emitDelta requestGen2
         Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
-        Assert.NotEqual(Guid.Empty, delta2.GenerationId)
+        Assert.NotEqual(System.Guid.Empty, delta2.GenerationId)
 
         service.EndSession()
 
@@ -950,7 +950,7 @@ module DeltaEmitterTests =
         match service.EmitDelta request with
         | Ok result ->
             Assert.Equal(baseline.ModuleId, result.Delta.BaseGenerationId)
-            Assert.NotEqual(Guid.Empty, result.Delta.GenerationId)
+            Assert.NotEqual(System.Guid.Empty, result.Delta.GenerationId)
             service.CommitPendingUpdate(result.Delta.GenerationId)
         | Error error ->
             Assert.True(false, sprintf "EmitDelta failed: %A" error)

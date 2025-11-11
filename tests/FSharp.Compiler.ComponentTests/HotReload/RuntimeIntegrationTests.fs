@@ -50,7 +50,7 @@ module RuntimeIntegrationTests =
         |> CheckedAssemblyAfterOptimization
 
     let private createTempProject () =
-        let projectDir = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-tests", Guid.NewGuid().ToString("N"))
+        let projectDir = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-tests", System.Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(projectDir) |> ignore
         let fsPath = Path.Combine(projectDir, "Library.fs")
         let dllPath = Path.Combine(projectDir, "Library.dll")
@@ -156,7 +156,7 @@ type Type =
             use peReader = new System.Reflection.PortableExecutable.PEReader(new MemoryStream(assemblyBytes, false))
             let metadataReader = peReader.GetMetadataReader()
             let moduleDef = metadataReader.GetModuleDefinition()
-            let moduleId = if moduleDef.Mvid.IsNil then Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
+            let moduleId = if moduleDef.Mvid.IsNil then System.Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
             moduleId, HotReloadBaseline.metadataSnapshotFromReader metadataReader
 
         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot

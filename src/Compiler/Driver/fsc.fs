@@ -1234,7 +1234,7 @@ let main6
                             let moduleDef = metadataReader.GetModuleDefinition()
                             let moduleId =
                                 if moduleDef.Mvid.IsNil then
-                                    Guid.NewGuid()
+                                    System.Guid.NewGuid()
                                 else
                                     metadataReader.GetGuid(moduleDef.Mvid)
                             moduleId, HotReloadBaseline.metadataSnapshotFromReader metadataReader

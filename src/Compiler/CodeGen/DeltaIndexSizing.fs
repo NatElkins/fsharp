@@ -1,6 +1,7 @@
 module internal FSharp.Compiler.CodeGen.DeltaIndexSizing
 
 open System.Reflection.Metadata
+open System.Reflection.Metadata.Ecma335
 
 type CodedIndexSizes =
     { StringsBig: bool
@@ -68,7 +69,7 @@ let compute
                TableIndex.InterfaceImpl
                TableIndex.MemberRef
                TableIndex.Module
-               TableIndex.Permission
+               TableIndex.DeclSecurity
                TableIndex.Property
                TableIndex.Event
                TableIndex.StandAloneSig

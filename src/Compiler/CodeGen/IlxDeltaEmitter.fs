@@ -97,7 +97,7 @@ let private defaultWriterOptions (ilg: ILGlobals) (checksumAlgorithm: HashAlgori
     // unique, throwaway file name per invocation so parallel sessions never collide, and so we
     // leave a breadcrumb for debugging when traces mention the synthetic assembly.
     let scratchDll =
-        let fileName = sprintf "fsharp-hotreload-%s.dll" (Guid.NewGuid().ToString("N"))
+        let fileName = sprintf "fsharp-hotreload-%s.dll" (System.Guid.NewGuid().ToString("N"))
         Path.Combine(Path.GetTempPath(), fileName)
 
     let scratchPdb =
@@ -296,7 +296,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     if traceUserStringUpdates.Value then
         try
             let tempDll =
-                Path.Combine(Path.GetTempPath(), $"fsharp-hotreload-ilmodule-{Guid.NewGuid():N}.dll")
+                Path.Combine(Path.GetTempPath(), $"fsharp-hotreload-ilmodule-{System.Guid.NewGuid():N}.dll")
             File.WriteAllBytes(tempDll, assemblyBytes)
             printfn "[fsharp-hotreload][trace] wrote IL module snapshot to %s" tempDll
         with ex ->
@@ -633,7 +633,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         | _, None -> request.Baseline.ModuleId
 
     let encBaseId = baseGenerationId
-    let encId = Guid.NewGuid()
+    let encId = System.Guid.NewGuid()
 
     let methodRowLookup =
         let baselineTokens = request.Baseline.MethodTokens

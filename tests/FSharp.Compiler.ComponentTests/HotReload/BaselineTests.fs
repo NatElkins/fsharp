@@ -191,7 +191,7 @@ module BaselineTests =
 
     let private emitBaseline () =
         let ilModule, tokenMappings, metadataSnapshot = sampleBaselineArtifacts ()
-        let moduleId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        let moduleId = System.Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         create ilModule tokenMappings metadataSnapshot moduleId None
 
     [<Fact>]
@@ -340,7 +340,7 @@ module BaselineTests =
         let ilModule, tokenMappings, metadataSnapshot = sampleBaselineArtifacts ()
         let snapshot = createDummySnapshot ()
 
-        let moduleId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        let moduleId = System.Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         let baseline = createWithEnvironment ilModule tokenMappings metadataSnapshot snapshot moduleId None
 
         Assert.True(baseline.IlxGenEnvironment.IsSome)

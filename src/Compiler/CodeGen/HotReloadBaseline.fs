@@ -400,7 +400,7 @@ let private createCore
 
     {
         ModuleId = moduleId
-        EncId = Guid.Empty
+        EncId = System.Guid.Empty
         EncBaseId = moduleId
         NextGeneration = 1
         Metadata = metadataSnapshot

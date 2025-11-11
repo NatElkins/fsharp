@@ -361,57 +361,55 @@ let envForOverrideSpec (ospec: ILOverridesSpec) = { EnclosingTyparCount=ospec.De
 // TABLES
 //---------------------------------------------------------------------
 
-[<NoEquality; NoComparison>]
-type MetadataTable<'T when 'T:not null> =
-    { name: string
-      dict: Dictionary<'T, int> // given a row, find its entry number
-      mutable rows: ResizeArray<'T> }
+[<Sealed>]
+type MetadataTable<'T when 'T:not null>(name: string, hashEq: IEqualityComparer<'T>) =
+    let dict = Dictionary<'T, int>(100, hashEq)
+    let rows = ResizeArray<'T>()
 
-    member x.Count = x.rows.Count
+    member _.Count = rows.Count
 
-    static member New(nm, hashEq) =
-        { name=nm
-          dict = Dictionary<_, _>(100, hashEq)
-          rows= ResizeArray<_>() }
+    member internal _.Name = name
 
-    member tbl.EntriesAsArray =
-        tbl.rows |> ResizeArray.toArray
+    static member New(nm, hashEq) = MetadataTable<'T>(nm, hashEq)
 
-    member tbl.Entries =
-        tbl.rows |> ResizeArray.toList
+    member _.EntriesAsArray = rows |> ResizeArray.toArray
 
-    member tbl.AddSharedEntry x =
-        let n = tbl.rows.Count + 1
-        tbl.dict[x] <- n
-        tbl.rows.Add x
+    member _.Entries = rows |> ResizeArray.toList
+
+    member internal _.KeyValueSeq = dict :> seq<KeyValuePair<'T, int>>
+
+    member _.AddSharedEntry x =
+        let n = rows.Count + 1
+        dict[x] <- n
+        rows.Add x
         n
 
-    member tbl.AddUnsharedEntry x =
-        let n = tbl.rows.Count + 1
-        tbl.rows.Add x
+    member _.AddUnsharedEntry x =
+        let n = rows.Count + 1
+        rows.Add x
         n
 
-    member tbl.FindOrAddSharedEntry x =
-        match tbl.dict.TryGetValue x with
+    member this.FindOrAddSharedEntry x =
+        match dict.TryGetValue x with
         | true, res -> res
-        | _ -> tbl.AddSharedEntry x
+        | _ -> this.AddSharedEntry x
 
-    member tbl.Contains x  = tbl.dict.ContainsKey x
+    member _.Contains x = dict.ContainsKey x
 
     /// This is only used in one special place - see further below.
-    member tbl.SetRowsOfTable t =
-        tbl.rows <- ResizeArray.ofArray t
-        let h = tbl.dict
-        h.Clear()
-        t |> Array.iteri (fun i x -> h[x] <- (i+1))
+    member _.SetRowsOfTable(t: 'T[]) =
+        rows.Clear()
+        dict.Clear()
+        t |> Array.iter (fun entry -> rows.Add entry)
+        t |> Array.iteri (fun i entry -> dict[entry] <- i + 1)
 
-    member tbl.AddUniqueEntry nm getter x =
-        if tbl.dict.ContainsKey x then failwith ("duplicate entry '"+getter x+"' in "+nm+" table")
-        else tbl.AddSharedEntry x
+    member this.AddUniqueEntry nm getter x =
+        if dict.ContainsKey x then failwith ("duplicate entry '" + getter x + "' in " + nm + " table")
+        else this.AddSharedEntry x
 
-    member tbl.GetTableEntry x = tbl.dict[x]
+    member _.GetTableEntry x = dict[x]
 
-    override x.ToString() = "table " + x.name
+    override _.ToString() = "table " + name
 
 //---------------------------------------------------------------------
 // Keys into some of the tables
@@ -496,11 +494,11 @@ type TypeDefTableKey = TdKey of string list (* enclosing *) * string (* type nam
 type MetadataTable =
     | Shared of MetadataTable<SharedRow>
     | Unshared of MetadataTable<UnsharedRow>
-    member t.FindOrAddSharedEntry x = match t with Shared u -> u.FindOrAddSharedEntry x | Unshared u -> failwithf "FindOrAddSharedEntry: incorrect table kind, u.name = %s" u.name
-    member t.AddSharedEntry x = match t with | Shared u -> u.AddSharedEntry x | Unshared u -> failwithf "AddSharedEntry: incorrect table kind, u.name = %s" u.name
-    member t.AddUnsharedEntry x = match t with Unshared u -> u.AddUnsharedEntry x | Shared u -> failwithf "AddUnsharedEntry: incorrect table kind, u.name = %s" u.name
+    member t.FindOrAddSharedEntry x = match t with Shared u -> u.FindOrAddSharedEntry x | Unshared u -> failwithf "FindOrAddSharedEntry: incorrect table kind, u.Name = %s" u.Name
+    member t.AddSharedEntry x = match t with | Shared u -> u.AddSharedEntry x | Unshared u -> failwithf "AddSharedEntry: incorrect table kind, u.Name = %s" u.Name
+    member t.AddUnsharedEntry x = match t with Unshared u -> u.AddUnsharedEntry x | Shared u -> failwithf "AddUnsharedEntry: incorrect table kind, u.Name = %s" u.Name
     member t.GenericRowsOfTable = match t with Unshared u -> u.EntriesAsArray |> Array.map (fun x -> x.GenericRow) | Shared u -> u.EntriesAsArray |> Array.map (fun x -> x.GenericRow)
-    member t.SetRowsOfSharedTable rows = match t with Shared u -> u.SetRowsOfTable (Array.map SharedRow rows) | Unshared u -> failwithf "SetRowsOfSharedTable: incorrect table kind, u.name = %s" u.name
+    member t.SetRowsOfSharedTable rows = match t with Shared u -> u.SetRowsOfTable (Array.map SharedRow rows) | Unshared u -> failwithf "SetRowsOfSharedTable: incorrect table kind, u.Name = %s" u.Name
     member t.Count = match t with Unshared u -> u.Count | Shared u -> u.Count
 
 
@@ -1122,7 +1120,7 @@ let FindMethodDefIdx cenv mdkey =
     with :? KeyNotFoundException ->
       let typeNameOfIdx i =
         match
-           (cenv.typeDefs.dict
+           (cenv.typeDefs.KeyValueSeq
              |> Seq.fold (fun sofar kvp ->
                 let tkey2 = kvp.Key
                 let tidx2 = kvp.Value
@@ -1136,7 +1134,7 @@ let FindMethodDefIdx cenv mdkey =
       let (TdKey (tenc, tname)) = typeNameOfIdx mdkey.TypeIdx
       dprintn ("The local method '"+(String.concat "." (tenc@[tname]))+"'::'"+mdkey.Name+"' was referenced but not declared")
       dprintn ("generic arity: "+string mdkey.GenericArity)
-      cenv.methodDefIdxsByKey.dict |> Seq.iter (fun (KeyValue(mdkey2, _)) ->
+      cenv.methodDefIdxsByKey.KeyValueSeq |> Seq.iter (fun (KeyValue(mdkey2, _)) ->
           if mdkey2.TypeIdx = mdkey.TypeIdx && mdkey.Name = mdkey2.Name then
               let (TdKey (tenc2, tname2)) = typeNameOfIdx mdkey2.TypeIdx
               dprintn ("A method in '"+(String.concat "." (tenc2@[tname2]))+"' had the right name but the wrong signature:")

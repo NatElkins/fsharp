@@ -452,7 +452,7 @@ type FSharpChecker
 
             let moduleId =
                 if moduleDef.Mvid.IsNil then
-                    Guid.NewGuid()
+                    System.Guid.NewGuid()
                 else
                     metadataReader.GetGuid(moduleDef.Mvid)
 

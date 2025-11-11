@@ -77,7 +77,7 @@ module internal TestHelpers =
     module ILWriter = FSharp.Compiler.AbstractIL.ILBinaryWriter
 
     let defaultWriterOptionsForTests (ilg: ILGlobals) : ILWriter.options =
-        let scratchDll = Path.Combine(Path.GetTempPath(), sprintf "fsharp-hotreload-test-%s.dll" (Guid.NewGuid().ToString("N")))
+        let scratchDll = Path.Combine(Path.GetTempPath(), sprintf "fsharp-hotreload-test-%s.dll" (System.Guid.NewGuid().ToString("N")))
         let scratchPdb = Path.ChangeExtension(scratchDll, ".pdb")
         { ilg = ilg
           outfile = scratchDll
@@ -538,7 +538,7 @@ module internal TestHelpers =
         let metadataSnapshot = metadataSnapshotFromReader metadataReader
         let moduleDef = metadataReader.GetModuleDefinition()
         let moduleId =
-            if moduleDef.Mvid.IsNil then Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
+            if moduleDef.Mvid.IsNil then System.Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
 
         let portablePdbSnapshot = pdbBytesOpt |> Option.map createPortablePdbSnapshot
 

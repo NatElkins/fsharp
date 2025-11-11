@@ -106,7 +106,7 @@ module PdbTests =
                 EntryPointToken = None
             }
 
-        let moduleId = Guid.Parse("99999999-0000-0000-0000-111111111111")
+        let moduleId = System.Guid.Parse("99999999-0000-0000-0000-111111111111")
 
         let baseline =
             FSharp.Compiler.HotReloadBaseline.create
@@ -426,7 +426,7 @@ module PdbTests =
               SynthesizedNames = None }
 
         let delta2 = emitAndAssert request2
-        Assert.NotEqual(Guid.Empty, delta2.BaseGenerationId)
+        Assert.NotEqual(System.Guid.Empty, delta2.BaseGenerationId)
         Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
 
         if not (keepArtifacts ()) then
@@ -488,7 +488,7 @@ module PdbTests =
               SynthesizedNames = None }
 
         let delta2 = emitAndAssert request2
-        Assert.NotEqual(Guid.Empty, delta2.BaseGenerationId)
+        Assert.NotEqual(System.Guid.Empty, delta2.BaseGenerationId)
         Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
 
         if not (keepArtifacts ()) then
@@ -544,7 +544,7 @@ module PdbTests =
               SynthesizedNames = None }
 
         let delta2 = emitAndAssert request2
-        Assert.NotEqual(Guid.Empty, delta2.BaseGenerationId)
+        Assert.NotEqual(System.Guid.Empty, delta2.BaseGenerationId)
         Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
 
         if not (keepArtifacts ()) then

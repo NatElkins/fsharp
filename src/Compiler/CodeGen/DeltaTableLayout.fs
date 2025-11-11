@@ -1,6 +1,7 @@
 module internal FSharp.Compiler.CodeGen.DeltaTableLayout
 
 open System.Reflection.Metadata
+open System.Reflection.Metadata.Ecma335
 
 type TableBitMasks =
     { ValidLow: int
