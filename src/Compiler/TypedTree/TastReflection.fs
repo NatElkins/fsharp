@@ -1666,11 +1666,40 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         |> List.map (fun vref -> TxConstructor asm vref)
         |> List.toArray
 
-    override this.GetMethods(_bindingFlags) = 
-        tcref.Deref.entity_tycon_tcaug.tcaug_adhoc_list 
-        |> Seq.map (fun (_, vref: ValRef) -> TxMethodDef asm this vref)
-        |> Seq.toArray
+    override this.GetMethods(bindingFlags) =
+        let entering = asm.Fs1023TraceEnabled()
+        let stopwatch =
+            if entering then Stopwatch.StartNew() else null
+        if entering then
+            asm.Fs1023TraceMessage(
+                sprintf
+                    "[typeproxy] get-methods begin ty=%s flags=%s"
+                    this.FullName
+                    (bindingFlags.ToString()))
+
+        let methods =
+            tcref.Deref.entity_tycon_tcaug.tcaug_adhoc_list
+            |> Seq.map (fun (_, vref: ValRef) -> TxMethodDef asm this vref)
+            |> Seq.toArray
         //inp.Methods.Elements |> Array.map (TxILMethodDef this)
+
+        if entering then
+            let elapsed =
+                match stopwatch with
+                | null -> Double.NaN
+                | sw ->
+                    sw.Stop()
+                    sw.Elapsed.TotalMilliseconds
+
+            asm.Fs1023TraceMessage(
+                sprintf
+                    "[typeproxy] get-methods end ty=%s flags=%s count=%d elapsedMs=%.3f"
+                    this.FullName
+                    (bindingFlags.ToString())
+                    methods.Length
+                    elapsed)
+
+        methods
 
     override this.GetField(name, _bindingFlags) = 
         let fieldOpt: RecdField option = tcref.AllFieldTable.FieldByName(name)
@@ -2149,6 +2178,9 @@ and [<DebuggerDisplay("{FullName}")>] ReflectAssembly(builder: TypeReflectionBui
 
 
     member __.TxTypeDef declTyOpt inp = txTypeDef declTyOpt inp
+    member internal _.Builder = builder
+    member internal _.Fs1023TraceEnabled() = builder.Fs1023TraceEnabled()
+    member internal _.Fs1023TraceMessage(message: string) = builder.Fs1023TraceMessage(message)
 
         /// Makes a field definition read from a binary available as a FieldInfo. Not all methods are implemented.
     member asm.TxTType (typ:TType) = 
@@ -2304,6 +2336,11 @@ and TypeReflectionBuilder(g: TcGlobals) as this =
             { AssembliesCreated = Volatile.Read(&assemblyCount.contents)
               TypesProjected = Volatile.Read(&typeCount.contents)
               TotalProjectionTicks = Volatile.Read(&projectionTicks.contents) }
+
+        member internal _.Fs1023TraceEnabled() = fs1023TraceEnabled ()
+
+        member internal _.Fs1023TraceMessage(message: string) =
+            fs1023Trace "%s" message
 
         member internal this.GetOrAddAssembly(ccu: CcuThunk) =
             assemblies.GetOrAdd(ccu.Stamp, fun _ -> createAssembly ccu)
