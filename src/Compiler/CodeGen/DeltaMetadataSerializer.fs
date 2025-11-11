@@ -10,7 +10,6 @@ open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 open FSharp.Compiler.CodeGen.DeltaTableLayout
 open FSharp.Compiler.CodeGen.DeltaIndexSizing
-open FSharp.Compiler.AbstractIL.ILBinaryWriter
 
 let private padTo4 (bytes: byte[]) =
     if bytes.Length % 4 = 0 then
@@ -227,7 +226,7 @@ let private streamHeaderSize (name: string) =
     let nameLength = Text.Encoding.UTF8.GetByteCount(name) + 1
     8 + align4 nameLength
 
-let serializeMetadataRoot (input: DeltaTableSerializerInput) (heaps: DeltaHeapStreams) (tableStream: DeltaTableStream) : byte[] =
+let serializeMetadataRoot (_: DeltaTableSerializerInput) (heaps: DeltaHeapStreams) (tableStream: DeltaTableStream) : byte[] =
     let streams =
         [ "#~", tableStream.UnpaddedSize, tableStream.Bytes
           "#Strings", heaps.StringsLength, heaps.Strings
@@ -236,10 +235,10 @@ let serializeMetadataRoot (input: DeltaTableSerializerInput) (heaps: DeltaHeapSt
           "#Blob", heaps.BlobsLength, heaps.Blobs ]
 
     let versionBytes = Text.Encoding.UTF8.GetBytes(versionString)
-    let versionLength = versionBytes.Length + 1
-    let versionPadded = align4 versionLength
+    let versionStringLength = versionBytes.Length + 1
+    let versionLength = align4 versionStringLength
 
-    let headerBaseSize = 4 + 2 + 2 + 4 + 4 + versionPadded + 2 + 2
+    let headerBaseSize = 4 + 2 + 2 + 4 + 4 + versionLength + 2 + 2
     let streamsHeaderSize = streams |> List.sumBy (fun (name, _, _) -> streamHeaderSize name)
     let headerSize = headerBaseSize + streamsHeaderSize
 
@@ -261,6 +260,9 @@ let serializeMetadataRoot (input: DeltaTableSerializerInput) (heaps: DeltaHeapSt
     writer.Write(uint32 versionLength)
     writer.Write(versionBytes)
     writer.Write(byte 0)
+    let paddingBytes = versionLength - versionStringLength
+    if paddingBytes > 0 then
+        writer.Write(Array.zeroCreate<byte> paddingBytes)
     while ms.Position % 4L <> 0L do
         writer.Write(byte 0)
 
