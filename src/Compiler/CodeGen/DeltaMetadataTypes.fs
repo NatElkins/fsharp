@@ -58,3 +58,11 @@ type EventMapRowInfo =
       TypeDefRowId: int
       FirstEventRowId: int option
       IsAdded: bool }
+
+type MethodSemanticsMetadataUpdate =
+    { RowId: int
+      Association: EntityHandle
+      MethodToken: int
+      Attributes: MethodSemanticsAttributes
+      IsAdded: bool
+      AssociationInfo: MethodSemanticsAssociation option }

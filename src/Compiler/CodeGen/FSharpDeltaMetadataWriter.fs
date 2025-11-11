@@ -42,15 +42,7 @@ type PropertyMapRowInfo = DeltaMetadataTypes.PropertyMapRowInfo
 
 type EventMapRowInfo = DeltaMetadataTypes.EventMapRowInfo
 
-type MethodSemanticsMetadataUpdate =
-    {
-        RowId: int
-        Association: EntityHandle
-        MethodToken: int
-        Attributes: System.Reflection.MethodSemanticsAttributes
-        IsAdded: bool
-        AssociationInfo: MethodSemanticsAssociation option
-    }
+type MethodSemanticsMetadataUpdate = DeltaMetadataTypes.MethodSemanticsMetadataUpdate
 
 type MetadataDelta =
     {
