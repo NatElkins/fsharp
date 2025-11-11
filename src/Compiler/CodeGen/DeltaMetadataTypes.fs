@@ -36,3 +36,11 @@ type PropertyDefinitionRowInfo =
       Name: string
       Signature: byte[]
       Attributes: PropertyAttributes }
+
+type EventDefinitionRowInfo =
+    { Key: EventDefinitionKey
+      RowId: int
+      IsAdded: bool
+      Name: string
+      Attributes: EventAttributes
+      EventType: EntityHandle }

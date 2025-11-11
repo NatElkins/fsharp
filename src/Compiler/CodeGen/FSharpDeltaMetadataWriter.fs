@@ -36,15 +36,7 @@ type MethodMetadataUpdate =
 
 type PropertyDefinitionRowInfo = DeltaMetadataTypes.PropertyDefinitionRowInfo
 
-type EventDefinitionRowInfo =
-    {
-        Key: EventDefinitionKey
-        RowId: int
-        IsAdded: bool
-        Name: string
-        Attributes: EventAttributes
-        EventType: EntityHandle
-    }
+type EventDefinitionRowInfo = DeltaMetadataTypes.EventDefinitionRowInfo
 
 type PropertyMapRowInfo =
     {
