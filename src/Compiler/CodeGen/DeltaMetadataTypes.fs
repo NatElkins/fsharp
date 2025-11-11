@@ -44,3 +44,10 @@ type EventDefinitionRowInfo =
       Name: string
       Attributes: EventAttributes
       EventType: EntityHandle }
+
+type PropertyMapRowInfo =
+    { DeclaringType: string
+      RowId: int
+      TypeDefRowId: int
+      FirstPropertyRowId: int option
+      IsAdded: bool }

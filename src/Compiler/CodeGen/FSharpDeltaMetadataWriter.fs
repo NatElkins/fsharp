@@ -38,14 +38,7 @@ type PropertyDefinitionRowInfo = DeltaMetadataTypes.PropertyDefinitionRowInfo
 
 type EventDefinitionRowInfo = DeltaMetadataTypes.EventDefinitionRowInfo
 
-type PropertyMapRowInfo =
-    {
-        DeclaringType: string
-        RowId: int
-        TypeDefRowId: int
-        FirstPropertyRowId: int option
-        IsAdded: bool
-    }
+type PropertyMapRowInfo = DeltaMetadataTypes.PropertyMapRowInfo
 
 type EventMapRowInfo =
     {
