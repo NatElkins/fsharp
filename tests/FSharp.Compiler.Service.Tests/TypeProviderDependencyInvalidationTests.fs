@@ -31,6 +31,7 @@ module TypeProviderDependencyInvalidationTests =
 namespace Fs1023
 
 open System
+open System.IO
 open System.Reflection
 open Microsoft.FSharp.Core.CompilerServices
 open Microsoft.FSharp.Quotations
@@ -43,15 +44,38 @@ type Fs1023Provider(config: TypeProviderConfig) as this =
     let assembly = Assembly.GetExecutingAssembly()
     let namespaceName = "Fs1023"
     let generator = ProvidedTypeDefinition(assembly, namespaceName, "ProvidedGenerator", Some typeof<obj>, isErased = false)
+    let providerLogPath =
+        match Environment.GetEnvironmentVariable("FS1023_PROVIDER_LOG") with
+        | null
+        | "" -> "/tmp/fs1023_provider.log"
+        | custom -> custom
+
+    let appendProviderLog message =
+        let entry = sprintf "%s %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+        try
+            File.AppendAllText(providerLogPath, entry)
+        with _ -> ()
 
     do
         let parameters = [ ProvidedStaticParameter("Source", typeof<Type>) ]
 
         generator.DefineStaticParameters(parameters, fun typeName args ->
             let sourceType = args.[0] :?> Type
+            let logProvider stage =
+                let sourceName =
+                    if isNull sourceType then
+                        "<null>"
+                    else
+                        let fullName = sourceType.FullName
+                        if isNull fullName then sourceType.Name else fullName
+                let message = sprintf "[fs1023][provider] %s type=%s source=%s" stage typeName sourceName
+                appendProviderLog message
+                printfn "%s" message
+            logProvider "define-start"
             let provided = ProvidedTypeDefinition(assembly, namespaceName, typeName, Some typeof<obj>, isErased = false, hideObjectMethods = true)
 
             let logMethods label =
+                logProvider (sprintf "methods-begin:%s" label)
                 let methods =
                     sourceType.GetMethods(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Instance ||| BindingFlags.Static)
                     |> Array.map (fun m ->
@@ -61,8 +85,10 @@ type Fs1023Provider(config: TypeProviderConfig) as this =
                             |> String.concat ","
                         sprintf "%s(%s)" m.Name parameters)
                 printfn "[fs1023][%s][methods] %s" label (String.concat "; " methods)
+                logProvider (sprintf "methods-end:%s" label)
 
             let logProperties label =
+                logProvider (sprintf "properties-begin:%s" label)
                 let properties =
                     sourceType.GetProperties(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Instance ||| BindingFlags.Static)
                     |> Array.map (fun p ->
@@ -72,11 +98,13 @@ type Fs1023Provider(config: TypeProviderConfig) as this =
                             |> String.concat ","
                         sprintf "%s[%s]:%s" p.Name indexers p.PropertyType.Name)
                 printfn "[fs1023][%s][properties] %s" label (String.concat "; " properties)
+                logProvider (sprintf "properties-end:%s" label)
 
             logMethods typeName
             logProperties typeName
 
             let logParameterDetails (m: MethodInfo) =
+                logProvider (sprintf "method-params-begin:%s" m.Name)
                 let parameters =
                     m.GetParameters()
                     |> Array.map (fun p ->
@@ -87,8 +115,10 @@ type Fs1023Provider(config: TypeProviderConfig) as this =
                         sprintf "%s:%s optional=%b default=%b attrs=[%s]" p.Name p.ParameterType.FullName p.IsOptional p.HasDefaultValue attrs)
                     |> String.concat "; "
                 printfn "[fs1023][%s][method:%s] %s" typeName m.Name parameters
+                logProvider (sprintf "method-params-end:%s" m.Name)
 
             let logPropertyDetails (p: PropertyInfo) =
+                logProvider (sprintf "property-params-begin:%s" p.Name)
                 let indexers =
                     p.GetIndexParameters()
                     |> Array.map (fun idx ->
@@ -99,6 +129,7 @@ type Fs1023Provider(config: TypeProviderConfig) as this =
                         sprintf "%s:%s attrs=[%s]" idx.Name idx.ParameterType.FullName attrs)
                     |> String.concat "; "
                 printfn "[fs1023][%s][property:%s] type=%s indexers=%s" typeName p.Name p.PropertyType.FullName indexers
+                logProvider (sprintf "property-params-end:%s" p.Name)
 
             sourceType.GetMethods(BindingFlags.Public ||| BindingFlags.Instance)
             |> Array.iter logParameterDetails
@@ -108,12 +139,14 @@ type Fs1023Provider(config: TypeProviderConfig) as this =
 
             let addMemberFromProperty (pi: PropertyInfo) =
                 if pi.GetIndexParameters().Length = 0 then
+                    logProvider (sprintf "addMember-begin:%s" pi.Name)
                     printfn "[fs1023][addMember] adding property %s" pi.Name
                     let getter (_args: Expr list) =
                         let name = pi.Name
                         <@@ name @@>
                     let property = ProvidedProperty(pi.Name, typeof<string>, isStatic = true, getterCode = getter)
                     provided.AddMember property
+                    logProvider (sprintf "addMember-end:%s" pi.Name)
 
             sourceType.GetProperties(BindingFlags.Public ||| BindingFlags.Instance)
             |> Array.iter addMemberFromProperty
@@ -162,15 +195,18 @@ type Fs1023Provider(config: TypeProviderConfig) as this =
             printfn "[fs1023][%s][summary] Map=%s Optional=%s OptionalLiteral=%s Indexer=%s" typeName mapSummary optionalSummary optionalLiteralSummary indexerSummary
 
             let addSummaryProperty name value =
+                logProvider (sprintf "addSummary-begin:%s" name)
                 let getter (_: Expr list) = Expr.Value value
                 let property = ProvidedProperty(name, typeof<string>, isStatic = true, getterCode = getter)
                 provided.AddMember property
+                logProvider (sprintf "addSummary-end:%s" name)
 
             addSummaryProperty "MapParameters" mapSummary
             addSummaryProperty "OptionalParameter" optionalSummary
             addSummaryProperty "OptionalLiteralParameter" optionalLiteralSummary
             addSummaryProperty "IndexerParameters" indexerSummary
 
+            logProvider "define-end"
             provided)
 
     do this.AddNamespace(namespaceName, [ generator ])
@@ -220,7 +256,7 @@ open System
 type Model =
     { Value: int }
     with
-        member _.Map(value: int, [<ParamArray>] rest: string[]) = value + rest.Length
+        member _.Map(value: int, [<System.ParamArrayAttribute>] rest: string[]) = value + rest.Length
         member _.Optional(?value: int) = defaultArg value 0
         member _.Item
             with get(index: int) = index
@@ -236,7 +272,7 @@ open System
 type Model =
     { Renamed: int }
     with
-        member _.Map(value: int, [<ParamArray>] rest: string[]) = value + rest.Length
+        member _.Map(value: int, [<System.ParamArrayAttribute>] rest: string[]) = value + rest.Length
         member _.Optional(?value: int) = defaultArg value 0
         member _.Item
             with get(index: int) = index
@@ -259,7 +295,7 @@ namespace Fs1023Consumer
 type Generic<'T> =
     { Value: 'T }
     with
-        member _.Map(value: 'T, [<ParamArray>] rest: string[]) =
+        member _.Map(value: 'T, [<System.ParamArrayAttribute>] rest: string[]) =
             ignore rest
             value
         member _.Optional(?value: 'T) = defaultArg value Unchecked.defaultof<'T>
@@ -316,13 +352,15 @@ module UseProvided =
             if d.Severity = FSharpDiagnosticSeverity.Error then
                 failwithf "Compilation error (%s:%d,%d): %s" d.FileName d.StartLine d.StartColumn d.Message)
 
-    let private compile args =
-        let diagnostics, exnOpt = checker.Compile args |> Async.RunImmediate
+    let private runCompileWithChecker (checkerInstance: FSharpChecker) args =
+        let diagnostics, exnOpt = checkerInstance.Compile args |> Async.RunImmediate
         ensureSuccess diagnostics
 
         match exnOpt with
         | Some ex -> raise ex
         | None -> ()
+
+    let private compile args = runCompileWithChecker checker args
 
     let private writeFile (path: string) (contents: string) =
         let directory = Path.GetDirectoryName(path)
@@ -352,20 +390,143 @@ module UseProvided =
         if proc.ExitCode <> 0 then
             failwithf "Command '%s %s' failed with exit code %d.%s%s" fileName (String.concat " " args) proc.ExitCode stdout stderr
 
-    let private compileWithLogging log label args =
+    let private compileWithLogging (log: (string -> unit) option) (label: string) (args: string[]) (projectInfoOpt: (string * string list) option) =
         let logMsg message =
             match log with
             | Some f -> f message
             | None -> ()
 
-        logMsg (sprintf "[fs1023][compile] begin %s" label)
+        let timestamp () = DateTime.UtcNow.ToString("O")
+        let safeLabel = label.Replace(" ", "-")
+        let submissionId = Guid.NewGuid().ToString("N")
+        let buildTargets =
+            let parsedTargets =
+                args
+                |> Array.choose (fun arg ->
+                    if arg.StartsWith("--target:", StringComparison.OrdinalIgnoreCase) then
+                        Some(arg.Substring("--target:".Length))
+                    elif arg.Equals("--standalone", StringComparison.OrdinalIgnoreCase) then
+                        Some "standalone"
+                    elif arg.Equals("-a", StringComparison.OrdinalIgnoreCase) || arg.Equals("--target:library", StringComparison.OrdinalIgnoreCase) then
+                        Some "library"
+                    elif arg.Equals("--target:module", StringComparison.OrdinalIgnoreCase) then
+                        Some "module"
+                    else
+                        None)
+
+            if Array.isEmpty parsedTargets then
+                [| "Build" |]
+            else
+                parsedTargets
+
+        let logBuildRequest phase extra =
+            match projectInfoOpt with
+            | Some (projectPath, files) ->
+                let filesSummary =
+                    match files with
+                    | [] -> "(no source overrides)"
+                    | xs -> xs |> List.map Path.GetFileName |> String.concat ","
+
+                logMsg (
+                    sprintf
+                        "[fs1023][compile] %s build-request %s project=%s evaluation=%s targets=%s files=%s %s"
+                        (timestamp ())
+                        phase
+                        projectPath
+                        submissionId
+                        (String.concat ";" buildTargets)
+                        filesSummary
+                        extra)
+            | None -> ()
+
+        let freshCheckerRequested =
+            match Environment.GetEnvironmentVariable("FS1023_FORCE_FRESH_CHECKER") with
+            | null
+            | "" -> false
+            | value when value.Equals("0", StringComparison.OrdinalIgnoreCase) -> false
+            | _ -> true
+
+        let skipParseCheck =
+            match Environment.GetEnvironmentVariable("FS1023_SKIP_PARSE_AND_CHECK") with
+            | null
+            | "" -> false
+            | value when value.Equals("0", StringComparison.OrdinalIgnoreCase) -> false
+            | _ -> true
+
+        let freshCheckerOpt =
+            if freshCheckerRequested then
+                Some(
+                    FSharpChecker.Create(
+                        keepAssemblyContents = false,
+                        useTransparentCompiler = FSharp.Test.CompilerAssertHelpers.UseTransparentCompiler))
+            else
+                None
+
+        let activeChecker =
+            match freshCheckerOpt with
+            | Some checkerInstance -> checkerInstance
+            | None -> checker
+
+        let msbuildLogDir =
+            let dir = Path.Combine(Path.GetTempPath(), "fs1023-msbuild", Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(dir) |> ignore
+            dir
+        let msbuildLogFile = Path.Combine(msbuildLogDir, safeLabel + ".binlog")
+
+        let setEnv name value =
+            let previous = Environment.GetEnvironmentVariable(name)
+            Environment.SetEnvironmentVariable(name, value)
+            { new IDisposable with
+                member _.Dispose() = Environment.SetEnvironmentVariable(name, previous) }
+
+        use _debugPath = setEnv "MSBUILDDEBUGPATH" msbuildLogDir
+        use _logFile = setEnv "MSBUILDLOGFILE" msbuildLogFile
+
+        logMsg (sprintf "[fs1023][compile] %s begin %s" (timestamp ()) label)
         logMsg (sprintf "[fs1023][compile] args(%s): %s" label (String.concat " " args))
+        logMsg (sprintf "[fs1023][compile] msbuild logs for %s -> dir=%s file=%s" label msbuildLogDir msbuildLogFile)
+        if freshCheckerRequested then
+            logMsg (sprintf "[fs1023][compile] %s forcing fresh checker instance" label)
+        logBuildRequest "begin" ""
+
+        let runParseAndCheck () =
+            match projectInfoOpt, skipParseCheck with
+            | Some (projectPath, files), false when not (List.isEmpty files) ->
+                logBuildRequest "parse+check-begin" (sprintf "projectPath=%s" projectPath)
+                let parseWatch = Stopwatch.StartNew()
+                let projectOptions =
+                    { activeChecker.GetProjectOptionsFromCommandLineArgs(projectPath, args) with
+                        SourceFiles = files |> List.toArray }
+
+                let projectResults = activeChecker.ParseAndCheckProject(projectOptions) |> Async.RunImmediate
+                ensureSuccess projectResults.Diagnostics
+                parseWatch.Stop()
+                logBuildRequest
+                    "parse+check-end"
+                    (sprintf "durationMs=%d diagnostics=%d" parseWatch.ElapsedMilliseconds projectResults.Diagnostics.Length)
+            | Some _, true ->
+                logBuildRequest "parse+check-skip" "env=FS1023_SKIP_PARSE_AND_CHECK"
+            | _ -> ()
 
         try
-            compile args
-            logMsg (sprintf "[fs1023][compile] end %s" label)
+            runParseAndCheck ()
+            let checkerKind = if freshCheckerRequested then "fresh" else "shared"
+            logBuildRequest "compile-begin" (sprintf "invoking checker.Compile (%s)" checkerKind)
+            let compileWatch = Stopwatch.StartNew()
+            let compileCallWatch = Stopwatch.StartNew()
+            logBuildRequest "compile-call-begin" (sprintf "checker=%s" checkerKind)
+            try
+                runCompileWithChecker activeChecker args
+            finally
+                compileCallWatch.Stop()
+                logBuildRequest "compile-call-end" (sprintf "elapsedMs=%d" compileCallWatch.ElapsedMilliseconds)
+            compileWatch.Stop()
+            logBuildRequest "compile-end" (sprintf "durationMs=%d" compileWatch.ElapsedMilliseconds)
+            logBuildRequest "end" ""
+            logMsg (sprintf "[fs1023][compile] %s end %s" (timestamp ()) label)
         with ex ->
-            logMsg (sprintf "[fs1023][compile] fail %s: %s" label ex.Message)
+            logBuildRequest "fail" (sprintf "message=%s" ex.Message)
+            logMsg (sprintf "[fs1023][compile] %s fail %s: %s" (timestamp ()) label ex.Message)
             reraise()
 
     [<Fact>]
@@ -711,9 +872,11 @@ module UseProvided =
 
         let providerPath = Path.Combine(tempDir, "Fs1023Provider.fs")
         let providerDll = Path.Combine(tempDir, "Fs1023Provider.dll")
+        let providerProject = Path.Combine(tempDir, "generic-provider.fsproj")
 
         let consumerPath = Path.Combine(tempDir, "Generic.fs")
         let outputDll = Path.Combine(tempDir, "GenericConsumer.dll")
+        let consumerProject = Path.Combine(tempDir, "generic-consumer.fsproj")
 
         let logPath = Path.Combine(tempDir, "generic.log")
         let log message =
@@ -728,7 +891,7 @@ module UseProvided =
                     (mkProjectCommandLineArgs(providerDll, [ providerPath ]))
                     [| "-r:" + providedTypesAssembly |]
 
-            compileWithLogging (Some log) "generic-provider" providerArgs
+            compileWithLogging (Some log) "generic-provider" providerArgs (Some (providerProject, [ providerPath ]))
 
             log "[fs1023][generic] writing generic consumer"
             writeFile consumerPath genericModelSource
@@ -738,7 +901,7 @@ module UseProvided =
                     (mkProjectCommandLineArgs(outputDll, [ consumerPath ]))
                     [| "-r:" + providerDll |]
 
-            compileWithLogging (Some log) "generic-consumer" consumerArgs
+            compileWithLogging (Some log) "generic-consumer" consumerArgs (Some (consumerProject, [ consumerPath ]))
             log (sprintf "[fs1023][generic] consumer compiled -> %s" outputDll)
 
             let consumerAssembly =
