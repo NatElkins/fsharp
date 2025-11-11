@@ -52,17 +52,38 @@ let buildHeapStreams (mirror: DeltaMetadataTables) : DeltaHeapStreams =
       UserStrings = emptyUserStringHeap
       UserStringsLength = 1 }
 
+let computeMetadataSizes (tableMirror: DeltaMetadataTables) : DeltaMetadataSizes =
+    let rowCounts = tableMirror.TableRowCounts
+    let heapSizes = tableMirror.HeapSizes
+    let bitMasks = DeltaTableLayout.computeBitMasks rowCounts
+    let indexSizes =
+        DeltaIndexSizing.compute
+            rowCounts
+            heapSizes.StringHeapSize
+            heapSizes.BlobHeapSize
+            heapSizes.GuidHeapSize
+
+    { RowCounts = rowCounts
+      HeapSizes = heapSizes
+      BitMasks = bitMasks
+      IndexSizes = indexSizes }
+
 /// Represents the serialized `#~` stream (metadata tables) including its padded bytes.
 type DeltaTableStream =
     { Bytes: byte[]
       UnpaddedSize: int
       PaddedSize: int }
 
+/// Captures the sizing data needed to build delta metadata, mirroring Roslyn's MetadataSizes.
+type DeltaMetadataSizes =
+    { RowCounts: int[]
+      HeapSizes: MetadataHeapSizes
+      BitMasks: TableBitMasks
+      IndexSizes: CodedIndexSizes }
+
 type DeltaTableSerializerInput =
     { Tables: TableRows
-      RowCounts: int[]
-      BitMasks: TableBitMasks
-      IndexSizes: CodedIndexSizes
+      MetadataSizes: DeltaMetadataSizes
       StringHeap: byte[]
       BlobHeap: byte[]
       GuidHeap: byte[] }
@@ -160,6 +181,9 @@ let private writeRowElement (writer: BinaryWriter) (indexSizes: CodedIndexSizes)
 let private align4 value = (value + 3) &&& ~~~3
 
 let buildTableStream (input: DeltaTableSerializerInput) : DeltaTableStream =
+    let sizes = input.MetadataSizes
+    let bitMasks = sizes.BitMasks
+    let indexSizes = sizes.IndexSizes
     use ms = new MemoryStream()
     use writer = new BinaryWriter(ms)
 
@@ -168,20 +192,20 @@ let buildTableStream (input: DeltaTableSerializerInput) : DeltaTableStream =
     writer.Write(uint16 0)
 
     let heapFlags =
-        (if input.IndexSizes.StringsBig then 0x01 else 0)
-        ||| (if input.IndexSizes.GuidsBig then 0x02 else 0)
-        ||| (if input.IndexSizes.BlobsBig then 0x04 else 0)
+        (if indexSizes.StringsBig then 0x01 else 0)
+        ||| (if indexSizes.GuidsBig then 0x02 else 0)
+        ||| (if indexSizes.BlobsBig then 0x04 else 0)
 
     writer.Write(byte heapFlags)
     writer.Write(byte 1)
-    writer.Write(input.BitMasks.ValidLow)
-    writer.Write(input.BitMasks.ValidHigh)
-    writer.Write(input.BitMasks.SortedLow)
-    writer.Write(input.BitMasks.SortedHigh)
+    writer.Write(bitMasks.ValidLow)
+    writer.Write(bitMasks.ValidHigh)
+    writer.Write(bitMasks.SortedLow)
+    writer.Write(bitMasks.SortedHigh)
 
     for tableIndex = 0 to MetadataTokens.TableCount - 1 do
-        if isTablePresent input.BitMasks.ValidLow input.BitMasks.ValidHigh tableIndex then
-            writer.Write(input.RowCounts.[tableIndex])
+        if isTablePresent bitMasks.ValidLow bitMasks.ValidHigh tableIndex then
+            writer.Write(sizes.RowCounts.[tableIndex])
 
     let rowsByIndex = tableRowsByIndex input.Tables
 
@@ -190,7 +214,7 @@ let buildTableStream (input: DeltaTableSerializerInput) : DeltaTableStream =
         if rows.Length > 0 then
             for row in rows do
                 for element in row do
-                    writeRowElement writer input.IndexSizes element
+                    writeRowElement writer indexSizes element
 
     writer.Flush()
     let unpaddedSize = int ms.Length
