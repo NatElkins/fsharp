@@ -162,20 +162,16 @@ module private MetadataWriterTestHelpers =
 module FSharpDeltaMetadataWriterTests =
     open MetadataWriterTestHelpers
 
-    let private withAbstractIlSerializer enabled action =
-        let variable = "FSHARP_HOTRELOAD_USE_ABSTRACTIL"
-        let previous = Environment.GetEnvironmentVariable(variable)
-        let value = if enabled then "1" else null
-        Environment.SetEnvironmentVariable(variable, value)
-        try
-            action()
-        finally
-            Environment.SetEnvironmentVariable(variable, previous)
-
     let private assertTableStreamMatches metadataDelta =
         let size, padded = extractTablesStream metadataDelta.Metadata
         Assert.Equal(size, metadataDelta.TableStream.UnpaddedSize)
         Assert.Equal<byte>(padded, metadataDelta.TableStream.Bytes)
+
+    let private serializeWithMetadataBuilder (metadataBuilder: MetadataBuilder) =
+        let metadataRoot = MetadataRootBuilder(metadataBuilder)
+        let blob = BlobBuilder()
+        metadataRoot.Serialize(blob, 0, 0)
+        blob.ToArray()
 
     let private createPropertyModule () =
         let ilg = ilGlobals
@@ -776,7 +772,7 @@ module FSharpDeltaMetadataWriterTests =
         assertTableStreamMatches metadataDelta
 
     [<Fact>]
-    let ``abstract metadata serializer matches default output`` () =
+    let ``abstract metadata serializer matches metadata builder output for property rows`` () =
         let moduleDef = createPropertyModule ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
@@ -794,8 +790,7 @@ module FSharpDeltaMetadataWriterTests =
             metadataReader.PropertyDefinitions
             |> Seq.find (fun handle -> metadataReader.GetString(metadataReader.GetPropertyDefinition(handle).Name) = "Message")
 
-        let emitDelta () =
-            let builder = IlDeltaStreamBuilder None
+        let builder = IlDeltaStreamBuilder None
 
             let stringType = ilGlobals.typ_String
             let methodKey = methodKey "Sample.PropertyHost" "get_Message" stringType
@@ -845,6 +840,7 @@ module FSharpDeltaMetadataWriterTests =
 
             let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
 
+        let metadataDelta =
             DeltaWriter.emit
                 builder.MetadataBuilder
                 moduleName
@@ -860,15 +856,12 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 updates
 
-        let defaultDelta = emitDelta ()
-        let abstractDelta =
-            withAbstractIlSerializer true emitDelta
-
-        Assert.Equal<byte>(defaultDelta.Metadata, abstractDelta.Metadata)
-        Assert.Equal<byte>(defaultDelta.TableStream.Bytes, abstractDelta.TableStream.Bytes)
+        let metadataBuilderBytes = serializeWithMetadataBuilder builder.MetadataBuilder
+        Assert.Equal<byte>(metadataBuilderBytes, metadataDelta.Metadata)
+        assertTableStreamMatches metadataDelta
 
     [<Fact>]
-    let ``abstract metadata serializer matches default output for method rows`` () =
+    let ``abstract metadata serializer matches metadata builder output for method rows`` () =
         let moduleDef = createMethodModule ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
@@ -885,9 +878,9 @@ module FSharpDeltaMetadataWriterTests =
         let parameterRows = artifacts |> List.collect (fun a -> a.ParameterRows)
         let updates = artifacts |> List.map (fun a -> a.Update)
 
-        let emitDelta () =
-            let builder = IlDeltaStreamBuilder None
+        let builder = IlDeltaStreamBuilder None
 
+        let metadataDelta =
             DeltaWriter.emit
                 builder.MetadataBuilder
                 moduleName
@@ -903,16 +896,13 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 updates
 
-        let defaultDelta = emitDelta ()
-        let abstractDelta = withAbstractIlSerializer true emitDelta
-
-        Assert.Equal<byte>(defaultDelta.Metadata, abstractDelta.Metadata)
-        Assert.Equal<byte>(defaultDelta.TableStream.Bytes, abstractDelta.TableStream.Bytes)
-        Assert.Equal(1, defaultDelta.TableRowCounts.[int TableIndex.MethodDef])
-        Assert.Equal(1, defaultDelta.TableRowCounts.[int TableIndex.Param])
+        let metadataBuilderBytes = serializeWithMetadataBuilder builder.MetadataBuilder
+        Assert.Equal<byte>(metadataBuilderBytes, metadataDelta.Metadata)
+        Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
+        Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.Param])
 
     [<Fact>]
-    let ``abstract metadata serializer matches default output for closure methods`` () =
+    let ``abstract metadata serializer matches metadata builder output for closure methods`` () =
         let moduleDef = createClosureModule ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
@@ -930,9 +920,9 @@ module FSharpDeltaMetadataWriterTests =
         let parameterRows = artifacts |> List.collect (fun a -> a.ParameterRows)
         let updates = artifacts |> List.map (fun a -> a.Update)
 
-        let emitDelta () =
-            let builder = IlDeltaStreamBuilder None
+        let builder = IlDeltaStreamBuilder None
 
+        let metadataDelta =
             DeltaWriter.emit
                 builder.MetadataBuilder
                 moduleName
@@ -948,16 +938,13 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 updates
 
-        let defaultDelta = emitDelta ()
-        let abstractDelta = withAbstractIlSerializer true emitDelta
-
-        Assert.Equal<byte>(defaultDelta.Metadata, abstractDelta.Metadata)
-        Assert.Equal<byte>(defaultDelta.TableStream.Bytes, abstractDelta.TableStream.Bytes)
-        Assert.Equal(2, defaultDelta.TableRowCounts.[int TableIndex.MethodDef])
-        Assert.Equal(2, defaultDelta.TableRowCounts.[int TableIndex.Param])
+        let metadataBuilderBytes = serializeWithMetadataBuilder builder.MetadataBuilder
+        Assert.Equal<byte>(metadataBuilderBytes, metadataDelta.Metadata)
+        Assert.Equal(2, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
+        Assert.Equal(2, metadataDelta.TableRowCounts.[int TableIndex.Param])
 
     [<Fact>]
-    let ``abstract metadata serializer matches default output for async methods`` () =
+    let ``abstract metadata serializer matches metadata builder output for async methods`` () =
         let moduleDef = createAsyncModule ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
@@ -975,9 +962,9 @@ module FSharpDeltaMetadataWriterTests =
         let parameterRows = artifacts |> List.collect (fun a -> a.ParameterRows)
         let updates = artifacts |> List.map (fun a -> a.Update)
 
-        let emitDelta () =
-            let builder = IlDeltaStreamBuilder None
+        let builder = IlDeltaStreamBuilder None
 
+        let metadataDelta =
             DeltaWriter.emit
                 builder.MetadataBuilder
                 moduleName
@@ -993,10 +980,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 updates
 
-        let defaultDelta = emitDelta ()
-        let abstractDelta = withAbstractIlSerializer true emitDelta
-
-        Assert.Equal<byte>(defaultDelta.Metadata, abstractDelta.Metadata)
-        Assert.Equal<byte>(defaultDelta.TableStream.Bytes, abstractDelta.TableStream.Bytes)
-        Assert.Equal(2, defaultDelta.TableRowCounts.[int TableIndex.MethodDef])
-        Assert.Equal(1, defaultDelta.TableRowCounts.[int TableIndex.Param])
+        let metadataBuilderBytes = serializeWithMetadataBuilder builder.MetadataBuilder
+        Assert.Equal<byte>(metadataBuilderBytes, metadataDelta.Metadata)
+        Assert.Equal(2, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
+        Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.Param])

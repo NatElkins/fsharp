@@ -227,7 +227,7 @@ let private streamHeaderSize (name: string) =
     let nameLength = Text.Encoding.UTF8.GetByteCount(name) + 1
     8 + align4 nameLength
 
-let private serializeMetadataRoot (input: DeltaTableSerializerInput) (heaps: DeltaHeapStreams) (tableStream: DeltaTableStream) : byte[] =
+let serializeMetadataRoot (input: DeltaTableSerializerInput) (heaps: DeltaHeapStreams) (tableStream: DeltaTableStream) : byte[] =
     let streams =
         [ "#~", tableStream.UnpaddedSize, tableStream.Bytes
           "#Strings", heaps.StringsLength, heaps.Strings
@@ -276,25 +276,3 @@ let private serializeMetadataRoot (input: DeltaTableSerializerInput) (heaps: Del
         writer.Write(descriptor.Bytes)
 
     ms.ToArray()
-
-let trySerializeMetadataRoot (input: DeltaTableSerializerInput) (heaps: DeltaHeapStreams) (tableStream: DeltaTableStream) : byte[] option =
-    match serializationStrategy () with
-    | UseAbstractIL -> Some(serializeMetadataRoot input heaps tableStream)
-    | UseMetadataBuilder -> None
-
-// Env-var guard
-
-type DeltaSerializationStrategy =
-    | UseMetadataBuilder
-    | UseAbstractIL
-
-let private serializationStrategy () =
-    match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_USE_ABSTRACTIL") with
-    | null -> UseMetadataBuilder
-    | value when value.Equals("1", StringComparison.OrdinalIgnoreCase) || value.Equals("true", StringComparison.OrdinalIgnoreCase) -> UseAbstractIL
-    | _ -> UseMetadataBuilder
-
-let tryUseAbstractIlStream metadataDelta : DeltaTableStream option =
-    match serializationStrategy () with
-    | UseAbstractIL -> Some(buildTableStream metadataDelta)
-    | UseMetadataBuilder -> None

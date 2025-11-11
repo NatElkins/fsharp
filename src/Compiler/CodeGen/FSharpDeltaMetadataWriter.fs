@@ -374,22 +374,7 @@ let emit
         let tableStream = DeltaMetadataSerializer.buildTableStream tableStreamInput
 
         let metadataBytes =
-            match DeltaMetadataSerializer.trySerializeMetadataRoot tableStreamInput heapStreams tableStream with
-            | Some bytes -> bytes
-            | None ->
-                let metadataRoot = new MetadataRootBuilder(metadataBuilder)
-                let metadataBlob = BlobBuilder()
-                try
-                    metadataRoot.Serialize(metadataBlob, 0, 0)
-                with ex ->
-                    let counts =
-                        [ for index in Enum.GetValues(typeof<TableIndex>) |> Seq.cast<TableIndex> do
-                              yield index, metadataBuilder.GetRowCount index ]
-                        |> List.filter (fun (_, count) -> count <> 0)
-                    let details = counts |> List.map (fun (i, c) -> sprintf "%A:%d" i c) |> String.concat ", "
-                    let enriched = sprintf "Metadata serialization failed. Non-zero tables: %s" details
-                    raise (Exception(enriched, ex))
-                metadataBlob.ToArray()
+            DeltaMetadataSerializer.serializeMetadataRoot tableStreamInput heapStreams tableStream
 
         if shouldTraceMetadata () then
             printfn "[fsharp-hotreload][metadata-writer] tableCounts method=%d param=%d" methodUpdateCount parameterUpdateCount
