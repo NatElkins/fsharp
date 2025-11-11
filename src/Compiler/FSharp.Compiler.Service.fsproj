@@ -437,6 +437,7 @@
     <Compile Include="CodeGen\FSharpSymbolChanges.fs" />
     <Compile Include="CodeGen\IlxDeltaStreams.fs" />
     <Compile Include="CodeGen\FSharpDefinitionIndex.fs" />
+    <Compile Include="CodeGen\DeltaMetadataTypes.fs" />
     <Compile Include="CodeGen\FSharpDeltaMetadataWriter.fs" />
     <Compile Include="CodeGen\DeltaTableLayout.fs" />
     <Compile Include="CodeGen\DeltaIndexSizing.fs" />

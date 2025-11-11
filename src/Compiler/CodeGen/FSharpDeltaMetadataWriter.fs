@@ -10,6 +10,7 @@ open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
+open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 open FSharp.Compiler.CodeGen.DeltaTableLayout
 open FSharp.Compiler.CodeGen.DeltaIndexSizing
 open FSharp.Compiler.CodeGen.DeltaMetadataSerializer
@@ -21,27 +22,9 @@ let private shouldTraceMetadata () =
     | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
     | _ -> false
 
-type MethodDefinitionRowInfo =
-    {
-        Key: MethodDefinitionKey
-        RowId: int
-        IsAdded: bool
-        Attributes: MethodAttributes
-        ImplAttributes: MethodImplAttributes
-        Name: string
-        Signature: byte[]
-        FirstParameterRowId: int option
-    }
+type MethodDefinitionRowInfo = DeltaMetadataTypes.MethodDefinitionRowInfo
 
-type ParameterDefinitionRowInfo =
-    {
-        Key: ParameterDefinitionKey
-        RowId: int
-        IsAdded: bool
-        Attributes: ParameterAttributes
-        SequenceNumber: int
-        Name: string option
-    }
+type ParameterDefinitionRowInfo = DeltaMetadataTypes.ParameterDefinitionRowInfo
 
 type MethodMetadataUpdate =
     {

@@ -8,6 +8,7 @@ open Microsoft.FSharp.Collections
 open FSharp.Compiler.AbstractIL.ILBinary
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.HotReloadBaseline
+open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 
 /// Mirrors the AbstractIL metadata tables for the subset of rows emitted by
 /// hot reload deltas. The tables are populated alongside the SRM metadata

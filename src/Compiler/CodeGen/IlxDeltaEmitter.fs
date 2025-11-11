@@ -27,6 +27,7 @@ open Internal.Utilities
 
 module MetadataWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 open MetadataWriter
+open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 
 exception HotReloadUnsupportedEditException of string
 
