@@ -158,7 +158,7 @@ let private writeRowElement (writer: BinaryWriter) (indexSizes: CodedIndexSizes)
     else
         failwithf "Unsupported row element tag: %d" tag
 
-let private align4 value = (value + 3) &&& ~3
+let private align4 value = (value + 3) &&& ~~~3
 
 let buildTableStream (input: DeltaTableSerializerInput) : DeltaTableStream =
     use ms = new MemoryStream()
