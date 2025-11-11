@@ -32,12 +32,7 @@ let private codedBigness tagBits tableRowCounts tables =
     tables
     |> Array.exists (fun table -> tableSize tableRowCounts table >= (0x10000 >>> tagBits))
 
-let compute
-    (tableRowCounts: int[])
-    (stringHeapSize: int)
-    (blobHeapSize: int)
-    (guidHeapSize: int)
-    : CodedIndexSizes =
+let compute (tableRowCounts: int[]) (stringHeapSize: int) (blobHeapSize: int) (guidHeapSize: int) : CodedIndexSizes =
     let simpleIndexBig = Array.zeroCreate<bool> MetadataTokens.TableCount
     for index = 0 to tableRowCounts.Length - 1 do
         simpleIndexBig.[index] <- tableRowCounts.[index] >= 0x10000

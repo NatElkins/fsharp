@@ -6,6 +6,7 @@ open System.IO
 open System.Text
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
+open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 open FSharp.Compiler.CodeGen.DeltaTableLayout
@@ -52,6 +53,19 @@ let buildHeapStreams (mirror: DeltaMetadataTables) : DeltaHeapStreams =
       UserStrings = emptyUserStringHeap
       UserStringsLength = 1 }
 
+/// Represents the serialized `#~` stream (metadata tables) including its padded bytes.
+type DeltaTableStream =
+    { Bytes: byte[]
+      UnpaddedSize: int
+      PaddedSize: int }
+
+/// Captures the sizing data needed to build delta metadata, mirroring Roslyn's MetadataSizes.
+type DeltaMetadataSizes =
+    { RowCounts: int[]
+      HeapSizes: MetadataHeapSizes
+      BitMasks: TableBitMasks
+      IndexSizes: CodedIndexSizes }
+
 let computeMetadataSizes (tableMirror: DeltaMetadataTables) : DeltaMetadataSizes =
     let rowCounts = tableMirror.TableRowCounts
     let heapSizes = tableMirror.HeapSizes
@@ -67,19 +81,6 @@ let computeMetadataSizes (tableMirror: DeltaMetadataTables) : DeltaMetadataSizes
       HeapSizes = heapSizes
       BitMasks = bitMasks
       IndexSizes = indexSizes }
-
-/// Represents the serialized `#~` stream (metadata tables) including its padded bytes.
-type DeltaTableStream =
-    { Bytes: byte[]
-      UnpaddedSize: int
-      PaddedSize: int }
-
-/// Captures the sizing data needed to build delta metadata, mirroring Roslyn's MetadataSizes.
-type DeltaMetadataSizes =
-    { RowCounts: int[]
-      HeapSizes: MetadataHeapSizes
-      BitMasks: TableBitMasks
-      IndexSizes: CodedIndexSizes }
 
 type DeltaTableSerializerInput =
     { Tables: TableRows
