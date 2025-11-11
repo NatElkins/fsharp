@@ -46,6 +46,7 @@ let emitDelta
     (baseline: FSharpEmitBaseline)
     (updatedPdbBytes: byte[])
     (addedOrChangedMethods: AddedOrChangedMethodInfo list)
+    (deltaToUpdatedMethodToken: IReadOnlyDictionary<int, int>)
     : byte[] option =
     match baseline.PortablePdb with
     | None -> None
@@ -57,6 +58,7 @@ let emitDelta
             |> List.filter (fun token -> token <> 0)
 
         if List.isEmpty distinctTokens then
+            printfn "[hotreload-pdb] distinct token list empty"
             None
         else
             use provider = MetadataReaderProvider.FromPortablePdbImage(ImmutableArray.CreateRange updatedPdbBytes)
@@ -101,32 +103,53 @@ let emitDelta
                     added
 
             for token in distinctTokens do
-                let methodHandle = MetadataTokens.MethodDefinitionHandle token
-                let methodRow = MetadataTokens.GetRowNumber methodHandle
+                let sourceToken =
+                    match deltaToUpdatedMethodToken.TryGetValue token with
+                    | true, mapped -> mapped
+                    | _ -> token
 
-                if methodRow <= reader.MethodDebugInformation.Count then
-                    let methodInfo = reader.GetMethodDebugInformation methodHandle
-                    let targetDocument =
-                        if methodInfo.Document.IsNil then
-                            DocumentHandle()
+                if sourceToken = 0 then
+                    printfn "[hotreload-pdb] method token missing for delta token 0x%08x" token
+                else
+                    let sourceHandle = MetadataTokens.MethodDefinitionHandle sourceToken
+                    let deltaHandle = MetadataTokens.MethodDefinitionHandle token
+
+                    if sourceHandle.IsNil then
+                        printfn "[hotreload-pdb] source handle nil for delta token 0x%08x (source token=0x%08x)" token sourceToken
+                    else
+                        let methodRow = MetadataTokens.GetRowNumber sourceHandle
+
+                        if methodRow <= reader.MethodDebugInformation.Count then
+                            let methodInfo = reader.GetMethodDebugInformation sourceHandle
+                            let targetDocument =
+                                if methodInfo.Document.IsNil then
+                                    DocumentHandle()
+                                else
+                                    getOrAddDocument methodInfo.Document
+
+                            let sequencePointsHandle =
+                                if methodInfo.SequencePointsBlob.IsNil then
+                                    BlobHandle()
+                                else
+                                    metadata.GetOrAddBlob(reader.GetBlobBytes methodInfo.SequencePointsBlob)
+
+                            metadata.AddMethodDebugInformation(targetDocument, sequencePointsHandle) |> ignore
+
+                            let entityHandle: EntityHandle = MethodDefinitionHandle.op_Implicit deltaHandle
+                            metadata.AddEncLogEntry(entityHandle, EditAndContinueOperation.Default)
+                            metadata.AddEncMapEntry(entityHandle)
+
+                            emitted <- true
                         else
-                            getOrAddDocument methodInfo.Document
-
-                    let sequencePointsHandle =
-                        if methodInfo.SequencePointsBlob.IsNil then
-                            BlobHandle()
-                        else
-                            metadata.GetOrAddBlob(reader.GetBlobBytes methodInfo.SequencePointsBlob)
-
-                    metadata.AddMethodDebugInformation(targetDocument, sequencePointsHandle) |> ignore
-
-                    let entityHandle: EntityHandle = MethodDefinitionHandle.op_Implicit methodHandle
-                    metadata.AddEncLogEntry(entityHandle, EditAndContinueOperation.Default)
-                    metadata.AddEncMapEntry(entityHandle)
-
-                    emitted <- true
+                            printfn
+                                "[hotreload-pdb] missing method debug row %d (delta token=0x%08x, source token=0x%08x, count=%d)"
+                                methodRow
+                                token
+                                sourceToken
+                                reader.MethodDebugInformation.Count
 
             if not emitted then
+                printfn "[hotreload-pdb] no method debug info emitted for tokens %A" distinctTokens
                 None
             else
                 let entryPointHandle =

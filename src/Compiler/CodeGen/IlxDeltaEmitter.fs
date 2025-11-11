@@ -1284,10 +1284,20 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                   CodeOffset = body.CodeOffset
                   CodeLength = body.CodeLength })
 
+        let deltaToUpdatedMethodToken =
+            let dict = Dictionary<int, int>()
+            for KeyValue(newToken, baselineToken) in methodTokenMap do
+                dict[baselineToken] <- newToken
+            for methodInfo in addedOrChangedMethods do
+                if not (dict.ContainsKey methodInfo.MethodToken) then
+                    dict[methodInfo.MethodToken] <- methodInfo.MethodToken
+            dict :> IReadOnlyDictionary<_, _>
+
         let pdbDelta =
             match pdbBytesOpt with
             | None -> None
-            | Some pdbBytes -> HotReloadPdb.emitDelta request.Baseline pdbBytes addedOrChangedMethods
+            | Some pdbBytes ->
+                HotReloadPdb.emitDelta request.Baseline pdbBytes addedOrChangedMethods deltaToUpdatedMethodToken
 
         let synthesizedSnapshot =
             request.SynthesizedNames
