@@ -7,7 +7,6 @@ open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Text
 open Microsoft.FSharp.Collections
-open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
