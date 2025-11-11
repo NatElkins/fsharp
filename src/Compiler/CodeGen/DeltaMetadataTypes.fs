@@ -51,3 +51,10 @@ type PropertyMapRowInfo =
       TypeDefRowId: int
       FirstPropertyRowId: int option
       IsAdded: bool }
+
+type EventMapRowInfo =
+    { DeclaringType: string
+      RowId: int
+      TypeDefRowId: int
+      FirstEventRowId: int option
+      IsAdded: bool }
