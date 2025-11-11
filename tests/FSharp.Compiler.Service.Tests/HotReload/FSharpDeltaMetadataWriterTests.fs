@@ -117,7 +117,8 @@ module FSharpDeltaMetadataWriterTests =
             |> Option.map (fun (_, _, op) -> op)
 
         Assert.Equal(Some EditAndContinueOperation.AddProperty, tryOperation TableIndex.Property)
-        Assert.Equal(Some EditAndContinueOperation.AddPropertyMap, tryOperation TableIndex.PropertyMap)
+        // Roslyn logs the containing map row as AddProperty (not AddPropertyMap).
+        Assert.Equal(Some EditAndContinueOperation.AddProperty, tryOperation TableIndex.PropertyMap)
         Assert.True(metadataDelta.Metadata.Length > 0)
         Assert.Contains("Message", Encoding.UTF8.GetString(metadataDelta.StringHeap))
         assertTableStreamMatches metadataDelta
