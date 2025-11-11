@@ -7,6 +7,7 @@ open System.Text
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
+open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 open FSharp.Compiler.CodeGen.DeltaTableLayout
 open FSharp.Compiler.CodeGen.DeltaIndexSizing
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
@@ -98,9 +99,9 @@ let private isTablePresent (bitmaskLow: int) (bitmaskHigh: int) (index: int) =
     else
         ((bitmaskHigh >>> (index - 32)) &&& 1) <> 0
 
-let private writeRowElement (writer: BinaryWriter) (indexSizes: CodedIndexSizes) (element: RowElement) =
+let private writeRowElement (writer: BinaryWriter) (indexSizes: CodedIndexSizes) (element: RowElementData) =
     let tag = element.Tag
-    let value = element.Val
+    let value = element.Value
 
     if tag = RowElementTags.UShort then
         writeUInt16 writer value
