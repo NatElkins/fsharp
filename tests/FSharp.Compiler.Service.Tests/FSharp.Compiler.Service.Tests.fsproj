@@ -83,7 +83,9 @@
     <Compile Include="HotReload/HotReloadCheckerTests.fs" />
     <Compile Include="HotReload/GeneratedNamesTests.fs" />
     <Compile Include="HotReload/DefinitionIndexTests.fs" />
+    <Compile Include="HotReload/MetadataDeltaTestHelpers.fs" />
     <Compile Include="HotReload/FSharpDeltaMetadataWriterTests.fs" />
+    <Compile Include="HotReload/FSharpMetadataAggregatorTests.fs" />
     <Compile Include="HotReload/NameMapTests.fs" />
     <Compile Include="HotReload/RudeEditDiagnosticsTests.fs" />
   </ItemGroup>
