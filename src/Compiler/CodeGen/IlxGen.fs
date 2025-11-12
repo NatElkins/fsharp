@@ -11254,6 +11254,13 @@ and private GenProvidedTypeDef cenv (mgbuf: AssemblyBuilder) eenv m (tycon: Tyco
 
     cenv.amap.assemblyLoader.MarkProvidedTypeIlEmitted tycon
 
+    if fs1023TraceEnabled () then
+        fs1023Trace
+            "[ilxgen][provided] summary type=%s methods=%d properties=%d"
+            tref.FullName
+            providedCatalog.OrderedEntries.Length
+            providedCatalog.PropertiesByName.Count
+
     Some tref
 #endif
 
