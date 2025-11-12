@@ -968,6 +968,11 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                    MethodHandle = methodHandle
                    Body = bodyUpdate }, methodDef))
 
+        let baselineMethodHandles = request.Baseline.MetadataHandles.MethodHandles
+        let baselineParameterHandles = request.Baseline.MetadataHandles.ParameterHandles
+        let baselinePropertyHandles = request.Baseline.MetadataHandles.PropertyHandles
+        let baselineEventHandles = request.Baseline.MetadataHandles.EventHandles
+
         let methodMetadataLookup =
             let dict : Dictionary<MethodDefinitionKey, struct (MethodAttributes * MethodImplAttributes * string * byte[] * StringHandle option * BlobHandle option)> =
                 Dictionary(HashIdentity.Structural)
@@ -993,6 +998,10 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                             None
                         else
                             metadataReader.GetString parameter.Name |> Some
+                    let resolvedHandle =
+                        match baselineParameterHandles |> Map.tryFind key |> Option.bind (fun info -> info.NameHandle) with
+                        | Some handle -> Some handle
+                        | None -> if parameter.Name.IsNil then None else Some parameter.Name
                     match firstParamRowByMethod.TryGetValue key.Method with
                     | true, existing when existing <= rowId -> ()
                     | _ -> firstParamRowByMethod[key.Method] <- rowId
@@ -1004,18 +1013,30 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                           Attributes = parameter.Attributes
                           SequenceNumber = int parameter.SequenceNumber
                           Name = name
-                          NameHandle = if parameter.Name.IsNil then None else Some parameter.Name }
+                          NameHandle = resolvedHandle }
                 | _ -> None)
 
         let methodDefinitionRowsSnapshot =
             methodDefinitionRowsRaw
             |> List.choose (fun struct (rowId, key, isAdded) ->
                 match methodMetadataLookup.TryGetValue key with
-                | true, struct (attrs, implAttrs, name, signature, nameHandle, signatureHandle) ->
+                | true, struct (attrs, implAttrs, name, signature, emittedNameHandle, emittedSignatureHandle) ->
+                    let baselineHandles = baselineMethodHandles |> Map.tryFind key
+                    let resolvedNameHandle =
+                        match baselineHandles |> Option.bind (fun info -> info.NameHandle) with
+                        | Some handle -> Some handle
+                        | None -> emittedNameHandle
+                    let resolvedSignatureHandle =
+                        match baselineHandles |> Option.bind (fun info -> info.SignatureHandle) with
+                        | Some handle -> Some handle
+                        | None -> emittedSignatureHandle
                     let firstParam =
-                        match firstParamRowByMethod.TryGetValue key with
-                        | true, value -> Some value
-                        | _ -> None
+                        match baselineHandles |> Option.bind (fun info -> info.FirstParameterRowId) with
+                        | Some _ as baselineRow -> baselineRow
+                        | None ->
+                            match firstParamRowByMethod.TryGetValue key with
+                            | true, value -> Some value
+                            | _ -> None
                     Some
                         { MethodDefinitionRowInfo.Key = key
                           RowId = rowId
@@ -1023,9 +1044,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                           Attributes = attrs
                           ImplAttributes = implAttrs
                           Name = name
-                          NameHandle = nameHandle
+                          NameHandle = resolvedNameHandle
                           Signature = signature
-                          SignatureHandle = signatureHandle
+                          SignatureHandle = resolvedSignatureHandle
                           FirstParameterRowId = firstParam }
                 | _ -> None)
 
@@ -1037,14 +1058,23 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     let propertyDef = metadataReader.GetPropertyDefinition handle
                     let name = metadataReader.GetString propertyDef.Name
                     let signature = metadataReader.GetBlobBytes propertyDef.Signature
+                    let baselineHandles = baselinePropertyHandles |> Map.tryFind key
+                    let resolvedNameHandle =
+                        match baselineHandles |> Option.bind (fun info -> info.NameHandle) with
+                        | Some handle -> Some handle
+                        | None -> if propertyDef.Name.IsNil then None else Some propertyDef.Name
+                    let resolvedSignatureHandle =
+                        match baselineHandles |> Option.bind (fun info -> info.SignatureHandle) with
+                        | Some handle -> Some handle
+                        | None -> if propertyDef.Signature.IsNil then None else Some propertyDef.Signature
                     Some
                         { PropertyDefinitionRowInfo.Key = key
                           RowId = rowId
                           IsAdded = isAdded
                           Name = name
-                          NameHandle = if propertyDef.Name.IsNil then None else Some propertyDef.Name
+                          NameHandle = resolvedNameHandle
                           Signature = signature
-                          SignatureHandle = if propertyDef.Signature.IsNil then None else Some propertyDef.Signature
+                          SignatureHandle = resolvedSignatureHandle
                           Attributes = propertyDef.Attributes }
                 | _ -> None)
 
@@ -1058,12 +1088,16 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 | true, handle when not handle.IsNil ->
                     let eventDef = metadataReader.GetEventDefinition handle
                     let name = metadataReader.GetString eventDef.Name
+                    let resolvedNameHandle =
+                        match baselineEventHandles |> Map.tryFind key |> Option.bind (fun info -> info.NameHandle) with
+                        | Some handle -> Some handle
+                        | None -> if eventDef.Name.IsNil then None else Some eventDef.Name
                     Some
                         { EventDefinitionRowInfo.Key = key
                           RowId = rowId
                           IsAdded = isAdded
                           Name = name
-                          NameHandle = if eventDef.Name.IsNil then None else Some eventDef.Name
+                          NameHandle = resolvedNameHandle
                           Attributes = eventDef.Attributes
                           EventType = eventDef.Type }
                 | _ -> None)
@@ -1273,8 +1307,12 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             request.Baseline.Metadata.HeapSizes
             |> MetadataHeapOffsets.OfHeapSizes
 
+        let userStringEntries =
+            userStringUpdates
+            |> Seq.toList
+
         let metadataDelta =
-            MetadataWriter.emit
+            MetadataWriter.emitWithUserStrings
                 metadataBuilder
                 moduleName
                 encId
@@ -1287,6 +1325,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 propertyMapRowsSnapshot
                 eventMapRowsSnapshot
                 methodSemanticsRowsSnapshot
+                userStringEntries
                 methodUpdates
                 baselineHeapOffsets
 

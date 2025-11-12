@@ -17,15 +17,23 @@ open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.CodeGen
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
+open FSharp.Compiler.CodeGen.DeltaTableLayout
 open FSharp.Compiler.Service.Tests.HotReload.MetadataDeltaTestHelpers
 
 module DeltaWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
 module FSharpDeltaMetadataWriterTests =
 
+    let private isTablePresent (bitmask: TableBitMasks) (table: TableIndex) =
+        let index = int table
+        if index < 32 then
+            ((bitmask.ValidLow >>> index) &&& 1) <> 0
+        else
+            ((bitmask.ValidHigh >>> (index - 32)) &&& 1) <> 0
+
     [<Fact>]
     let ``metadata writer emits property rows`` () =
-        let moduleDef = createPropertyModule ()
+        let moduleDef = createPropertyModule None ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()
@@ -131,7 +139,7 @@ module FSharpDeltaMetadataWriterTests =
 
     [<Fact>]
     let ``metadata writer emits event and method semantics rows`` () =
-        let moduleDef = createEventModule ()
+        let moduleDef = createEventModule None ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()
@@ -234,8 +242,36 @@ module FSharpDeltaMetadataWriterTests =
         assertTableStreamMatches metadataDelta
 
     [<Fact>]
+    let ``metadata writer reports small index sizes for property delta`` () =
+        let delta = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
+        let indexSizes = delta.Delta.IndexSizes
+
+        Assert.True(indexSizes.StringsBig)
+        Assert.True(indexSizes.BlobsBig)
+        Assert.True(indexSizes.GuidsBig)
+        Assert.True(indexSizes.SimpleIndexBig.[int TableIndex.PropertyMap])
+        Assert.True(indexSizes.HasSemanticsBig)
+
+    [<Fact>]
+    let ``metadata writer sets table bitmasks for event semantics`` () =
+        let delta = MetadataDeltaTestHelpers.emitEventDeltaArtifacts None ()
+        let masks = delta.Delta.TableBitMasks
+
+        let rowCounts = delta.Delta.TableRowCounts
+        let tablesToCheck =
+            [ TableIndex.Event
+              TableIndex.EventMap
+              TableIndex.MethodSemantics
+              TableIndex.EncLog
+              TableIndex.EncMap ]
+
+        for table in tablesToCheck do
+            let expected = rowCounts.[int table] > 0
+            Assert.Equal(expected, isTablePresent masks table)
+
+    [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for property rows`` () =
-        let moduleDef = createPropertyModule ()
+        let moduleDef = createPropertyModule None ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()

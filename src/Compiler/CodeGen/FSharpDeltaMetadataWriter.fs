@@ -73,7 +73,7 @@ type MetadataDelta =
         TableStream: DeltaTableStream
     }
 
-let emit
+let emitWithUserStrings
     (metadataBuilder: MetadataBuilder)
     (moduleName: string)
     (encId: Guid)
@@ -86,11 +86,22 @@ let emit
     (propertyMapRows: PropertyMapRowInfo list)
     (eventMapRows: EventMapRowInfo list)
     (methodSemanticsRows: MethodSemanticsMetadataUpdate list)
+    (userStringUpdates: (int * int * string) list)
     (updates: MethodMetadataUpdate list)
     (heapOffsets: MetadataHeapOffsets)
     : MetadataDelta =
     if shouldTraceMetadata () then
         printfn "[fsharp-hotreload][metadata-writer] emit invoked updates=%d" (List.length updates)
+        for row in methodDefinitionRows do
+            let offset =
+                match row.NameHandle with
+                | Some handle -> MetadataTokens.GetHeapOffset handle |> Some
+                | None -> None
+            printfn
+                "[fsharp-hotreload][metadata-writer] method-row name=%s isAdded=%b handle=%A"
+                row.Name
+                row.IsAdded
+                offset
     if List.isEmpty updates then
         let emptyHeapSizes =
             { StringHeapSize = 0
@@ -343,6 +354,10 @@ let emit
             encLog.Add(struct (TableIndex.MethodSemantics, row.RowId, operation))
             encMap.Add(struct (TableIndex.MethodSemantics, row.RowId))
 
+        for originalToken, _, literal in userStringUpdates do
+            let offset = originalToken &&& 0x00FFFFFF
+            tableMirror.AddUserStringLiteral(offset, literal)
+
         let debugRows =
             [ for index in Enum.GetValues(typeof<TableIndex>) |> Seq.cast<TableIndex> do
                   let count = metadataBuilder.GetRowCount index
@@ -398,7 +413,19 @@ let emit
         let metadataBytes = DeltaMetadataSerializer.serializeMetadataRoot tableStreamInput heapStreams tableStream
 
         if shouldTraceMetadata () then
-            printfn "[fsharp-hotreload][metadata-writer] tableCounts method=%d param=%d" methodUpdateCount parameterUpdateCount
+            let methodRows = tableRowCounts[int TableIndex.MethodDef]
+            let paramRows = tableRowCounts[int TableIndex.Param]
+            let propertyRows = tableRowCounts[int TableIndex.Property]
+            let eventRows = tableRowCounts[int TableIndex.Event]
+            printfn
+                "[fsharp-hotreload][metadata-writer] rows method=%d param=%d property=%d event=%d stringHeap=%d blobHeap=%d guidHeap=%d"
+                methodRows
+                paramRows
+                propertyRows
+                eventRows
+                heapStreams.StringsLength
+                heapStreams.BlobsLength
+                heapStreams.GuidsLength
 
         { Metadata = metadataBytes
           StringHeap = heapStreams.Strings
@@ -412,3 +439,36 @@ let emit
           TableBitMasks = tableBitMasks
           IndexSizes = indexSizes
           TableStream = tableStream }
+
+let emit
+    (metadataBuilder: MetadataBuilder)
+    (moduleName: string)
+    (encId: Guid)
+    (encBaseId: Guid)
+    (moduleId: Guid)
+    (methodDefinitionRows: MethodDefinitionRowInfo list)
+    (parameterDefinitionRows: ParameterDefinitionRowInfo list)
+    (propertyDefinitionRows: PropertyDefinitionRowInfo list)
+    (eventDefinitionRows: EventDefinitionRowInfo list)
+    (propertyMapRows: PropertyMapRowInfo list)
+    (eventMapRows: EventMapRowInfo list)
+    (methodSemanticsRows: MethodSemanticsMetadataUpdate list)
+    (updates: MethodMetadataUpdate list)
+    (heapOffsets: MetadataHeapOffsets)
+    : MetadataDelta =
+    emitWithUserStrings
+        metadataBuilder
+        moduleName
+        encId
+        encBaseId
+        moduleId
+        methodDefinitionRows
+        parameterDefinitionRows
+        propertyDefinitionRows
+        eventDefinitionRows
+        propertyMapRows
+        eventMapRows
+        methodSemanticsRows
+        ([] : (int * int * string) list)
+        updates
+        heapOffsets
