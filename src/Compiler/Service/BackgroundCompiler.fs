@@ -38,6 +38,31 @@ open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.BuildGraph
 open FSharp.Compiler.CodeAnalysis.ProjectSnapshot
 
+module private BackgroundCompilerFs1023Trace =
+    let private isEnabled () =
+        match Environment.GetEnvironmentVariable("FS1023_TRACE") with
+        | null
+        | "" -> false
+        | value -> not (String.Equals(value.Trim(), "0", StringComparison.Ordinal))
+
+    let trace format =
+        Printf.kprintf
+            (fun message ->
+                if isEnabled () then
+                    let path =
+                        match Environment.GetEnvironmentVariable("FS1023_TRACE_PATH") with
+                        | null
+                        | "" -> "/tmp/fs1023_trace.log"
+                        | custom -> custom
+
+                    let entry =
+                        sprintf "%s [fs1023][backgroundcompiler] %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+
+                    try
+                        File.AppendAllText(path, entry)
+                    with _ -> ())
+            format
+
 type SourceTextHash = int64
 type CacheStamp = int64
 type FileName = string
@@ -372,6 +397,14 @@ type internal BackgroundCompiler
             use _ =
                 Activity.start "BackgroundCompiler.CreateOneIncrementalBuilder" [| Activity.Tags.project, options.ProjectFileName |]
 
+            BackgroundCompilerFs1023Trace.trace
+                "[builder] create begin project=%s userOp=%s sources=%d otherFlags=%d useScripts=%b"
+                options.ProjectFileName
+                userOpName
+                options.SourceFiles.Length
+                options.OtherOptions.Length
+                options.UseScriptResolutionRules
+
             Trace.TraceInformation("FCS: {0}.{1} ({2})", userOpName, "CreateOneIncrementalBuilder", options.ProjectFileName)
             let projectReferences = getProjectReferences options userOpName
 
@@ -427,6 +460,13 @@ type internal BackgroundCompiler
                 builder.FileParsed.Add(fun file -> fileParsed.Trigger(file, options))
                 builder.FileChecked.Add(fun file -> fileChecked.Trigger(file, options))
                 builder.ProjectChecked.Add(fun () -> projectChecked.Trigger options)
+
+            BackgroundCompilerFs1023Trace.trace
+                "[builder] create end project=%s userOp=%s success=%b diagnostics=%d"
+                options.ProjectFileName
+                userOpName
+                (builderOpt.IsSome)
+                diagnostics.Length
 
             return (builderOpt, diagnostics)
         }
@@ -496,9 +536,21 @@ type internal BackgroundCompiler
 
     let createAndGetBuilder (options, userOpName) =
         async {
+            BackgroundCompilerFs1023Trace.trace "[builder-cache] create-node begin project=%s userOp=%s" options.ProjectFileName userOpName
             let! ct = Async.CancellationToken
             let getBuilderNode = createBuilderNode (options, userOpName, ct)
-            return! getBuilderNode.GetOrComputeValue()
+            let! result = getBuilderNode.GetOrComputeValue()
+
+            let builderOpt, diagnostics = result
+
+            BackgroundCompilerFs1023Trace.trace
+                "[builder-cache] create-node end project=%s userOp=%s hasBuilder=%b diagnostics=%d"
+                options.ProjectFileName
+                userOpName
+                (builderOpt.IsSome)
+                diagnostics.Length
+
+            return result
         }
 
     let getOrCreateBuilder (options, userOpName) : Async<IncrementalBuilder option * FSharpDiagnostic[]> =
@@ -507,10 +559,23 @@ type internal BackgroundCompiler
 
             match tryGetBuilder options with
             | Some getBuilder ->
+                BackgroundCompilerFs1023Trace.trace "[builder-cache] hit project=%s userOp=%s" options.ProjectFileName userOpName
                 match! getBuilder with
                 | builderOpt, creationDiags when builderOpt.IsNone || not builderOpt.Value.IsReferencesInvalidated ->
+                    BackgroundCompilerFs1023Trace.trace
+                        "[builder-cache] reuse project=%s userOp=%s hasBuilder=%b invalidated=%b"
+                        options.ProjectFileName
+                        userOpName
+                        (builderOpt.IsSome)
+                        (builderOpt |> Option.exists (fun b -> b.IsReferencesInvalidated))
+
                     return builderOpt, creationDiags
                 | _ ->
+                    BackgroundCompilerFs1023Trace.trace
+                        "[builder-cache] stale project=%s userOp=%s -> recreating"
+                        options.ProjectFileName
+                        userOpName
+
                     // The builder could be re-created,
                     //    clear the check file caches that are associated with it.
                     //    We must do this in order to not return stale results when references
@@ -522,7 +587,9 @@ type internal BackgroundCompiler
                             checkFileInProjectCache.RemoveAnySimilar(ltok, key)))
 
                     return! createAndGetBuilder (options, userOpName)
-            | _ -> return! createAndGetBuilder (options, userOpName)
+            | _ ->
+                BackgroundCompilerFs1023Trace.trace "[builder-cache] miss project=%s userOp=%s" options.ProjectFileName userOpName
+                return! createAndGetBuilder (options, userOpName)
         }
 
     let getSimilarOrCreateBuilder (options, userOpName) =
@@ -1166,13 +1233,30 @@ type internal BackgroundCompiler
 
             let! builderOpt, creationDiags = getOrCreateBuilder (options, userOpName)
 
+            BackgroundCompilerFs1023Trace.trace
+                "[project-check] builder ready project=%s userOp=%s hasBuilder=%b creationDiags=%d"
+                options.ProjectFileName
+                userOpName
+                (builderOpt.IsSome)
+                creationDiags.Length
+
             match builderOpt with
             | None ->
                 let emptyResults =
                     FSharpCheckProjectResults(options.ProjectFileName, None, keepAssemblyContents, creationDiags, None)
 
+                BackgroundCompilerFs1023Trace.trace
+                    "[project-check] builder missing project=%s userOp=%s returning empty results"
+                    options.ProjectFileName
+                    userOpName
+
                 return emptyResults
             | Some builder ->
+                BackgroundCompilerFs1023Trace.trace
+                    "[project-check] full-check begin project=%s userOp=%s"
+                    options.ProjectFileName
+                    userOpName
+
                 let! tcProj, ilAssemRef, tcAssemblyDataOpt, tcAssemblyExprOpt = builder.GetFullCheckResultsAndImplementationsForProject()
                 let diagnosticsOptions = tcProj.TcConfig.diagnosticsOptions
                 let fileName = DummyFileNameForRangesWithoutASpecificLocation
@@ -1202,6 +1286,12 @@ type internal BackgroundCompiler
                     )
 
                 let diagnostics = [| yield! creationDiags; yield! tcDiagnostics |]
+
+                BackgroundCompilerFs1023Trace.trace
+                    "[project-check] full-check end project=%s userOp=%s diagnostics=%d"
+                    options.ProjectFileName
+                    userOpName
+                    diagnostics.Length
 
                 let getAssemblyData () =
                     match tcAssemblyDataOpt with

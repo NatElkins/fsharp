@@ -55,6 +55,30 @@ open FSharp.Compiler.TypedTreeOps
 open FSharp.Compiler.XmlDocFileWriter
 open FSharp.Compiler.CheckExpressionsOps
 
+let private fs1023TraceEnabled () =
+    match Environment.GetEnvironmentVariable("FS1023_TRACE") with
+    | null
+    | "" -> false
+    | value -> not (value.Trim().Equals("0", StringComparison.OrdinalIgnoreCase))
+
+let private fs1023Trace format =
+    Printf.kprintf
+        (fun message ->
+            if fs1023TraceEnabled () then
+                let path =
+                    match Environment.GetEnvironmentVariable("FS1023_TRACE_PATH") with
+                    | null
+                    | "" -> "/tmp/fs1023_trace.log"
+                    | custom -> custom
+
+                let entry =
+                    sprintf "%s [fs1023][compileops] %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+
+                try
+                    File.AppendAllText(path, entry)
+                with _ -> ())
+        format
+
 //----------------------------------------------------------------------------
 // Reporting - warnings, errors
 //----------------------------------------------------------------------------
@@ -902,7 +926,8 @@ let main3
                 None
 
     // Pass on only the minimum information required for the next phase
-    Args(
+    let args =
+        Args(
         ctok,
         tcConfig,
         tcImports,
@@ -924,6 +949,8 @@ let main3
         ilSourceDocs,
         refAssemblySignatureHash
     )
+
+    args
 
 /// Fourth phase of compilation.
 ///   -  Static linking
@@ -957,6 +984,12 @@ let main4
 
     if tcConfig.standalone && generatedCcu.UsesFSharp20PlusQuotations then
         error (Error(FSComp.SR.fscQuotationLiteralsStaticLinking0 (), rangeStartup))
+
+    if fs1023TraceEnabled () then
+        fs1023Trace
+            "main4 begin assembly=%s outfile=%s" 
+            assemblyName
+            outfile
 
     // Compute a static linker, it gets called later.
     let staticLinker = StaticLink(ctok, tcConfig, tcImports, tcGlobals)
@@ -1020,7 +1053,8 @@ let main4
     AbortOnError(diagnosticsLogger, exiter)
 
     // Pass on only the minimum information required for the next phase
-    Args(
+    let args =
+        Args(
         ctok,
         tcConfig,
         tcImports,
@@ -1035,6 +1069,11 @@ let main4
         ilSourceDocs,
         refAssemblySignatureHash
     )
+
+    if fs1023TraceEnabled () then
+        fs1023Trace "main4 end assembly=%s" assemblyName
+
+    args
 
 /// Fifth phase of compilation.
 ///   -  static linking
@@ -1054,6 +1093,9 @@ let main5
           refAssemblySignatureHash))
     =
 
+    if fs1023TraceEnabled () then
+        fs1023Trace "main5 begin outfile=%s" outfile
+
     use _ = UseBuildPhase BuildPhase.Output
 
     // Static linking, if any
@@ -1067,7 +1109,8 @@ let main5
     AbortOnError(diagnosticsLogger, exiter)
 
     // Pass on only the minimum information required for the next phase
-    Args(
+    let args =
+        Args(
         ctok,
         tcConfig,
         tcImports,
@@ -1081,6 +1124,11 @@ let main5
         ilSourceDocs,
         refAssemblySignatureHash
     )
+
+    if fs1023TraceEnabled () then
+        fs1023Trace "main5 end outfile=%s" outfile
+
+    args
 
 /// Sixth phase of compilation.
 ///   -  write the binaries
@@ -1099,6 +1147,9 @@ let main6
           ilSourceDocs,
           refAssemblySignatureHash))
     =
+    if fs1023TraceEnabled () then
+        fs1023Trace "main6 begin outfile=%s" outfile
+
     ReportTime tcConfig "Write .NET Binary"
 
     use _ = UseBuildPhase BuildPhase.Output
@@ -1210,6 +1261,9 @@ let main6
         CopyFSharpCore(outfile, tcConfig.referencedDLLs)
 
     ReportTime tcConfig "Exiting"
+
+    if fs1023TraceEnabled () then
+        fs1023Trace "main6 end outfile=%s" outfile
 
 /// The main (non-incremental) compilation entry point used by fsc.exe
 let CompileFromCommandLineArguments

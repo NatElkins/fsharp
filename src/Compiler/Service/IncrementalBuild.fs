@@ -39,6 +39,31 @@ open FSharp.Compiler.TypedTree
 open FSharp.Compiler.TypedTreeOps
 open FSharp.Compiler.BuildGraph
 
+module private IncrementalBuilderFs1023Trace =
+    let private isEnabled () =
+        match Environment.GetEnvironmentVariable("FS1023_TRACE") with
+        | null
+        | "" -> false
+        | value -> not (String.Equals(value.Trim(), "0", StringComparison.Ordinal))
+
+    let trace format =
+        Printf.kprintf
+            (fun message ->
+                if isEnabled () then
+                    let path =
+                        match Environment.GetEnvironmentVariable("FS1023_TRACE_PATH") with
+                        | null
+                        | "" -> "/tmp/fs1023_trace.log"
+                        | custom -> custom
+
+                    let entry =
+                        sprintf "%s [fs1023][incrementalbuilder] %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+
+                    try
+                        File.AppendAllText(path, entry)
+                    with _ -> ())
+            format
+
 [<AutoOpen>]
 module internal IncrementalBuild =
 
@@ -252,6 +277,9 @@ type BoundModel private (
             let! input, _sourceRange, fileName, parseErrors = syntaxTree.ParseNode.GetOrComputeValue()
             use _ = Activity.start "BoundModel.TypeCheck" [|Activity.Tags.fileName, fileName|]
 
+            IncrementalBuilderFs1023Trace.trace
+                "[tc-info] typecheck begin file=%s" fileName
+
             IncrementalBuilderEventTesting.MRU.Add(IncrementalBuilderEventTesting.IBETypechecked fileName)
             let capturingDiagnosticsLogger = CapturingDiagnosticsLogger("TypeCheck")
             let diagnosticsLogger = GetDiagnosticsLoggerFilteringByScopedNowarn(tcConfig.diagnosticsOptions, capturingDiagnosticsLogger)
@@ -280,6 +308,9 @@ type BoundModel private (
                         TcResultsSink.WithSink sink,
                         prevTcInfo.tcState, input )
                 |> Cancellable.toAsync
+
+            IncrementalBuilderFs1023Trace.trace
+                "[tc-info] typecheck end file=%s" fileName
 
             fileChecked.Trigger fileName
 
@@ -410,6 +441,11 @@ type BoundModel private (
                 startComputingFullTypeCheck |> Async.Catch |> Async.Ignore |> Async.Start
                 getTcInfo typeCheckNode, tcInfoExtras
 
+    let fileTag =
+        match syntaxTreeOpt with
+        | Some syntaxTree -> syntaxTree.SourceRange.FileName
+        | None -> "<generated>"
+
     member val Diagnostics = diagnostics
 
     member val TcInfo = tcInfo
@@ -429,7 +465,15 @@ type BoundModel private (
         ||> ValueOption.map2 (fun a b -> a, b)
         |> ValueOption.toOption
     
-    member this.GetOrComputeTcInfo = this.TcInfo.GetOrComputeValue
+    member this.GetOrComputeTcInfo() =
+        async {
+            IncrementalBuilderFs1023Trace.trace
+                "[tc-info] node begin file=%s" fileTag
+            let! info = this.TcInfo.GetOrComputeValue()
+            IncrementalBuilderFs1023Trace.trace
+                "[tc-info] node end file=%s" fileTag
+            return info
+        }
     
     member this.GetOrComputeTcInfoExtras = this.TcInfoExtras.GetOrComputeValue
     
@@ -785,21 +829,57 @@ module IncrementalBuilderHelpers =
         let diagnosticsLogger = CompilationDiagnosticLogger("FinalizeTypeCheckTask", tcConfig.diagnosticsOptions)
         use _ = new CompilationGlobalsScope(diagnosticsLogger, BuildPhase.TypeCheck)
 
-        let! computedBoundModels = boundModels |> Seq.map (fun g -> g.GetOrComputeValue()) |> MultipleDiagnosticsLoggers.Sequential
+        let projectTag = Path.GetFileName(outfile : string)
+
+        let! computedBoundModels =
+            boundModels
+            |> Seq.mapi (fun idx node ->
+                async {
+                    IncrementalBuilderFs1023Trace.trace
+                        "[bound-model] compute begin project=%s idx=%d" projectTag idx
+
+                    let! value = node.GetOrComputeValue()
+
+                    IncrementalBuilderFs1023Trace.trace
+                        "[bound-model] compute end project=%s idx=%d" projectTag idx
+
+                    return value
+                })
+            |> MultipleDiagnosticsLoggers.Sequential
+
+        IncrementalBuilderFs1023Trace.trace
+            "[bound-model] compute complete project=%s count=%d"
+            projectTag
+            (Seq.length computedBoundModels)
 
         let! tcInfos =
             computedBoundModels
-            |> Seq.map (fun boundModel -> async { return! boundModel.GetOrComputeTcInfo() })
+            |> Seq.mapi (fun idx boundModel ->
+                async {
+                    IncrementalBuilderFs1023Trace.trace
+                        "[tc-info] begin project=%s idx=%d" projectTag idx
+
+                    let! info = boundModel.GetOrComputeTcInfo()
+
+                    IncrementalBuilderFs1023Trace.trace
+                        "[tc-info] end project=%s idx=%d" projectTag idx
+
+                    return info
+                })
             |> MultipleDiagnosticsLoggers.Sequential
 
         // tcInfoExtras can be computed in parallel. This will check any previously skipped implementation files in parallel, too.
         let! latestImplFiles =
             computedBoundModels
-            |> Seq.map (fun boundModel -> async {
+            |> Seq.mapi (fun idx boundModel -> async {
                     if partialCheck then
                         return None
                     else
+                        IncrementalBuilderFs1023Trace.trace
+                            "[tc-info] extras begin project=%s idx=%d" projectTag idx
                         let! tcInfoExtras = boundModel.GetOrComputeTcInfoExtras()
+                        IncrementalBuilderFs1023Trace.trace
+                            "[tc-info] extras end project=%s idx=%d" projectTag idx
                         return tcInfoExtras.latestImplFile
                 })
             |> MultipleDiagnosticsLoggers.Parallel
@@ -998,15 +1078,22 @@ module IncrementalBuilderStateHelpers =
 
     let createFinalizeBoundModelGraphNode (initialState: IncrementalBuilderInitialState) (boundModels: GraphNode<BoundModel> seq) =
         GraphNode(async {
-            use _ = Activity.start "GetCheckResultsAndImplementationsForProject" [|Activity.Tags.project, initialState.outfile|]
-            let! result = 
-                FinalizeTypeCheckTask 
-                    initialState.tcConfig 
+            use _ = Activity.start "GetCheckResultsAndImplementationsForProject" [| Activity.Tags.project, initialState.outfile |]
+            IncrementalBuilderFs1023Trace.trace
+                "[bound-model] finalize begin project=%s" initialState.outfile
+
+            let! result =
+                FinalizeTypeCheckTask
+                    initialState.tcConfig
                     initialState.tcGlobals
                     initialState.enablePartialTypeChecking
-                    initialState.assemblyName 
-                    initialState.outfile 
+                    initialState.assemblyName
+                    initialState.outfile
                     boundModels
+
+            IncrementalBuilderFs1023Trace.trace
+                "[bound-model] finalize end project=%s" initialState.outfile
+
             return result, DateTime.UtcNow
         })
 
@@ -1328,6 +1415,8 @@ type IncrementalBuilder(initialState: IncrementalBuilderInitialState, state: Inc
 
     member builder.GetCheckResultsAndImplementationsForProject() =
       async {
+        IncrementalBuilderFs1023Trace.trace
+            "[project-check] get-results begin project=%s" initialState.outfile
         let cache = TimeStampCache(defaultTimeStamp)
         do! checkFileTimeStamps cache
         let! result = currentState.finalizedBoundModel.GetOrComputeValue()
@@ -1335,14 +1424,20 @@ type IncrementalBuilder(initialState: IncrementalBuilderInitialState, state: Inc
         | (ilAssemRef, tcAssemblyDataOpt, tcAssemblyExprOpt, boundModel), timestamp ->
             let cache = TimeStampCache defaultTimeStamp
             let projectTimeStamp = builder.GetLogicalTimeStampForProject(cache)
+            IncrementalBuilderFs1023Trace.trace
+                "[project-check] get-results end project=%s timestamp=%O" initialState.outfile timestamp
             return PartialCheckResults (boundModel, timestamp, projectTimeStamp), ilAssemRef, tcAssemblyDataOpt, tcAssemblyExprOpt
       }
 
     member builder.GetFullCheckResultsAndImplementationsForProject() =
         async {
+            IncrementalBuilderFs1023Trace.trace
+                "[project-check] get-full begin project=%s" initialState.outfile
             let! result = builder.GetCheckResultsAndImplementationsForProject()
             let results, _, _, _ = result
             let! _ = results.GetOrComputeTcInfoWithExtras() // Make sure we forcefully evaluate the info
+            IncrementalBuilderFs1023Trace.trace
+                "[project-check] get-full end project=%s" initialState.outfile
             return result
         }
 

@@ -42,6 +42,30 @@ open FSharp.Compiler.TypedTree
 open FSharp.Compiler.TypedTreeOps
 open FSharp.Compiler.TcGlobals
 
+let private fs1023TraceEnabled () =
+    match Environment.GetEnvironmentVariable("FS1023_TRACE") with
+    | null
+    | "" -> false
+    | value -> not (String.Equals(value.Trim(), "0", StringComparison.Ordinal))
+
+let private fs1023Trace format =
+    Printf.kprintf
+        (fun message ->
+            if fs1023TraceEnabled () then
+                let path =
+                    match Environment.GetEnvironmentVariable("FS1023_TRACE_PATH") with
+                    | null
+                    | "" -> "/tmp/fs1023_trace.log"
+                    | custom -> custom
+
+                let entry =
+                    sprintf "%s [fs1023][parsecheck] %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+
+                try
+                    File.AppendAllText(path, entry)
+                with _ -> ())
+        format
+
 let CanonicalizeFilename fileName =
     let basic = FileSystemUtils.fileNameOfPath fileName
 
@@ -1231,6 +1255,12 @@ let CheckOneInput
             use _ =
                 Activity.start "ParseAndCheckInputs.CheckOneInput" [| Activity.Tags.fileName, input.FileName |]
 
+            if fs1023TraceEnabled () then
+                fs1023Trace
+                    "[tc-info] check-one begin file=%s kind=%s"
+                    input.FileName
+                    (match input with ParsedInput.SigFile _ -> "sig" | ParsedInput.ImplFile _ -> "impl")
+
             CheckSimulateException tcConfig
 
             let m = input.Range
@@ -1245,6 +1275,9 @@ let CheckOneInput
             match input with
             | ParsedInput.SigFile file ->
                 let qualNameOfFile = file.QualifiedName
+
+                if fs1023TraceEnabled () then
+                    fs1023Trace "[tc-info] sig begin file=%s" file.FileName
 
                 // Check if we've seen this top module signature before.
                 if Zmap.mem qualNameOfFile tcState.tcsRootSigs then
@@ -1289,6 +1322,9 @@ let CheckOneInput
                         tcsCreatesGeneratedProvidedTypes = tcState.tcsCreatesGeneratedProvidedTypes || createsGeneratedProvidedTypes
                     }
 
+                if fs1023TraceEnabled () then
+                    fs1023Trace "[tc-info] sig end file=%s" file.FileName
+
                 return (tcEnv, EmptyTopAttrs, None, ccuSigForFile), tcState
 
             | ParsedInput.ImplFile file ->
@@ -1302,6 +1338,13 @@ let CheckOneInput
                     errorR (Error(FSComp.SR.buildImplementationAlreadyGiven (qualNameOfFile.Text), m))
 
                 let hadSig = rootSigOpt.IsSome
+
+                if fs1023TraceEnabled () then
+                    fs1023Trace
+                        "[tc-info] impl begin file=%s hadSig=%b fragments=%d"
+                        file.FileName
+                        hadSig
+                        file.Contents.Length
 
                 // Typecheck the implementation file
                 let! topAttrs, implFile, tcEnvAtEnd, createsGeneratedProvidedTypes =
@@ -1331,6 +1374,10 @@ let CheckOneInput
                         tcState
 
                 let result = (tcEnvAtEnd, topAttrs, Some implFile, ccuSigForFile)
+
+                if fs1023TraceEnabled () then
+                    fs1023Trace "[tc-info] impl end file=%s" file.FileName
+
                 return result, tcState
 
         with RecoverableException e ->

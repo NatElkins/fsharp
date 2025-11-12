@@ -6073,6 +6073,9 @@ let CheckOneImplFile
                     Activity.Tags.fileName, fileName
                     Activity.Tags.qualifiedNameOfFile, qualNameOfFile.Text
                 |]
+
+        if fs1023Enabled () then
+            fs1023Trace "[tc-info] impl begin file=%s fragments=%d" fileName implFileFrags.Length
         let cenv =
             cenv.Create (g, isScript, amap, thisCcu, false, Option.isSome rootSigOpt,
                 conditionalDefines,
@@ -6089,9 +6092,25 @@ let CheckOneImplFile
         let envinner, moduleTyAcc = MakeInitialEnv env 
 
         let defs = [ for x in implFileFrags -> SynModuleDecl.NamespaceFragment x ]
+
+        if fs1023Enabled () then
+            let fragmentNames =
+                implFileFrags
+                |> List.map (fun frag ->
+                    match frag with
+                    | SynModuleOrNamespace(longId = lid) -> textOfLid lid)
+                |> String.concat ","
+            fs1023Trace
+                "[tc-info] impl fragments typecheck begin file=%s fragments=%s"
+                fileName
+                fragmentNames
+
         let! moduleContents, topAttrs, envAtEnd = 
             TcModuleOrNamespaceElements cenv ParentNone qualNameOfFile.Range envinner PreXmlDoc.Empty None openDecls0 defs
             |> cenv.stackGuard.GuardCancellable
+
+        if fs1023Enabled () then
+            fs1023Trace "[tc-info] impl fragments typecheck end file=%s" fileName
 
         let implFileTypePriorToSig = moduleTyAcc.Value
 
@@ -6203,6 +6222,9 @@ let CheckOneImplFile
            |> Map
 
         let implFile = CheckedImplFile (qualNameOfFile, implFileTy, implFileContents, hasExplicitEntryPoint, isScript, anonRecdTypes, namedDebugPointsForInlinedCode)
+
+        if fs1023Enabled () then
+            fs1023Trace "[tc-info] impl end file=%s" fileName
 
         return (topAttrs, implFile, envAtEnd, cenv.createsGeneratedProvidedTypes)
      } 

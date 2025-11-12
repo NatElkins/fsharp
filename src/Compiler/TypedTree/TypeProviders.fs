@@ -445,7 +445,22 @@ type ProvidedType (x: Type, ctxt: ProvidedTypeContext) =
     member _.GetGenericArguments() = x.GetGenericArguments() |> ProvidedType.CreateArray ctxt
 
     member _.ApplyStaticArguments(provider: ITypeProvider, fullTypePathAfterArguments, staticArgs: objnull[]) = 
-        provider.ApplyStaticArguments(x, fullTypePathAfterArguments,  staticArgs) |> ProvidedType.Create ctxt
+        let targetPath =
+            match fullTypePathAfterArguments with
+            | null -> ""
+            | segments -> String.concat "." segments
+        let argCount = if isNull staticArgs then 0 else staticArgs.Length
+        if fs1023TraceEnabled () then
+            fs1023Trace "[typeproviders] apply-static-type begin provider=%s path=%s args=%d" (provider.GetType().FullName) targetPath argCount
+        try
+            let result = provider.ApplyStaticArguments(x, fullTypePathAfterArguments, staticArgs) |> ProvidedType.Create ctxt
+            if fs1023TraceEnabled () then
+                fs1023Trace "[typeproviders] apply-static-type end provider=%s path=%s" (provider.GetType().FullName) targetPath
+            result
+        with ex ->
+            if fs1023TraceEnabled () then
+                fs1023Trace "[typeproviders] apply-static-type fail provider=%s path=%s ex=%s" (provider.GetType().FullName) targetPath (ex.GetType().FullName)
+            raise ex
 
     member _.IsVoid = (Type.op_Equality(x, typeof<Void>) || (x.Namespace = "System" && x.Name = "Void"))
 
@@ -745,8 +760,12 @@ type ProvidedMethodBase (x: MethodBase, ctxt) =
 
     member _.ApplyStaticArgumentsForMethod(provider: ITypeProvider, fullNameAfterArguments: string, staticArgs: objnull[]) = 
         let bindingFlags = BindingFlags.Instance ||| BindingFlags.Public ||| BindingFlags.InvokeMethod
+        let argCount = if isNull staticArgs then 0 else staticArgs.Length
 
-        let mb = 
+        if fs1023TraceEnabled () then
+            fs1023Trace "[typeproviders] apply-static-method begin provider=%s member=%s args=%d" (provider.GetType().FullName) fullNameAfterArguments argCount
+
+        let apply() =
             match provider with 
             | :? ITypeProvider2 as itp2 -> 
                 itp2.ApplyStaticArgumentsForMethod(x, fullNameAfterArguments, staticArgs)  
@@ -768,10 +787,23 @@ type ProvidedMethodBase (x: MethodBase, ctxt) =
                 match mbAsObj with 
                 | :? MethodBase as mb -> mb
                 | _ -> failwith (FSComp.SR.estApplyStaticArgumentsForMethodNotImplemented())
-        match mb with 
-        | :? MethodInfo as mi -> (mi |> ProvidedMethodInfo.CreateNonNull ctxt : ProvidedMethodInfo) :> ProvidedMethodBase
-        | :? ConstructorInfo as ci -> (ci |> ProvidedConstructorInfo.CreateNonNull ctxt : ProvidedConstructorInfo) :> ProvidedMethodBase
-        | _ -> failwith (FSComp.SR.estApplyStaticArgumentsForMethodNotImplemented())
+
+        try
+            let mb = apply()
+            let result =
+                match mb with 
+                | :? MethodInfo as mi -> (mi |> ProvidedMethodInfo.CreateNonNull ctxt : ProvidedMethodInfo) :> ProvidedMethodBase
+                | :? ConstructorInfo as ci -> (ci |> ProvidedConstructorInfo.CreateNonNull ctxt : ProvidedConstructorInfo) :> ProvidedMethodBase
+                | _ -> failwith (FSComp.SR.estApplyStaticArgumentsForMethodNotImplemented())
+
+            if fs1023TraceEnabled () then
+                fs1023Trace "[typeproviders] apply-static-method end provider=%s member=%s" (provider.GetType().FullName) fullNameAfterArguments
+
+            result
+        with ex ->
+            if fs1023TraceEnabled () then
+                fs1023Trace "[typeproviders] apply-static-method fail provider=%s member=%s ex=%s" (provider.GetType().FullName) fullNameAfterArguments (ex.GetType().FullName)
+            raise ex
 
 
 [<Sealed>] 

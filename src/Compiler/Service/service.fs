@@ -37,6 +37,31 @@ open FSharp.Compiler.Text.Range
 open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.BuildGraph
 
+module private Fs1023Trace =
+    let isEnabled () =
+        match Environment.GetEnvironmentVariable("FS1023_TRACE") with
+        | null
+        | "" -> false
+        | value -> not (value.Trim().Equals("0", StringComparison.OrdinalIgnoreCase))
+
+    let trace format =
+        Printf.kprintf
+            (fun message ->
+                if isEnabled () then
+                    let path =
+                        match Environment.GetEnvironmentVariable("FS1023_TRACE_PATH") with
+                        | null
+                        | "" -> "/tmp/fs1023_trace.log"
+                        | custom -> custom
+
+                    let entry =
+                        sprintf "%s [fs1023][compileops] %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+
+                    try
+                        File.AppendAllText(path, entry)
+                    with _ -> ())
+            format
+
 /// Callback that indicates whether a requested result has become obsolete.
 [<NoComparison; NoEquality>]
 type IsResultObsolete = IsResultObsolete of (unit -> bool)
@@ -83,8 +108,13 @@ module CompileHelpers =
         let diagnostics, diagnosticsLogger, loggerProvider =
             mkCompilationDiagnosticsHandlers (argv |> Array.contains "--flaterrors")
 
+        if Fs1023Trace.isEnabled () then
+            Fs1023Trace.trace "compileFromArgs begin args=%s" (String.concat " " argv)
+
         let result =
             tryCompile diagnosticsLogger (fun exiter ->
+                if Fs1023Trace.isEnabled () then
+                    Fs1023Trace.trace "compileFromArgs invoke compile argvCount=%d" argv.Length
                 CompileFromCommandLineArguments(
                     ctok,
                     argv,
@@ -97,6 +127,11 @@ module CompileHelpers =
                     tcImportsCapture,
                     dynamicAssemblyCreator
                 ))
+
+        if Fs1023Trace.isEnabled () then
+            match result with
+            | None -> Fs1023Trace.trace "compileFromArgs end diagnostics=%d" diagnostics.Count
+            | Some ex -> Fs1023Trace.trace "compileFromArgs fail %s" (ex.GetType().FullName)
 
         diagnostics.ToArray(), result
 
@@ -335,7 +370,15 @@ type FSharpChecker
 
         async {
             let ctok = CompilationThreadToken()
-            return CompileHelpers.compileFromArgs (ctok, argv, legacyReferenceResolver, None, None)
+            if Fs1023Trace.isEnabled () then
+                Fs1023Trace.trace "checker.compile begin userOp=%s args=%d" _userOpName argv.Length
+            let diagnostics, result =
+                CompileHelpers.compileFromArgs (ctok, argv, legacyReferenceResolver, None, None)
+            if Fs1023Trace.isEnabled () then
+                match result with
+                | None -> Fs1023Trace.trace "checker.compile end userOp=%s diagnostics=%d" _userOpName diagnostics.Length
+                | Some ex -> Fs1023Trace.trace "checker.compile fail userOp=%s ex=%s" _userOpName (ex.GetType().FullName)
+            return diagnostics, result
         }
 
     /// This function is called when the entire environment is known to have changed for reasons not encoded in the ProjectOptions of any project/compilation.
