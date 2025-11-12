@@ -11037,6 +11037,8 @@ and private genProvidedMemberBinding cenv mgbuf eenv tref (entry: ProvidedIlxMem
             else
                 ComputeMethodAccessRestrictedBySig eenv vspec
 
+        let eenvForMeth = EnvForTypars (ctps @ mtps) eenv
+
         GenMethodForBinding
             cenv
             mgbuf
@@ -11062,37 +11064,15 @@ and private genProvidedMemberBinding cenv mgbuf eenv tref (entry: ProvidedIlxMem
              methLambdaBodyTy)
 
         match vspec.MemberInfo with
-        | Some memberInfo when memberInfo.MemberFlags.MemberKind = SynMemberKind.PropertyGet ->
+        | Some memberInfo when
+            memberInfo.MemberFlags.MemberKind = SynMemberKind.PropertyGet
+            && CompileAsEvent g vspec.Attribs
+            ->
+
             let propTy = ReturnTypeOfPropertyVal g vspec
-            let ilPropTy = GenType cenv vspec.Range eenv.tyenv propTy
-            let ilArgTys =
-                vspec
-                |> ArgInfosOfPropertyVal g
-                |> List.map fst
-                |> GenTypes cenv vspec.Range eenv.tyenv
-
-            let callingConv =
-                if memberInfo.MemberFlags.IsInstance then
-                    ILThisConvention.Instance
-                else
-                    ILThisConvention.Static
-
-            let getterRef = mspec.MethodRef
-
-            let propDef =
-                ILPropertyDef(
-                    name = vspec.PropertyName,
-                    attributes = PropertyAttributes.None,
-                    setMethod = None,
-                    getMethod = Some getterRef,
-                    callingConv = callingConv,
-                    propertyType = ilPropTy,
-                    init = None,
-                    args = ilArgTys,
-                    customAttrs = mkILCustomAttrs []
-                )
-
-            mgbuf.AddOrMergePropertyDef(tref, propDef, vspec.Range)
+            let ilAttrs: ILAttribute list = []
+            let edef = GenEventForProperty cenv eenvForMeth mspec vspec ilAttrs vspec.Range propTy
+            mgbuf.AddEventDef(tref, edef)
         | _ -> ()
     | storage ->
         if fs1023TraceEnabled () then
@@ -11222,6 +11202,55 @@ and private GenProvidedTypeDef cenv (mgbuf: AssemblyBuilder) eenv m (tycon: Tyco
 
     providedCatalog.OrderedEntries
     |> List.iter (genProvidedMemberBinding cenv mgbuf eenvinner tref)
+
+    providedCatalog.PropertiesByName
+    |> Map.iter (fun name shape ->
+        let accessorOpt =
+            match shape.Getter with
+            | Some getter -> Some getter
+            | None -> shape.Setter
+
+        match accessorOpt with
+        | None -> ()
+        | Some representative ->
+            let vspec = representative.ValRef.Deref
+            let propTy = ReturnTypeOfPropertyVal g vspec
+            let ilPropTy = GenType cenv vspec.Range eenvinner.tyenv propTy |> GenReadOnlyModReqIfNecessary g propTy
+            let ilArgTys =
+                vspec
+                |> ArgInfosOfPropertyVal g
+                |> List.map fst
+                |> GenTypes cenv vspec.Range eenvinner.tyenv
+
+            let callingConv =
+                match representative.MemberFlags with
+                | Some flags when not flags.IsInstance -> ILThisConvention.Static
+                | _ -> ILThisConvention.Instance
+
+            let methodRefFor entry =
+                entry.MemberInfo
+                |> Option.map (fun memberInfo ->
+                    let mspec, _, _, _, _, _, _, _, _, _ = GetMethodSpecForMemberVal cenv memberInfo entry.ValRef
+                    mspec.MethodRef)
+
+            let getterRef = shape.Getter |> Option.bind methodRefFor
+            let setterRef = shape.Setter |> Option.bind methodRefFor
+
+            if getterRef.IsSome || setterRef.IsSome then
+                let propDef =
+                    ILPropertyDef(
+                        name = name,
+                        attributes = PropertyAttributes.None,
+                        setMethod = setterRef,
+                        getMethod = getterRef,
+                        callingConv = callingConv,
+                        propertyType = ilPropTy,
+                        init = None,
+                        args = ilArgTys,
+                        customAttrs = mkILCustomAttrs []
+                    )
+
+                mgbuf.AddOrMergePropertyDef(tref, propDef, vspec.Range))
 
     Some tref
 #endif
