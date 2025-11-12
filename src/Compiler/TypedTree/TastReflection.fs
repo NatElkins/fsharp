@@ -1072,7 +1072,6 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                 let attrs, defaultValueOpt, isParamArrayArg, hasFSharpOptionalArg, hasClrOptionalArg =
                     computeParameterMetadata argTy argInfo
                 let normalizedArgTy = stripTyEqns g argTy
-                printfn "[tast-debug] TxMethodDef %s param[%d]=%A" compiledName position normalizedArgTy
                 let parameterType =
                     if isParamArrayArg then
                         if isArrayTy g normalizedArgTy then
@@ -1230,7 +1229,6 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                 let attrs, defaultValueOpt, isParamArrayArg, hasFSharpOptionalArg, hasClrOptionalArg =
                     computeParameterMetadata argTy argInfo
                 let normalizedArgTy = stripTyEqns g argTy
-                printfn "[tast-debug] TxMethodDef %s param[%d]=%A" compiledName position normalizedArgTy
                 let parameterType =
                     if isParamArrayArg then
                         if isArrayTy g normalizedArgTy then
@@ -1405,7 +1403,6 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                     |> List.filter (fun vref ->
                         (vref.IsPropertyGetterMethod || vref.IsPropertySetterMethod)
                         && String.Equals(vref.PropertyName, inp.PropertyName, StringComparison.Ordinal))
-            printfn "[tast-debug] TxPropertyDefinition %s memberCount=%d fallback=%d" inp.PropertyName direct.Length fallback.Length
             fallback
 
         let getterValOpt =
@@ -1443,14 +1440,11 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             override __.GetIndexParameters() =
                 match getterMethodOpt with
                 | Some getter ->
-                    let parameters = getter.GetParameters()
-                    printfn "[tast-debug] getter params=%A" (parameters |> Array.map (fun p -> p.ParameterType.FullName))
-                    parameters
+                    getter.GetParameters()
                 | None ->
                     match setterMethodOpt with
                     | Some setter ->
                         let setterParameters = setter.GetParameters()
-                        printfn "[tast-debug] setter params=%A" (setterParameters |> Array.map (fun p -> p.ParameterType.FullName))
                         if setterParameters.Length <= 1 then
                             Array.empty
                         else
@@ -1993,10 +1987,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         let allProperties = this.GetProperties(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Instance ||| BindingFlags.Static)
 
         let matchesName (p: PropertyInfo) =
-            let res = String.Equals(p.Name, name, StringComparison.Ordinal)
-            if name = "Item" then
-                printfn "[tast-debug] matchesName=%b actual=%s" res p.Name
-            res
+            String.Equals(p.Name, name, StringComparison.Ordinal)
 
         let hasFlag flag = bindingFlags &&& flag = flag
 
@@ -2012,48 +2003,29 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
 
         let matchesVisibility (p: PropertyInfo) =
             let accessor = accessorFor p
-            let res =
-                if isNull accessor then true
-                elif includePublic && not includeNonPublic then accessor.IsPublic
-                elif includeNonPublic && not includePublic then not accessor.IsPublic
-                elif includePublic || includeNonPublic then true
-                else accessor.IsPublic
-            if name = "Item" then
-                printfn "[tast-debug] matchesVisibility=%b accessor.IsPublic=%b" res (if isNull accessor then false else accessor.IsPublic)
-            res
+            if isNull accessor then true
+            elif includePublic && not includeNonPublic then accessor.IsPublic
+            elif includeNonPublic && not includePublic then not accessor.IsPublic
+            elif includePublic || includeNonPublic then true
+            else accessor.IsPublic
 
         let matchesScope (p: PropertyInfo) =
             let accessor = accessorFor p
-            let res =
-                if isNull accessor then true
-                elif includeStatic && not includeInstance then accessor.IsStatic
-                elif includeInstance && not includeStatic then not accessor.IsStatic
-                elif includeStatic || includeInstance then true
-                else true
-            if name = "Item" then
-                printfn "[tast-debug] matchesScope=%b accessor.IsStatic=%b" res (if isNull accessor then false else accessor.IsStatic)
-            res
+            if isNull accessor then true
+            elif includeStatic && not includeInstance then accessor.IsStatic
+            elif includeInstance && not includeStatic then not accessor.IsStatic
+            elif includeStatic || includeInstance then true
+            else true
 
         let matchesReturnType (p: PropertyInfo) =
-            let res =
-                if isNull returnType then true
-                else
-                    let propertyType = p.PropertyType
-                    eqType propertyType returnType
-                    ||
-                    (not (isNull propertyType)
-                     && not (isNull returnType)
-                     && String.Equals(propertyType.FullName, returnType.FullName, StringComparison.Ordinal))
-            if name = "Item" then
-                printfn "[tast-debug] matchesReturnType %b propertyType=%A expected=%A" res p.PropertyType.FullName (if isNull returnType then null else returnType.FullName)
-            res
-
-        if name = "Item" then
-            for p in allProperties do
-                if String.Equals(p.Name, name, StringComparison.Ordinal) then
-                    let paramTypes = p.GetIndexParameters() |> Array.map (fun pi -> pi.ParameterType.FullName)
-                    printfn "[tast-debug] Candidate property type=%A paramTypes=%A canRead=%b canWrite=%b getter-null=%b setter-null=%b"
-                        p.PropertyType.FullName paramTypes p.CanRead p.CanWrite (isNull (p.GetGetMethod(true))) (isNull (p.GetSetMethod(true)))
+            if isNull returnType then true
+            else
+                let propertyType = p.PropertyType
+                eqType propertyType returnType
+                ||
+                (not (isNull propertyType)
+                 && not (isNull returnType)
+                 && String.Equals(propertyType.FullName, returnType.FullName, StringComparison.Ordinal))
 
         let matchesParameters (p: PropertyInfo) =
             match types with
@@ -2067,17 +2039,8 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                 let typesEqual (a: Type) (b: Type) =
                     eqType a b
                     || (not (isNull a) && not (isNull b) && String.Equals(a.FullName, b.FullName, StringComparison.Ordinal))
-                let ok =
-                    parameters.Length = expected.Length &&
-                    Array.forall2 (fun (paramInfo: ParameterInfo) expectedType -> typesEqual paramInfo.ParameterType expectedType) parameters expected
-                if name = "Item" then
-                    let expectedNames = expected |> Array.map (fun t -> t.FullName)
-                    let actualNames = parameters |> Array.map (fun pi -> pi.ParameterType.FullName)
-                    printfn "[tast-debug] matchesParameters len=%d expected=%A actual=%A ok=%b" parameters.Length expectedNames actualNames ok
-                ok
-
-        if name = "Item" then
-            printfn "[tast-debug] GetPropertyImpl Item returnType=%A types=%A propertyCount=%d" returnType types allProperties.Length
+                parameters.Length = expected.Length &&
+                Array.forall2 (fun (paramInfo: ParameterInfo) expectedType -> typesEqual paramInfo.ParameterType expectedType) parameters expected
 
         let rec tryFind index =
             if index >= allProperties.Length then null
@@ -2088,9 +2051,6 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                 let scopeOk = visibilityOk && matchesScope prop
                 let returnOk = scopeOk && matchesReturnType prop
                 let parametersOk = returnOk && matchesParameters prop
-                if name = "Item" then
-                    printfn "[tast-debug] tryFind index=%d nameOk=%b visibilityOk=%b scopeOk=%b returnOk=%b parametersOk=%b"
-                        index nameOk visibilityOk scopeOk returnOk parametersOk
                 if parametersOk then
                     prop
                 else
@@ -2109,9 +2069,6 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                 |> Option.defaultValue null
             else
                 null
-
-        if name = "Item" then
-            printfn "[tast-debug] Item resultIsNull=%b" (isNull result)
 
         result
         //inp.Methods.FindByNameAndArity(name, types.Length)

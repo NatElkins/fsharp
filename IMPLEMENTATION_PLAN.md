@@ -155,6 +155,7 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 - **[Compiler]** Align `ReflectTypeDefinition.GetPropertyImpl` and `GetMethodImpl` with the CLR binder: erase proxy wrappers when comparing parameter types, handle optional arguments and `HasDefaultValue`, and support indexer discovery (`Item` property).
 - **[Tests]** Extend the FS-1023 provider to retrieve the `Item` property with explicit binder arguments and confirm it succeeds.
 - **[Cleanup]** Once the above passes, remove the temporary `[fs1023]` / `[tast]` instrumentation added during investigation.
+  - ✅ Removed the ad-hoc `[tast-debug]` `printfn` statements from `TastReflection.fs`; future diagnostics are handled through the FS1023 tracing infrastructure instead of unconditional console output.
 
 ---
 
