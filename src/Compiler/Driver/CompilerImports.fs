@@ -1681,13 +1681,10 @@ and [<Sealed>] TcImports
             RequireTcImportsLock(tcitok, generatedTycons)
             let stamp = tycon.Stamp
             if not (generatedTycons.ContainsKey stamp) then
-                generatedTycons[stamp] <- tycon)
+                generatedTycons[stamp] <- tycon
+                skipProviderStaticLinking <- true)
 
         fs1023Trace "record-tycon %s" tycon.CompiledName
-
-    member _.MarkProvidedTypeIlEmitted (tycon: Tycon) =
-        tciLock.AcquireLock(fun _tcitok -> skipProviderStaticLinking <- true)
-        fs1023Trace "il-emitted %s skipProviderStaticLinking=true" tycon.CompiledName
 
     member _.PopProvidedGeneratedTycons() =
         tciLock.AcquireLock(fun tcitok ->
@@ -1877,8 +1874,6 @@ and [<Sealed>] TcImports
                 member _.RecordGeneratedTypeRoot root = tcImports.RecordGeneratedTypeRoot root
 
                 member _.RecordGeneratedTycon tycon = tcImports.RecordGeneratedTycon tycon
-
-                member _.MarkProvidedTypeIlEmitted tycon = tcImports.MarkProvidedTypeIlEmitted tycon
 
                 member _.PopProvidedGeneratedTycons() = tcImports.PopProvidedGeneratedTycons()
 

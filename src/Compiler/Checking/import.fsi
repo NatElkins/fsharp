@@ -39,9 +39,6 @@ type AssemblyLoader =
     /// Record that a provider-generated tycon needs IL emission via IlxGen.
     abstract RecordGeneratedTycon: Tycon -> unit
 
-    /// Mark that IlxGen finished emitting IL for the provider-generated tycon so static linking can be skipped safely.
-    abstract MarkProvidedTypeIlEmitted: Tycon -> unit
-
     /// Retrieve and clear the set of provider-generated tycons awaiting IL emission.
     abstract PopProvidedGeneratedTycons: unit -> Tycon list
     abstract RecordProvidedMemberVal: Tycon * ValRef -> unit
