@@ -273,6 +273,7 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 
 - **Goal:** add a minimal C# consumer that references the generated F# assembly, executes the relocation-safe members, and validates the IL does not reference the provider binary.
 - **Status:** ✅ `csharp consumer executes generated member` now targets `net10.0`, references the freshly built Fs1023 consumer DLL plus `FSharp.Core`, and the reflection asserts prove both `Value` and `MapParameters` flow across the language boundary. `/standalone` coverage remains a follow-up once IlxGen stop relying on provider IL entirely.
+- ⚠️ Legacy provider samples under `tests/fsharp/typeProviders` are still compiled out on NETCOREAPP; running `dotnet test tests/fsharp/FSharpSuite.Tests.fsproj --filter "FullyQualifiedName~TypeProviderTests"` discovers zero tests. Re-enabling those IDE scenarios (or running the desktop harness) stays on the backlog.
 
 ### 5.3 Negative tests
 
