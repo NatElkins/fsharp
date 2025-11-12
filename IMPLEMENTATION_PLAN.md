@@ -296,7 +296,7 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 ## Phase 6 — SDK alignment (Status: Not started)
 
 1. **ProvidedTypes documentation**
-   - Update `FSharp.TypeProviders.SDK/src/ProvidedTypes.fs` (and accompanying README/changelog) to call out that FS-1023 proxies now surface real `CustomAttributeData`/`GetCustomAttributes` results so provider authors can inspect optional/paramarray metadata without re-querying the compiler.
+   - ✅ `docs/upcoming/fs-1023.md` now includes detailed guidance for provider authors (use TastReflection proxies, keep invoker quotations self-contained, rely on `ConvertTargetTypeToSource`, avoid double-registering relocated types). When we cut the next TPSDK preview, mirror the same text into the SDK changelog so the guidance ships alongside the SDK NuGet.
 2. **TPSDK regression coverage**
    - Extend `FSharp.TypeProviders.SDK/tests/ProxyTypeTests.fs` (or add a new test) that invokes `ProvidedTypes.ConvertTargetTypeToSource` against the FS-1023 compiler and asserts attribute instances round-trip.
 3. **Release coordination**
