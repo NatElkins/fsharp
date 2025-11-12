@@ -914,12 +914,12 @@ module UseProvided =
             compileWithLogging (Some log) "generic-consumer" consumerArgs (Some (consumerProject, [ consumerPath ]))
             log (sprintf "[fs1023][generic] consumer compiled -> %s" outputDll)
 
-            let consumerAssembly =
-                File.ReadAllBytes(outputDll)
+            let loadAssembly path =
+                File.ReadAllBytes(path)
                 |> Assembly.Load
 
-            let assertProvidedType typeName =
-                let providedType = consumerAssembly.GetType(typeName, throwOnError = true, ignoreCase = false)
+            let assertProvidedType (assembly: Assembly) typeName =
+                let providedType = assembly.GetType(typeName, throwOnError = true, ignoreCase = false)
                 Assert.NotNull(providedType)
 
                 let getStaticStringProperty name =
@@ -948,8 +948,22 @@ module UseProvided =
 
                 Assert.Equal("Value", getStaticStringProperty "Value")
 
-            assertProvidedType "Fs1023Consumer.ProvidedGenericInt"
-            assertProvidedType "Fs1023Consumer.ProvidedGenericString"
+            let consumerAssembly = loadAssembly outputDll
+
+            assertProvidedType consumerAssembly "Fs1023Consumer.ProvidedGenericInt"
+            assertProvidedType consumerAssembly "Fs1023Consumer.ProvidedGenericString"
+
+            // Recompile with /standalone to ensure the IlxGen-emitted IL survives static linking.
+            let standaloneDll = Path.Combine(tempDir, "GenericConsumer.standalone.dll")
+            let standaloneArgs = Array.append consumerArgs [| "--standalone"; "--out:" + standaloneDll |]
+
+            compileWithLogging (Some log) "generic-consumer-standalone" standaloneArgs (Some (consumerProject, [ consumerPath ]))
+            log (sprintf "[fs1023][generic] standalone consumer compiled -> %s" standaloneDll)
+
+            let standaloneAssembly = loadAssembly standaloneDll
+
+            assertProvidedType standaloneAssembly "Fs1023Consumer.ProvidedGenericInt"
+            assertProvidedType standaloneAssembly "Fs1023Consumer.ProvidedGenericString"
         finally
             if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
                 printfn "[fs1023] preserving temp dir %s" tempDir
