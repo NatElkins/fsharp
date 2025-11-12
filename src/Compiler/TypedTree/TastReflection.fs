@@ -877,7 +877,11 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             ParameterAttributes.None
             |> fun attrs -> if isInArg then attrs ||| ParameterAttributes.In else attrs
             |> fun attrs -> if isOutArg then attrs ||| ParameterAttributes.Out else attrs
-            |> fun attrs -> if hasClrOptionalArg then attrs ||| ParameterAttributes.Optional else attrs
+            |> fun attrs ->
+                if hasClrOptionalArg || hasFSharpOptionalArg then
+                    attrs ||| ParameterAttributes.Optional
+                else
+                    attrs
 
         let defaultValueFromAttribute =
             TryFindFSharpAttributeOpt g g.attrib_DefaultParameterValueAttribute argInfo.Attribs
@@ -894,6 +898,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         let defaultValueOpt =
             match defaultValueFromAttribute with
             | Some value -> Some value
+            | None when hasFSharpOptionalArg -> Some Type.Missing
             | _ -> None
 
         let attrs = if defaultValueOpt.IsSome then attrs ||| ParameterAttributes.HasDefault else attrs
@@ -1978,7 +1983,10 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
 
         let matchesParameters (p: PropertyInfo) =
             match types with
-            | null
+            | null ->
+                // Treat a null 'types' array as "no constraint" just like System.RuntimeType does so callers
+                // of Type.GetProperty("Item") still see indexers even if they don't provide index parameter metadata.
+                true
             | [||] -> p.GetIndexParameters().Length = 0
             | expected ->
                 let parameters = p.GetIndexParameters()
