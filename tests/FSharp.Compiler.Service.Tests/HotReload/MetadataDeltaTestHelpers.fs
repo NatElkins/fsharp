@@ -245,17 +245,18 @@ module internal MetadataDeltaTestHelpers =
         metadataRoot.Serialize(blob, 0, 0)
         blob.ToArray()
 
-    let createPropertyModule () =
+    let createPropertyModule (?messageLiteral: string) () =
         let ilg = ilGlobals
         let stringType = ilg.typ_String
         let typeName = "Sample.PropertyHost"
+        let literal = defaultArg messageLiteral "delta"
 
         let getterBody =
             mkMethodBody(
                 false,
                 [],
                 2,
-                nonBranchingInstrsToCode [ I_ldstr "delta"; I_ret ],
+                nonBranchingInstrsToCode [ I_ldstr literal; I_ret ],
                 None,
                 None)
 
@@ -307,16 +308,27 @@ module internal MetadataDeltaTestHelpers =
             (mkILExportedTypes [])
             "v4.0.30319"
 
-    let createEventModule () =
+    let createEventModule (?messageLiteral: string) () =
         let ilg = ilGlobals
         let typeName = "Sample.EventHost"
         let typeRef = mkILTyRef(ILScopeRef.Local, typeName)
+        let literal = defaultArg messageLiteral "event baseline payload"
+        let handlerType = ilg.typ_Object
 
-        let accessorBody =
+        let addBody =
             mkMethodBody(
                 false,
                 [],
                 2,
+                nonBranchingInstrsToCode [ I_ldstr literal; AI_pop; I_ret ],
+                None,
+                None)
+
+        let removeBody =
+            mkMethodBody(
+                false,
+                [],
+                1,
                 nonBranchingInstrsToCode [ I_ret ],
                 None,
                 None)
@@ -325,9 +337,9 @@ module internal MetadataDeltaTestHelpers =
             mkILNonGenericInstanceMethod(
                 name,
                 ILMemberAccess.Public,
-                [],
+                [ mkILParamNamed("handler", handlerType) ],
                 mkILReturn ILType.Void,
-                accessorBody)
+                if name.StartsWith("add", StringComparison.Ordinal) then addBody else removeBody)
             |> fun methodDef -> methodDef.WithSpecialName.WithHideBySig(true)
 
         let addMethod = makeAccessor "add_OnChanged"
@@ -335,11 +347,11 @@ module internal MetadataDeltaTestHelpers =
 
         let eventDef =
             ILEventDef(
-                Some ilg.typ_Object,
+                Some handlerType,
                 "OnChanged",
                 EventAttributes.None,
-                mkILMethRef(typeRef, ILCallingConv.Instance, "add_OnChanged", 0, [], ILType.Void),
-                mkILMethRef(typeRef, ILCallingConv.Instance, "remove_OnChanged", 0, [], ILType.Void),
+                mkILMethRef(typeRef, ILCallingConv.Instance, "add_OnChanged", 0, [ handlerType ], ILType.Void),
+                mkILMethRef(typeRef, ILCallingConv.Instance, "remove_OnChanged", 0, [ handlerType ], ILType.Void),
                 None,
                 [],
                 emptyILCustomAttrs)
@@ -569,12 +581,12 @@ module internal MetadataDeltaTestHelpers =
           ParameterRows: DeltaWriter.ParameterDefinitionRowInfo list
           Update: DeltaWriter.MethodMetadataUpdate }
 
-    type PropertyDeltaArtifacts =
+    type MetadataDeltaArtifacts =
         { BaselineBytes: byte[]
           Delta: DeltaWriter.MetadataDelta }
 
-    let emitPropertyDeltaArtifacts () =
-        let moduleDef = createPropertyModule ()
+    let emitPropertyDeltaArtifacts (?messageLiteral: string) () : MetadataDeltaArtifacts =
+        let moduleDef = createPropertyModule ?messageLiteral ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()
@@ -699,6 +711,61 @@ module internal MetadataDeltaTestHelpers =
                 (srmReader.GetHeapSize HeapIndex.String)
                 (srmReader.GetHeapSize HeapIndex.Blob)
                 (srmReader.GetHeapSize HeapIndex.Guid)
+
+        { BaselineBytes = assemblyBytes
+          Delta = metadataDelta }
+
+    let emitEventDeltaArtifacts (?messageLiteral: string) () : MetadataDeltaArtifacts =
+        let moduleDef = createEventModule ?messageLiteral ()
+        let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
+        use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+        let builder = IlDeltaStreamBuilder None
+
+        let addHandle = findMethodHandle metadataReader "Sample.EventHost" "add_OnChanged"
+        let methodKey = methodKey "Sample.EventHost" "add_OnChanged" ILType.Void
+        let addDef = metadataReader.GetMethodDefinition addHandle
+
+        let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
+            [ { Key = methodKey
+                RowId = 1
+                IsAdded = false
+                Attributes = addDef.Attributes
+                ImplAttributes = addDef.ImplAttributes
+                Name = metadataReader.GetString addDef.Name
+                NameHandle = if addDef.Name.IsNil then None else Some addDef.Name
+                Signature = metadataReader.GetBlobBytes addDef.Signature
+                SignatureHandle = if addDef.Signature.IsNil then None else Some addDef.Signature
+                FirstParameterRowId = None } ]
+
+        let updates: DeltaWriter.MethodMetadataUpdate list =
+            [ { MethodKey = methodKey
+                MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit addHandle)
+                MethodHandle = addHandle
+                Body =
+                    { MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit addHandle)
+                      LocalSignatureToken = 0
+                      CodeOffset = 0
+                      CodeLength = 1 } } ]
+
+        let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
+
+        let metadataDelta =
+            DeltaWriter.emit
+                builder.MetadataBuilder
+                moduleName
+                (System.Guid.NewGuid())
+                (System.Guid.NewGuid())
+                (System.Guid.NewGuid())
+                methodDefinitionRows
+                []
+                []
+                []
+                []
+                []
+                []
+                updates
+                MetadataHeapOffsets.Zero
 
         { BaselineBytes = assemblyBytes
           Delta = metadataDelta }
