@@ -131,7 +131,7 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 ### 1.3 Update `ImportMap`
 
 - ✅ **Done** — `ImportMap` now owns `GetTypeReflectionBuilder`/`ReflectType`, and call sites use the helper instead of reaching through `AssemblyLoader`.
-  - **Next up:** audit remaining compiler code for direct `GetTypeReflectionBuilder` usage and route them through `ImportMap` where appropriate to keep the abstraction consistent.
+  - ✅ 12 Nov 2025 — Audit complete: a repo-wide search shows only `ImportMap`/`TcImports` implementations reference `GetTypeReflectionBuilder`, so no additional call sites need routing.
 
 ### 1.4 Utility functions
 
