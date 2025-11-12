@@ -308,6 +308,7 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
 ## Phase 7 — Clean-up and validation (Status: Not started)
 
 1. **Run full test suite** (`./build.sh Test`).
+   - ✅ 12 Nov 2025 — Started the sweep by running `dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Release`. The run succeeded (only the long-standing nullability warnings appeared), so component-level coverage is green; next up is wiring the remaining legs (`FSharp.Compiler.Service.Tests`, FSharpSuite, `./build.sh Test`) for full sign-off.
 2. **Review API surface** to ensure no public breaking changes.
 3. **Prepare PR** targeting `dotnet/fsharp` with summary, risk assessment, and links to design docs.
 4. **Coordinate with SDK release plan** if updates are required in `FSharp.TypeProviders.SDK` NuGet package.
