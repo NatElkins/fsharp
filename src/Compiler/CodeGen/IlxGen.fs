@@ -11009,8 +11009,9 @@ and GenPrintingMethod cenv eenv methName ilThisTy m =
     ]
 
 #if !NO_TYPEPROVIDERS
-and private genProvidedMemberBinding cenv mgbuf eenv tref (vref: ValRef) =
+and private genProvidedMemberBinding cenv mgbuf eenv tref (entry: ProvidedIlxMemberEntry) =
     let g = cenv.g
+    let vref = entry.ValRef
     let vspec = vref.Deref
 
     match StorageForVal vspec.Range vspec eenv with
@@ -11022,7 +11023,10 @@ and private genProvidedMemberBinding cenv mgbuf eenv tref (vref: ValRef) =
                 mspec.MethodRef.DeclaringTypeRef.FullName
                 (ComputeMethodAccessRestrictedBySig eenv vspec)
 
-        let lambdaExpr = ensureProvidedBody g vspec
+        let lambdaExpr =
+            match entry.Body with
+            | Some expr -> expr
+            | None -> ensureProvidedBody g vspec
         let methLambdaTypars, ctorThisValOpt, baseValOpt, methLambdaCurriedVars, methLambdaBody, methLambdaBodyTy =
             IteratedAdjustLambdaToMatchValReprInfo g cenv.amap valReprInfo lambdaExpr
 
@@ -11217,7 +11221,7 @@ and private GenProvidedTypeDef cenv (mgbuf: AssemblyBuilder) eenv m (tycon: Tyco
         fs1023Trace "[ilxgen][provided] members for %s = %A" tref.FullName memberNames
 
     providedCatalog.OrderedEntries
-    |> List.iter (fun entry -> genProvidedMemberBinding cenv mgbuf eenvinner tref entry.ValRef)
+    |> List.iter (genProvidedMemberBinding cenv mgbuf eenvinner tref)
 
     Some tref
 #endif
