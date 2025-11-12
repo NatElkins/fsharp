@@ -301,7 +301,7 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
 2. **TPSDK regression coverage**
    - ✅ `actual TastReflection proxy round-trips through ProvidedTypesContext` lives in `FSharp.TypeProviders.SDK/tests/ProxyTypeTests.fs`, uses `FSharpChecker` + `ImportMap.ReflectTypeWithDependencies` to obtain a real compiler proxy, and now passes under the preview `.NET 10.0` toolset via `DOTNET_ROLL_FORWARD=LatestMajor ../fsharp/.dotnet/dotnet test … --filter FullyQualifiedName~ProxyTypeTests`. MSBuild still warns about duplicate `FSharp.Core` references (nuget 4.7.2 vs. the locally built 9.x binary); follow-up: consolidate the references so the test runs warning-free without shimming `global.json`.
 3. **Release coordination**
-   - ✅ Added a “Version pairing & rollout guidance” section to `docs/upcoming/fs-1023.md` so provider authors know to use the fs-1023 compiler/nightly TPSDK pairing until GA. Remaining work: wire the same guidance into the SDK release notes once the preview package is cut.
+   - ✅ Added a “Version pairing & rollout guidance” section to `docs/upcoming/fs-1023.md` and mirrored the same note in `FSharp.TypeProviders.SDK/RELEASE_NOTES.md` (8.2.0-preview entry) so provider authors know to use the fs-1023 compiler/nightly TPSDK pairing until GA.
 
 ---
 
