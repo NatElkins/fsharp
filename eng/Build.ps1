@@ -646,6 +646,15 @@ try {
         TestUsingMSBuild -testProject "$RepoRoot\tests\FSharp.Compiler.ComponentTests\FSharp.Compiler.ComponentTests.fsproj" -targetFramework $script:desktopTargetFramework
         TestUsingMSBuild -testProject "$RepoRoot\tests\FSharp.Compiler.Service.Tests\FSharp.Compiler.Service.Tests.fsproj" -targetFramework $script:coreclrTargetFramework
         TestUsingMSBuild -testProject "$RepoRoot\tests\FSharp.Compiler.Service.Tests\FSharp.Compiler.Service.Tests.fsproj" -targetFramework $script:desktopTargetFramework
+
+        $typeProviderTestProject = Join-Path $RepoRoot "tests\fsharp\FSharpSuite.Tests.fsproj"
+        $typeProviderFilter = '--filter "FullyQualifiedName~TypeProviderTests"'
+        TestUsingMSBuild -testProject $typeProviderTestProject -targetFramework $script:coreclrTargetFramework -settings $typeProviderFilter
+
+        $isWindowsPlatform = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+        if ($isWindowsPlatform) {
+            TestUsingMSBuild -testProject $typeProviderTestProject -targetFramework $script:desktopTargetFramework -settings $typeProviderFilter
+        }
     }
 
 
