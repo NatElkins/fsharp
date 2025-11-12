@@ -33,6 +33,9 @@ open FSharp.Compiler.LowerStateMachines
 open FSharp.Compiler.Syntax
 open FSharp.Compiler.Syntax.PrettyNaming
 open FSharp.Compiler.SyntaxTreeOps
+#if !NO_TYPEPROVIDERS
+open FSharp.Compiler.TypeProviders
+#endif
 open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.Text.Range
 open FSharp.Compiler.Text
@@ -72,14 +75,100 @@ let private fs1023Trace format =
                 with _ -> ())
         format
 
-let private isProvidedVal (vref: ValRef) =
 #if !NO_TYPEPROVIDERS
-    match vref.Deref.TryGetProvidedBinding with
-    | Some _ -> true
-    | None -> false
-#else
-    ignore vref
-    false
+type ProvidedIlxMemberEntry =
+    {
+        Order: int
+        ExplicitImpl: bool
+        ValRef: ValRef
+        Binding: ProvidedMemberBinding
+        MemberInfo: ValMemberInfo option
+        MemberKind: SynMemberKind option
+        MemberFlags: SynMemberFlags option
+        Body: Expr option
+    }
+
+type ProvidedIlxPropertyShape =
+    {
+        Name: string
+        Flags: SynMemberFlags option
+        Getter: ProvidedIlxMemberEntry option
+        Setter: ProvidedIlxMemberEntry option
+        FirstAccessorOrder: int
+    }
+
+type ProvidedIlxMemberCatalog =
+    {
+        OrderedEntries: ProvidedIlxMemberEntry list
+        PropertiesByName: Map<string, ProvidedIlxPropertyShape>
+    }
+
+let private mkPropertyShape name order flags =
+    { Name = name; Flags = flags; Getter = None; Setter = None; FirstAccessorOrder = order }
+
+let private updatePropertyShape accessor entry shape =
+    let flags =
+        match shape.Flags, entry.MemberFlags with
+        | Some existing, _ -> Some existing
+        | None, replacement -> replacement
+
+    let firstAccessorOrder = min shape.FirstAccessorOrder entry.Order
+
+    match accessor with
+    | SynMemberKind.PropertyGet ->
+        { shape with Getter = Some entry; Flags = flags; FirstAccessorOrder = firstAccessorOrder }
+    | SynMemberKind.PropertySet ->
+        { shape with Setter = Some entry; Flags = flags; FirstAccessorOrder = firstAccessorOrder }
+    | _ -> { shape with Flags = flags; FirstAccessorOrder = firstAccessorOrder }
+
+let private collectProvidedMembersForTycon (tycon: Tycon) : ProvidedIlxMemberCatalog =
+    let orderedEntries =
+        tycon.TypeContents.tcaug_adhoc_list
+        |> Seq.mapi (fun idx (explicitImpl, vref) -> idx, explicitImpl, vref)
+        |> Seq.choose (fun (idx, explicitImpl, vref) ->
+            match vref.Deref.TryGetProvidedBinding with
+            | Some binding ->
+                let vspec = vref.Deref
+                let memberInfo = vspec.MemberInfo
+                let memberKind = memberInfo |> Option.map (fun info -> info.MemberFlags.MemberKind)
+                let memberFlags = memberInfo |> Option.map (fun info -> info.MemberFlags)
+
+                Some
+                    {
+                        Order = idx
+                        ExplicitImpl = explicitImpl
+                        ValRef = vref
+                        Binding = binding
+                        MemberInfo = memberInfo
+                        MemberKind = memberKind
+                        MemberFlags = memberFlags
+                        Body = vspec.ReflectedDefinition
+                    }
+            | None -> None)
+        |> Seq.toList
+
+    let propertiesByName =
+        orderedEntries
+        |> List.fold
+            (fun acc entry ->
+                match entry.MemberKind with
+                | Some ((SynMemberKind.PropertyGet as accessor) | (SynMemberKind.PropertySet as accessor)) ->
+                    let name = entry.ValRef.Deref.PropertyName
+
+                    let shape =
+                        match Map.tryFind name acc with
+                        | Some existing -> existing
+                        | None -> mkPropertyShape name entry.Order entry.MemberFlags
+
+                    let updated = updatePropertyShape accessor entry shape
+                    Map.add name updated acc
+                | _ -> acc)
+            Map.empty
+
+    {
+        OrderedEntries = orderedEntries
+        PropertiesByName = propertiesByName
+    }
 #endif
 
 let private ensureProvidedBody (g: TcGlobals) (vspec: Val) =
@@ -11117,17 +11206,18 @@ and private GenProvidedTypeDef cenv (mgbuf: AssemblyBuilder) eenv m (tycon: Tyco
 
     mgbuf.AddTypeDef(tref, tdef, false, false, None)
 
+    let providedCatalog = collectProvidedMembersForTycon tycon
+
     if fs1023TraceEnabled () then
         let memberNames =
-            tycon.MembersOfFSharpTyconSorted
-            |> List.map (fun v -> v.CompiledName g.CompilerGlobalState)
+            providedCatalog.OrderedEntries
+            |> List.map (fun entry -> entry.ValRef.CompiledName g.CompilerGlobalState)
             |> List.toArray
 
         fs1023Trace "[ilxgen][provided] members for %s = %A" tref.FullName memberNames
 
-    tycon.MembersOfFSharpTyconSorted
-    |> List.filter isProvidedVal
-    |> List.iter (genProvidedMemberBinding cenv mgbuf eenvinner tref)
+    providedCatalog.OrderedEntries
+    |> List.iter (fun entry -> genProvidedMemberBinding cenv mgbuf eenvinner tref entry.ValRef)
 
     Some tref
 #endif
