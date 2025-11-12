@@ -2,6 +2,7 @@ module internal FSharp.Compiler.CodeGen.DeltaIndexSizing
 
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
+open FSharp.Compiler.AbstractIL.ILBinaryWriter
 
 type CodedIndexSizes =
     { StringsBig: bool
@@ -32,7 +33,7 @@ let private codedBigness tagBits tableRowCounts tables =
     tables
     |> Array.exists (fun table -> tableSize tableRowCounts table >= (0x10000 >>> tagBits))
 
-let compute (tableRowCounts: int[]) (stringHeapSize: int) (blobHeapSize: int) (guidHeapSize: int) : CodedIndexSizes =
+let compute (tableRowCounts: int[]) (heapSizes: MetadataHeapSizes) : CodedIndexSizes =
     let simpleIndexBig = Array.zeroCreate<bool> MetadataTokens.TableCount
     for index = 0 to tableRowCounts.Length - 1 do
         simpleIndexBig.[index] <- tableRowCounts.[index] >= 0x10000
@@ -130,9 +131,9 @@ let compute (tableRowCounts: int[]) (stringHeapSize: int) (blobHeapSize: int) (g
                TableIndex.AssemblyRef
                TableIndex.TypeRef |]
 
-    { StringsBig = stringHeapSize >= 0x10000
-      GuidsBig = guidHeapSize >= 0x10000
-      BlobsBig = blobHeapSize >= 0x10000
+    { StringsBig = heapSizes.StringHeapSize >= 0x10000
+      GuidsBig = heapSizes.GuidHeapSize >= 0x10000
+      BlobsBig = heapSizes.BlobHeapSize >= 0x10000
       SimpleIndexBig = simpleIndexBig
       TypeDefOrRefBig = typeDefOrRefBig
       TypeOrMethodDefBig = typeOrMethodDefBig

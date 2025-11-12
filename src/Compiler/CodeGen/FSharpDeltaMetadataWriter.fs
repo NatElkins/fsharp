@@ -124,11 +124,7 @@ let emitWithUserStrings
         let emptyCounts = Array.zeroCreate MetadataTokens.TableCount
         let emptyBitMasks = DeltaTableLayout.computeBitMasks emptyCounts
         let emptyIndexSizes =
-            DeltaIndexSizing.compute
-                emptyCounts
-                0
-                0
-                0
+            DeltaIndexSizing.compute emptyCounts emptyHeapSizes
 
         { Metadata = Array.empty
           StringHeap = Array.empty

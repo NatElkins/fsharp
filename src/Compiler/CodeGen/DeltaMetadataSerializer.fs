@@ -44,14 +44,19 @@ type DeltaHeapStreams =
           UserStringsLength = 1 }
 
 let buildHeapStreams (mirror: DeltaMetadataTables) : DeltaHeapStreams =
-    { Strings = padTo4 mirror.StringHeapBytes
-      StringsLength = mirror.StringHeapBytes.Length
-      Blobs = padTo4 mirror.BlobHeapBytes
-      BlobsLength = mirror.BlobHeapBytes.Length
-      Guids = padTo4 mirror.GuidHeapBytes
-      GuidsLength = mirror.GuidHeapBytes.Length
-      UserStrings = emptyUserStringHeap
-      UserStringsLength = 1 }
+    let stringBytes = mirror.StringHeapBytes
+    let blobBytes = mirror.BlobHeapBytes
+    let guidBytes = mirror.GuidHeapBytes
+    let userStringBytes = mirror.UserStringHeapBytes
+
+    { Strings = padTo4 stringBytes
+      StringsLength = stringBytes.Length
+      Blobs = padTo4 blobBytes
+      BlobsLength = blobBytes.Length
+      Guids = padTo4 guidBytes
+      GuidsLength = guidBytes.Length
+      UserStrings = padTo4 userStringBytes
+      UserStringsLength = userStringBytes.Length }
 
 /// Represents the serialized `#~` stream (metadata tables) including its padded bytes.
 type DeltaTableStream =
@@ -96,11 +101,7 @@ let computeMetadataSizes (tableMirror: DeltaMetadataTables) : DeltaMetadataSizes
         rowCounts[int TableIndex.EncLog] > 0
         || rowCounts[int TableIndex.EncMap] > 0
     let indexSizes =
-        DeltaIndexSizing.compute
-            rowCounts
-            heapSizes.StringHeapSize
-            heapSizes.BlobHeapSize
-            heapSizes.GuidHeapSize
+        DeltaIndexSizing.compute rowCounts heapSizes
         |> fun sizes -> if isEncDelta then promoteIndicesForEncDelta sizes else sizes
 
     { RowCounts = rowCounts
