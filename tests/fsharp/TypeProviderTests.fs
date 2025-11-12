@@ -20,9 +20,6 @@ open SingleTest
 
 open FSharp.Compiler.IO
 
-#if !NETCOREAPP
-// All tests which do a manual invoke of the F# compiler are disabled
-
 #if NETCOREAPP
 // Use these lines if you want to test CoreCLR
 let FSC_OPTIMIZED = FSC_NETCORE (true, false)
@@ -389,4 +386,3 @@ let wedgeAssembly () =
     peverify cfg "test3.exe"
 
     exec cfg ("." ++ "test3.exe") ""
-#endif

@@ -281,11 +281,7 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 
 - **Goal:** add a minimal C# consumer that references the generated F# assembly, executes the relocation-safe members, and validates the IL does not reference the provider binary.
 - **Status:** ✅ `csharp consumer executes generated member` now targets `net10.0`, references the freshly built Fs1023 consumer DLL plus `FSharp.Core`, and the reflection asserts prove both `Value` and `MapParameters` flow across the language boundary. The Fs1023 generic regression now also recompiles the consumer with `--standalone`, so static-link coverage guards the IlxGen-emitted IL path.
-- **Outstanding IDE-style coverage:** The historical `tests/fsharp/typeProviders/**` suite is still compiled out on `NETCOREAPP`; running `dotnet test tests/fsharp/FSharpSuite.Tests.fsproj --filter "FullyQualifiedName~TypeProviderTests"` currently discovers zero tests. Next steps:
-  1. Decide whether to multi-target the suite (add `net48`/`net10.0-windows` to `FSharpSuite.Tests.fsproj`) or reintroduce the desktop harness used on the old Visual Studio builds.
-  2. Update the test tooling (`tests/fsharp/tools/*`) so provider tests can run under dotnet if we cross-target, or add a new CI leg that executes the desktop harness.
-  3. Once re-enabled, capture baseline results and mention them here to show IDE-style regressions are back online.
-- ⚠️ Legacy provider samples under `tests/fsharp/typeProviders` are still compiled out on NETCOREAPP; running `dotnet test tests/fsharp/FSharpSuite.Tests.fsproj --filter "FullyQualifiedName~TypeProviderTests"` discovers zero tests. Re-enabling those IDE scenarios (or running the desktop harness) stays on the backlog.
+- ✅ IDE-style TypeProvider suite re-enabled: the `#if !NETCOREAPP` guard in `tests/fsharp/TypeProviderTests.fs` is gone, so the legacy suite now compiles/runs on `net10.0`. Verified locally via `dotnet test tests/FSharp/FSharpSuite.Tests.fsproj -c Release --filter "FullyQualifiedName~TypeProviderTests"`, which compiles the provider samples, runs the multi-stage FSC/FSI scenarios, and reactivates the regression coverage across hello-world, diamond, and bincompat cases. Remaining follow-up is to wire this target into CI so Windows legs continue to exercise the `fsi`-specific fact.
 
 ### 5.3 Negative tests
 
