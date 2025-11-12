@@ -28,6 +28,13 @@ let private shouldTraceMetadata () =
     | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
     | _ -> false
 
+let private shouldEmitMetadataBuilderTables () =
+    match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_USE_SRM_TABLES") with
+    | null -> false
+    | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+    | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+    | _ -> false
+
 type MethodDefinitionRowInfo = DeltaMetadataTypes.MethodDefinitionRowInfo
 
 type ParameterDefinitionRowInfo = DeltaMetadataTypes.ParameterDefinitionRowInfo
@@ -140,31 +147,34 @@ let emit
         let eventMapAddCount = eventMapRows |> List.filter (fun row -> row.IsAdded) |> List.length
         let methodSemanticsUpdateCount = methodSemanticsRows |> List.length
 
-        metadataBuilder.SetCapacity(TableIndex.Module, 1)
-        metadataBuilder.SetCapacity(TableIndex.TypeRef, 0)
-        metadataBuilder.SetCapacity(TableIndex.TypeDef, 0)
-        metadataBuilder.SetCapacity(TableIndex.Field, 0)
-        metadataBuilder.SetCapacity(TableIndex.MethodDef, methodUpdateCount)
-        metadataBuilder.SetCapacity(TableIndex.Param, parameterUpdateCount)
-        metadataBuilder.SetCapacity(TableIndex.InterfaceImpl, 0)
-        metadataBuilder.SetCapacity(TableIndex.MemberRef, 0)
-        metadataBuilder.SetCapacity(TableIndex.Constant, 0)
-        metadataBuilder.SetCapacity(TableIndex.CustomAttribute, 0)
-        metadataBuilder.SetCapacity(TableIndex.FieldMarshal, 0)
-        metadataBuilder.SetCapacity(TableIndex.DeclSecurity, 0)
-        metadataBuilder.SetCapacity(TableIndex.ClassLayout, 0)
-        metadataBuilder.SetCapacity(TableIndex.FieldLayout, 0)
-        metadataBuilder.SetCapacity(TableIndex.StandAloneSig, 0)
-        metadataBuilder.SetCapacity(TableIndex.EventMap, eventMapAddCount)
-        metadataBuilder.SetCapacity(TableIndex.Event, eventUpdateCount)
-        metadataBuilder.SetCapacity(TableIndex.PropertyMap, propertyMapAddCount)
-        metadataBuilder.SetCapacity(TableIndex.Property, propertyUpdateCount)
-        metadataBuilder.SetCapacity(TableIndex.MethodSemantics, methodSemanticsUpdateCount)
-        metadataBuilder.SetCapacity(TableIndex.MethodImpl, 0)
-        metadataBuilder.SetCapacity(TableIndex.ModuleRef, 0)
-        metadataBuilder.SetCapacity(TableIndex.TypeSpec, 0)
-        metadataBuilder.SetCapacity(TableIndex.ImplMap, 0)
-        metadataBuilder.SetCapacity(TableIndex.FieldRva, 0)
+        let emitSrmTables = shouldEmitMetadataBuilderTables ()
+
+        if emitSrmTables then
+            metadataBuilder.SetCapacity(TableIndex.Module, 1)
+            metadataBuilder.SetCapacity(TableIndex.TypeRef, 0)
+            metadataBuilder.SetCapacity(TableIndex.TypeDef, 0)
+            metadataBuilder.SetCapacity(TableIndex.Field, 0)
+            metadataBuilder.SetCapacity(TableIndex.MethodDef, methodUpdateCount)
+            metadataBuilder.SetCapacity(TableIndex.Param, parameterUpdateCount)
+            metadataBuilder.SetCapacity(TableIndex.InterfaceImpl, 0)
+            metadataBuilder.SetCapacity(TableIndex.MemberRef, 0)
+            metadataBuilder.SetCapacity(TableIndex.Constant, 0)
+            metadataBuilder.SetCapacity(TableIndex.CustomAttribute, 0)
+            metadataBuilder.SetCapacity(TableIndex.FieldMarshal, 0)
+            metadataBuilder.SetCapacity(TableIndex.DeclSecurity, 0)
+            metadataBuilder.SetCapacity(TableIndex.ClassLayout, 0)
+            metadataBuilder.SetCapacity(TableIndex.FieldLayout, 0)
+            metadataBuilder.SetCapacity(TableIndex.StandAloneSig, 0)
+            metadataBuilder.SetCapacity(TableIndex.EventMap, eventMapAddCount)
+            metadataBuilder.SetCapacity(TableIndex.Event, eventUpdateCount)
+            metadataBuilder.SetCapacity(TableIndex.PropertyMap, propertyMapAddCount)
+            metadataBuilder.SetCapacity(TableIndex.Property, propertyUpdateCount)
+            metadataBuilder.SetCapacity(TableIndex.MethodSemantics, methodSemanticsUpdateCount)
+            metadataBuilder.SetCapacity(TableIndex.MethodImpl, 0)
+            metadataBuilder.SetCapacity(TableIndex.ModuleRef, 0)
+            metadataBuilder.SetCapacity(TableIndex.TypeSpec, 0)
+            metadataBuilder.SetCapacity(TableIndex.ImplMap, 0)
+            metadataBuilder.SetCapacity(TableIndex.FieldRva, 0)
         let encEntryCount =
             1
             + methodUpdateCount
@@ -214,18 +224,19 @@ let emit
         for row in methodDefinitionRows do
             match updatesByKey.TryGetValue row.Key with
             | true, update ->
-                let nameHandle = metadataBuilder.GetOrAddString row.Name
-                let signatureHandle = metadataBuilder.GetOrAddBlob row.Signature
+                if emitSrmTables then
+                    let nameHandle = metadataBuilder.GetOrAddString row.Name
+                    let signatureHandle = metadataBuilder.GetOrAddBlob row.Signature
 
-                metadataBuilder.AddMethodDefinition(
-                    row.Attributes,
-                    row.ImplAttributes,
-                    nameHandle,
-                    signatureHandle,
-                    update.Body.CodeOffset,
-                    ParameterHandle()
-                )
-                |> ignore
+                    metadataBuilder.AddMethodDefinition(
+                        row.Attributes,
+                        row.ImplAttributes,
+                        nameHandle,
+                        signatureHandle,
+                        update.Body.CodeOffset,
+                        ParameterHandle()
+                    )
+                    |> ignore
                 tableMirror.AddMethodRow(row, update.Body)
 
                 let methodHandle = MetadataTokens.MethodDefinitionHandle row.RowId
@@ -239,11 +250,12 @@ let emit
                     printfn "[fsharp-hotreload][metadata-writer] missing update payload for %A" row.Key
 
         for row in parameterDefinitionRows do
-            let nameHandle =
-                match row.Name with
-                | Some name -> metadataBuilder.GetOrAddString name
-                | None -> StringHandle()
-            metadataBuilder.AddParameter(row.Attributes, nameHandle, row.SequenceNumber) |> ignore
+            if emitSrmTables then
+                let nameHandle =
+                    match row.Name with
+                    | Some name -> metadataBuilder.GetOrAddString name
+                    | None -> StringHandle()
+                metadataBuilder.AddParameter(row.Attributes, nameHandle, row.SequenceNumber) |> ignore
             tableMirror.AddParameterRow row
 
             let parameterHandle = MetadataTokens.ParameterHandle row.RowId
@@ -254,10 +266,10 @@ let emit
             encMap.Add(struct (TableIndex.Param, row.RowId))
 
         for row in propertyDefinitionRows do
-            let nameHandle = metadataBuilder.GetOrAddString row.Name
-            let signatureHandle = metadataBuilder.GetOrAddBlob row.Signature
-
-            metadataBuilder.AddProperty(row.Attributes, nameHandle, signatureHandle) |> ignore
+            if emitSrmTables then
+                let nameHandle = metadataBuilder.GetOrAddString row.Name
+                let signatureHandle = metadataBuilder.GetOrAddBlob row.Signature
+                metadataBuilder.AddProperty(row.Attributes, nameHandle, signatureHandle) |> ignore
             tableMirror.AddPropertyRow row
 
             let propertyHandle = MetadataTokens.PropertyDefinitionHandle row.RowId
@@ -268,10 +280,10 @@ let emit
             encMap.Add(struct (TableIndex.Property, row.RowId))
 
         for row in eventDefinitionRows do
-            let nameHandle = metadataBuilder.GetOrAddString row.Name
-            let typeHandle = row.EventType
-
-            metadataBuilder.AddEvent(row.Attributes, nameHandle, typeHandle) |> ignore
+            if emitSrmTables then
+                let nameHandle = metadataBuilder.GetOrAddString row.Name
+                let typeHandle = row.EventType
+                metadataBuilder.AddEvent(row.Attributes, nameHandle, typeHandle) |> ignore
             tableMirror.AddEventRow row
 
             let eventHandle = MetadataTokens.EventDefinitionHandle row.RowId
@@ -283,7 +295,7 @@ let emit
 
         for row in propertyMapRows do
             let handle = MetadataTokens.EntityHandle(TableIndex.PropertyMap, row.RowId)
-            if row.IsAdded then
+            if emitSrmTables && row.IsAdded then
                 let parentHandle = MetadataTokens.TypeDefinitionHandle row.TypeDefRowId
                 let propertyListHandle =
                     match row.FirstPropertyRowId with
@@ -300,7 +312,7 @@ let emit
 
         for row in eventMapRows do
             let handle = MetadataTokens.EntityHandle(TableIndex.EventMap, row.RowId)
-            if row.IsAdded then
+            if emitSrmTables && row.IsAdded then
                 let parentHandle = MetadataTokens.TypeDefinitionHandle row.TypeDefRowId
                 let eventListHandle =
                     match row.FirstEventRowId with
