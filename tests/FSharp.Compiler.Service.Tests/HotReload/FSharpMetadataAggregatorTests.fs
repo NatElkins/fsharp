@@ -14,8 +14,8 @@ open FSharp.Compiler.Service.Tests.HotReload.MetadataDeltaTestHelpers
 module FSharpMetadataAggregatorTests =
     module DeltaWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
-    let private emitPropertyDelta () =
-        let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts ()
+    let private emitPropertyDelta (?messageLiteral: string) () =
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts ?messageLiteral ()
         artifacts.BaselineBytes, artifacts.Delta
 
     [<Fact>]
@@ -71,3 +71,35 @@ module FSharpMetadataAggregatorTests =
         let baselineValue = baselineReader.GetString translatedString
         let deltaValue = deltaReader.GetString deltaMethodDef.Name
         Assert.Equal(deltaValue, baselineValue)
+
+    [<Fact>]
+    let ``aggregator translates string handles across multiple generations`` () =
+        let baselineBytes, deltaGen1 = emitPropertyDelta ~messageLiteral:"generation-one" ()
+        let _, deltaGen2 = emitPropertyDelta ~messageLiteral:"generation-two" ()
+
+        use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
+        let baselineReader = peReader.GetMetadataReader()
+
+        use deltaProvider1 = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(deltaGen1.Metadata))
+        let deltaReader1 = deltaProvider1.GetMetadataReader()
+
+        use deltaProvider2 = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(deltaGen2.Metadata))
+        let deltaReader2 = deltaProvider2.GetMetadataReader()
+
+        let aggregator =
+            FSharpMetadataAggregator.Create(
+                [ baselineReader
+                  deltaReader1
+                  deltaReader2 ])
+
+        let delta2MethodHandle =
+            deltaReader2.MethodDefinitions
+            |> Seq.head
+
+        let delta2MethodDef = deltaReader2.GetMethodDefinition delta2MethodHandle
+        let struct (stringGeneration, translatedHandle) = aggregator.TranslateStringHandle delta2MethodDef.Name
+
+        Assert.Equal(0, stringGeneration)
+        Assert.Equal(
+            deltaReader2.GetString delta2MethodDef.Name,
+            baselineReader.GetString translatedHandle)
