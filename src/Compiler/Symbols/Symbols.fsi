@@ -2,6 +2,7 @@
 
 namespace rec FSharp.Compiler.Symbols
 
+open System
 open System.Collections.Generic
 
 open FSharp.Compiler
@@ -325,6 +326,11 @@ type FSharpEntity =
 
     /// Get the XML documentation signature for the entity, used for .xml file lookup for compiled code
     member XmlDocSig: string
+
+#if !NO_TYPEPROVIDERS
+    /// Returns the TastReflection proxy `System.Type` for this entity.
+    member GetTypeReflectionProxy: unit -> Type
+#endif
 
     /// Indicates if the type is implemented through a mapping to IL assembly code. This is only
     /// true for types in FSharp.Core.dll

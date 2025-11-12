@@ -15,6 +15,7 @@ open FSharp.Compiler.DiagnosticsLogger
 open FSharp.Compiler.Optimizer
 open FSharp.Compiler.TypedTree
 open FSharp.Compiler.TypedTreeOps
+open FSharp.Compiler.TastReflect
 open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.BuildGraph
 open FSharp.Compiler.IO
@@ -173,6 +174,7 @@ type TcImports =
     member ProviderGeneratedTypeRoots: ProviderGeneratedType list
     member PopTypeProviderTypeDependencies: unit -> TyconRef list
     member SkipProviderStaticLinking: bool with get, set
+    member GetTypeReflectionBuilder: unit -> TypeReflectionBuilder
 #endif
 
     member GetImportMap: unit -> Import.ImportMap

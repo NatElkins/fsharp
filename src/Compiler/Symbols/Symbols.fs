@@ -705,7 +705,21 @@ type FSharpEntity(cenv: SymbolEnv, entity: EntityRef, tyargs: TType list) =
     member _.XmlDocSig = 
         checkIsResolved()
         getXmlDocSigForEntity cenv entity
- 
+
+#if !NO_TYPEPROVIDERS
+    /// Returns the TastReflection `System.Type` proxy for this definition.
+    member _.GetTypeReflectionProxy() =
+        protect (fun _ ->
+            let builder = cenv.tcImports.GetTypeReflectionBuilder()
+            let tyconRef = entity
+            let homeCcu =
+                match ccuOfTyconRef tyconRef with
+                | Some ccu -> ccu
+                | None -> cenv.thisCcu
+            let ty = TType_app(tyconRef, [], Nullness.Known NullnessInfo.WithoutNull)
+            builder.GetSystemType(homeCcu, ty))
+#endif
+
     member _.XmlDoc = 
         if isUnresolved() then XmlDoc.Empty  |> makeXmlDoc else
         entity.XmlDoc |> makeXmlDoc

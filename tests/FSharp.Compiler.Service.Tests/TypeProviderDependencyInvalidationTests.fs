@@ -1198,6 +1198,8 @@ module UseProvided =
             let reflectedType, dependencies = importMap.ReflectTypeWithDependencies(topCcu, modelTy)
 
             Assert.Equal("Fs1023Consumer.Model", reflectedType.FullName)
+            let proxyFromEntity = modelEntity.GetTypeReflectionProxy()
+            Assert.Equal("Fs1023Consumer.Model", proxyFromEntity.FullName)
             Assert.True(
                 dependencies |> Array.exists (fun dep -> dep.Stamp = modelTyconRef.Stamp),
                 "Expected TypeReflectionBuilder to report the Fs1023Consumer.Model dependency.")
