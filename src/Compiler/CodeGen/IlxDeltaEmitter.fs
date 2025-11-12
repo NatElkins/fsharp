@@ -27,6 +27,7 @@ open Internal.Utilities
 
 module MetadataWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 open MetadataWriter
+open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 
 exception HotReloadUnsupportedEditException of string
@@ -968,11 +969,15 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                    Body = bodyUpdate }, methodDef))
 
         let methodMetadataLookup =
-            let dict = Dictionary<MethodDefinitionKey, struct (MethodAttributes * MethodImplAttributes * string * byte[])>(HashIdentity.Structural)
+            let dict : Dictionary<MethodDefinitionKey, struct (MethodAttributes * MethodImplAttributes * string * byte[] * StringHandle option * BlobHandle option)> =
+                Dictionary(HashIdentity.Structural)
             for update, methodDef in methodUpdatesWithDefs do
                 let name = metadataReader.GetString methodDef.Name
                 let signature = metadataReader.GetBlobBytes methodDef.Signature
-                dict[update.MethodKey] <- struct (methodDef.Attributes, methodDef.ImplAttributes, name, signature)
+                let nameHandle = if methodDef.Name.IsNil then None else Some methodDef.Name
+                let signatureHandle = if methodDef.Signature.IsNil then None else Some methodDef.Signature
+                dict[update.MethodKey] <-
+                    struct (methodDef.Attributes, methodDef.ImplAttributes, name, signature, nameHandle, signatureHandle)
             dict
 
         let firstParamRowByMethod = Dictionary<MethodDefinitionKey, int>(HashIdentity.Structural)
@@ -998,14 +1003,15 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                           IsAdded = isAdded
                           Attributes = parameter.Attributes
                           SequenceNumber = int parameter.SequenceNumber
-                          Name = name }
+                          Name = name
+                          NameHandle = if parameter.Name.IsNil then None else Some parameter.Name }
                 | _ -> None)
 
         let methodDefinitionRowsSnapshot =
             methodDefinitionRowsRaw
             |> List.choose (fun struct (rowId, key, isAdded) ->
                 match methodMetadataLookup.TryGetValue key with
-                | true, struct (attrs, implAttrs, name, signature) ->
+                | true, struct (attrs, implAttrs, name, signature, nameHandle, signatureHandle) ->
                     let firstParam =
                         match firstParamRowByMethod.TryGetValue key with
                         | true, value -> Some value
@@ -1017,7 +1023,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                           Attributes = attrs
                           ImplAttributes = implAttrs
                           Name = name
+                          NameHandle = nameHandle
                           Signature = signature
+                          SignatureHandle = signatureHandle
                           FirstParameterRowId = firstParam }
                 | _ -> None)
 
@@ -1034,7 +1042,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                           RowId = rowId
                           IsAdded = isAdded
                           Name = name
+                          NameHandle = if propertyDef.Name.IsNil then None else Some propertyDef.Name
                           Signature = signature
+                          SignatureHandle = if propertyDef.Signature.IsNil then None else Some propertyDef.Signature
                           Attributes = propertyDef.Attributes }
                 | _ -> None)
 
@@ -1053,6 +1063,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                           RowId = rowId
                           IsAdded = isAdded
                           Name = name
+                          NameHandle = if eventDef.Name.IsNil then None else Some eventDef.Name
                           Attributes = eventDef.Attributes
                           EventType = eventDef.Type }
                 | _ -> None)
@@ -1258,6 +1269,10 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
         let methodUpdates = methodUpdatesWithDefs |> List.map fst
 
+        let baselineHeapOffsets =
+            request.Baseline.Metadata.HeapSizes
+            |> MetadataHeapOffsets.OfHeapSizes
+
         let metadataDelta =
             MetadataWriter.emit
                 metadataBuilder
@@ -1273,6 +1288,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 eventMapRowsSnapshot
                 methodSemanticsRowsSnapshot
                 methodUpdates
+                baselineHeapOffsets
 
         let streams = builder.Build()
 

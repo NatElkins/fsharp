@@ -18,7 +18,9 @@ type MethodDefinitionRowInfo =
       Attributes: MethodAttributes
       ImplAttributes: MethodImplAttributes
       Name: string
+      NameHandle: StringHandle option
       Signature: byte[]
+      SignatureHandle: BlobHandle option
       FirstParameterRowId: int option }
 
 type ParameterDefinitionRowInfo =
@@ -27,14 +29,17 @@ type ParameterDefinitionRowInfo =
       IsAdded: bool
       Attributes: ParameterAttributes
       SequenceNumber: int
-      Name: string option }
+      Name: string option
+      NameHandle: StringHandle option }
 
 type PropertyDefinitionRowInfo =
     { Key: PropertyDefinitionKey
       RowId: int
       IsAdded: bool
       Name: string
+      NameHandle: StringHandle option
       Signature: byte[]
+      SignatureHandle: BlobHandle option
       Attributes: PropertyAttributes }
 
 type EventDefinitionRowInfo =
@@ -42,6 +47,7 @@ type EventDefinitionRowInfo =
       RowId: int
       IsAdded: bool
       Name: string
+      NameHandle: StringHandle option
       Attributes: EventAttributes
       EventType: EntityHandle }
 
@@ -75,4 +81,6 @@ type TableRows =
       Event: RowElementData[][]
       PropertyMap: RowElementData[][]
       EventMap: RowElementData[][]
-      MethodSemantics: RowElementData[][] }
+      MethodSemantics: RowElementData[][]
+      EncLog: RowElementData[][]
+      EncMap: RowElementData[][] }

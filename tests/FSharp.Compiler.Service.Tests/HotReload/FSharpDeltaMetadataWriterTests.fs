@@ -16,6 +16,7 @@ open Internal.Utilities.Library
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.CodeGen
+open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.Service.Tests.HotReload.MetadataDeltaTestHelpers
 
 module DeltaWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
@@ -54,7 +55,9 @@ module FSharpDeltaMetadataWriterTests =
                 Attributes = getterDef.Attributes
                 ImplAttributes = getterDef.ImplAttributes
                 Name = metadataReader.GetString getterDef.Name
+                NameHandle = if getterDef.Name.IsNil then None else Some getterDef.Name
                 Signature = metadataReader.GetBlobBytes getterDef.Signature
+                SignatureHandle = if getterDef.Signature.IsNil then None else Some getterDef.Signature
                 FirstParameterRowId = None } ]
 
         let updates: DeltaWriter.MethodMetadataUpdate list =
@@ -79,7 +82,9 @@ module FSharpDeltaMetadataWriterTests =
                 RowId = 1
                 IsAdded = true
                 Name = metadataReader.GetString propertyDef.Name
+                NameHandle = if propertyDef.Name.IsNil then None else Some propertyDef.Name
                 Signature = metadataReader.GetBlobBytes propertyDef.Signature
+                SignatureHandle = if propertyDef.Signature.IsNil then None else Some propertyDef.Signature
                 Attributes = propertyDef.Attributes } ]
 
         let propertyMapRows: DeltaWriter.PropertyMapRowInfo list =
@@ -106,6 +111,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 []
                 updates
+                MetadataHeapOffsets.Zero
 
         let tableCount index = metadataDelta.TableRowCounts.[ int index ]
 
@@ -154,7 +160,9 @@ module FSharpDeltaMetadataWriterTests =
                 Attributes = addDef.Attributes
                 ImplAttributes = addDef.ImplAttributes
                 Name = metadataReader.GetString addDef.Name
+                NameHandle = if addDef.Name.IsNil then None else Some addDef.Name
                 Signature = metadataReader.GetBlobBytes addDef.Signature
+                SignatureHandle = if addDef.Signature.IsNil then None else Some addDef.Signature
                 FirstParameterRowId = None } ]
 
         let updates: DeltaWriter.MethodMetadataUpdate list =
@@ -178,6 +186,7 @@ module FSharpDeltaMetadataWriterTests =
                 RowId = 1
                 IsAdded = true
                 Name = metadataReader.GetString eventDef.Name
+                NameHandle = if eventDef.Name.IsNil then None else Some eventDef.Name
                 Attributes = eventDef.Attributes
                 EventType = eventDef.Type } ]
 
@@ -215,6 +224,7 @@ module FSharpDeltaMetadataWriterTests =
                 eventMapRows
                 methodSemanticsRows
                 updates
+                MetadataHeapOffsets.Zero
 
         let tableCount index = metadataDelta.TableRowCounts.[int index]
         Assert.Equal(1, tableCount TableIndex.Event)
@@ -255,7 +265,9 @@ module FSharpDeltaMetadataWriterTests =
                 Attributes = getterDef.Attributes
                 ImplAttributes = getterDef.ImplAttributes
                 Name = metadataReader.GetString getterDef.Name
+                NameHandle = if getterDef.Name.IsNil then None else Some getterDef.Name
                 Signature = metadataReader.GetBlobBytes getterDef.Signature
+                SignatureHandle = if getterDef.Signature.IsNil then None else Some getterDef.Signature
                 FirstParameterRowId = None } ]
 
         let updates: DeltaWriter.MethodMetadataUpdate list =
@@ -280,7 +292,9 @@ module FSharpDeltaMetadataWriterTests =
                 RowId = 1
                 IsAdded = true
                 Name = metadataReader.GetString propertyDef.Name
+                NameHandle = if propertyDef.Name.IsNil then None else Some propertyDef.Name
                 Signature = metadataReader.GetBlobBytes propertyDef.Signature
+                SignatureHandle = if propertyDef.Signature.IsNil then None else Some propertyDef.Signature
                 Attributes = propertyDef.Attributes } ]
 
         let propertyMapRows: DeltaWriter.PropertyMapRowInfo list =
@@ -307,6 +321,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 []
                 updates
+                MetadataHeapOffsets.Zero
 
         assertTableStreamMatches metadataDelta
 
@@ -345,6 +360,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 []
                 updates
+                MetadataHeapOffsets.Zero
 
         Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
         Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.Param])
@@ -385,6 +401,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 []
                 updates
+                MetadataHeapOffsets.Zero
 
         Assert.Equal(2, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
         Assert.Equal(2, metadataDelta.TableRowCounts.[int TableIndex.Param])
@@ -425,6 +442,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 []
                 updates
+                MetadataHeapOffsets.Zero
 
         Assert.Equal(2, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
         Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.Param])

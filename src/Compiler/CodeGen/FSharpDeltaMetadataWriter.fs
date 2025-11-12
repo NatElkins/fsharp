@@ -80,6 +80,7 @@ let emit
     (eventMapRows: EventMapRowInfo list)
     (methodSemanticsRows: MethodSemanticsMetadataUpdate list)
     (updates: MethodMetadataUpdate list)
+    (heapOffsets: MetadataHeapOffsets)
     : MetadataDelta =
     if shouldTraceMetadata () then
         printfn "[fsharp-hotreload][metadata-writer] emit invoked updates=%d" (List.length updates)
@@ -98,7 +99,9 @@ let emit
               Event = Array.empty
               PropertyMap = Array.empty
               EventMap = Array.empty
-              MethodSemantics = Array.empty }
+              MethodSemantics = Array.empty
+              EncLog = Array.empty
+              EncMap = Array.empty }
 
         let emptyCounts = Array.zeroCreate MetadataTokens.TableCount
         let emptyBitMasks = DeltaTableLayout.computeBitMasks emptyCounts
@@ -192,7 +195,7 @@ let emit
         let encIdHandle = metadataBuilder.GetOrAddGuid(encId)
         let encBaseHandle = metadataBuilder.GetOrAddGuid(encBaseId)
         let moduleHandle = metadataBuilder.AddModule(0, moduleNameHandle, mvidHandle, encIdHandle, encBaseHandle)
-        let tableMirror = DeltaMetadataTables()
+        let tableMirror = DeltaMetadataTables(heapOffsets)
         tableMirror.AddModuleRow(moduleName, moduleId, encId, encBaseId)
 
         let updatesByKey = Dictionary<MethodDefinitionKey, MethodMetadataUpdate>(HashIdentity.Structural)
@@ -357,6 +360,12 @@ let emit
                 |> String.concat ", "
             failwithf "Unexpected rows in delta metadata: %s" details
 
+        for struct (tableIndex, rowId, operation) in encLog do
+            tableMirror.AddEncLogRow(tableIndex, rowId, operation)
+
+        for struct (tableIndex, rowId) in encMap do
+            tableMirror.AddEncMapRow(tableIndex, rowId)
+
         let metadataSizes = DeltaMetadataSerializer.computeMetadataSizes tableMirror
         let tableRowCounts = metadataSizes.RowCounts
         let tableBitMasks = metadataSizes.BitMasks
@@ -367,20 +376,22 @@ let emit
             { DeltaMetadataSerializer.DeltaTableSerializerInput.Tables = tableMirror.TableRows
               MetadataSizes = metadataSizes
               StringHeap = tableMirror.StringHeapBytes
+              StringHeapOffsets = tableMirror.StringHeapOffsets
               BlobHeap = tableMirror.BlobHeapBytes
+              BlobHeapOffsets = tableMirror.BlobHeapOffsets
               GuidHeap = tableMirror.GuidHeapBytes }
 
         let tableStream = DeltaMetadataSerializer.buildTableStream tableStreamInput
-
-        let metadataBytes = serializeWithMetadataBuilder metadataBuilder
+        let heapStreams = DeltaMetadataSerializer.buildHeapStreams tableMirror
+        let metadataBytes = DeltaMetadataSerializer.serializeMetadataRoot tableStreamInput heapStreams tableStream
 
         if shouldTraceMetadata () then
             printfn "[fsharp-hotreload][metadata-writer] tableCounts method=%d param=%d" methodUpdateCount parameterUpdateCount
 
         { Metadata = metadataBytes
-          StringHeap = tableMirror.StringHeapBytes
-          BlobHeap = tableMirror.BlobHeapBytes
-          GuidHeap = tableMirror.GuidHeapBytes
+          StringHeap = heapStreams.Strings
+          BlobHeap = heapStreams.Blobs
+          GuidHeap = heapStreams.Guids
           EncLog = encLog |> Seq.toArray |> Array.map (fun struct (a, b, c) -> (a, b, c))
           EncMap = encMap |> Seq.toArray |> Array.map (fun struct (a, b) -> (a, b))
           TableRowCounts = tableRowCounts

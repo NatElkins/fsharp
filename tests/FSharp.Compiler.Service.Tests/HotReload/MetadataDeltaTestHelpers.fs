@@ -3,6 +3,7 @@ namespace FSharp.Compiler.Service.Tests.HotReload
 open System
 open System.IO
 open System.Reflection
+open System.Collections.Immutable
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
@@ -15,11 +16,19 @@ open Internal.Utilities.Library
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.CodeGen
+open FSharp.Compiler.CodeGen.DeltaMetadataTables
 
 module internal MetadataDeltaTestHelpers =
     module ILWriter = FSharp.Compiler.AbstractIL.ILBinaryWriter
     module ILPdbWriter = FSharp.Compiler.AbstractIL.ILPdbWriter
     module DeltaWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
+
+    let private shouldTraceMetadata () =
+        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METADATA") with
+        | null -> false
+        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+        | _ -> false
 
     let private mscorlibToken =
         PublicKeyToken [|
@@ -68,6 +77,24 @@ module internal MetadataDeltaTestHelpers =
             let declaringName = metadataReader.GetString(declaringType.Name)
             declaringName = expectedType
             && metadataReader.GetString(methodDef.Name) = methodName)
+
+    let private inspectDeltaMetadata label (bytes: byte[]) =
+        try
+            use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(bytes))
+            let reader = provider.GetMetadataReader()
+            let encMapCount = reader.GetTableRowCount(TableIndex.EncMap)
+            let encLogCount = reader.GetTableRowCount(TableIndex.EncLog)
+            let methodCount = reader.GetTableRowCount(TableIndex.MethodDef)
+            let propertyCount = reader.GetTableRowCount(TableIndex.Property)
+            printfn
+                "[hotreload-metadata] %s encMap=%d encLog=%d methodRows=%d propertyRows=%d"
+                label
+                encMapCount
+                encLogCount
+                methodCount
+                propertyCount
+        with ex ->
+            printfn "[hotreload-metadata] %s inspect failed: %s" label ex.Message
 
     let private defaultWriterOptions (ilg: ILGlobals) : ILWriter.options =
         { ilg = ilg
@@ -152,6 +179,50 @@ module internal MetadataDeltaTestHelpers =
             Some(size, padded)
         | ValueNone ->
             None
+
+    let private dumpMetadataLayout label (metadata: byte[]) =
+        use stream = new MemoryStream(metadata, false)
+        use reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen = true)
+
+        let signature = reader.ReadUInt32()
+        let major = int (reader.ReadUInt16())
+        let minor = int (reader.ReadUInt16())
+        let _reserved = reader.ReadUInt32()
+        let versionLength = int (reader.ReadUInt32 ())
+        let versionBytes = reader.ReadBytes(versionLength)
+        while stream.Position % 4L <> 0L do
+            reader.ReadByte() |> ignore
+        let flags = int (reader.ReadUInt16())
+        let streamCount = int (reader.ReadUInt16())
+
+        printfn
+            "[hotreload-metadata] %s signature=0x%08X v%d.%d version=%s flags=0x%04X streams=%d"
+            label
+            signature
+            major
+            minor
+            (Encoding.UTF8.GetString(versionBytes))
+            flags
+            streamCount
+
+        let readStreamName () =
+            let buffer = ResizeArray()
+            let mutable finished = false
+            while not finished do
+                let b = reader.ReadByte()
+                if b = 0uy then
+                    finished <- true
+                else
+                    buffer.Add b
+            while stream.Position % 4L <> 0L do
+                reader.ReadByte() |> ignore
+            Encoding.UTF8.GetString(buffer.ToArray())
+
+        for _ = 1 to streamCount do
+            let offset = reader.ReadUInt32()
+            let size = reader.ReadUInt32()
+            let name = readStreamName ()
+            printfn "[hotreload-metadata]   stream %-8s offset=%6d size=%6d" name offset size
 
     let methodKey (typeName: string) name returnType =
         { DeclaringType = typeName
@@ -526,11 +597,13 @@ module internal MetadataDeltaTestHelpers =
         let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
             [ { Key = methodKey
                 RowId = 1
-                IsAdded = true
+                IsAdded = false
                 Attributes = getterDef.Attributes
                 ImplAttributes = getterDef.ImplAttributes
                 Name = metadataReader.GetString getterDef.Name
+                NameHandle = if getterDef.Name.IsNil then None else Some getterDef.Name
                 Signature = metadataReader.GetBlobBytes getterDef.Signature
+                SignatureHandle = if getterDef.Signature.IsNil then None else Some getterDef.Signature
                 FirstParameterRowId = None } ]
 
         let updates: DeltaWriter.MethodMetadataUpdate list =
@@ -553,9 +626,11 @@ module internal MetadataDeltaTestHelpers =
         let propertyRows: DeltaWriter.PropertyDefinitionRowInfo list =
             [ { Key = propertyKey
                 RowId = 1
-                IsAdded = true
+                IsAdded = false
                 Name = metadataReader.GetString propertyDef.Name
+                NameHandle = if propertyDef.Name.IsNil then None else Some propertyDef.Name
                 Signature = metadataReader.GetBlobBytes propertyDef.Signature
+                SignatureHandle = if propertyDef.Signature.IsNil then None else Some propertyDef.Signature
                 Attributes = propertyDef.Attributes } ]
 
         let propertyMapRows: DeltaWriter.PropertyMapRowInfo list =
@@ -563,7 +638,7 @@ module internal MetadataDeltaTestHelpers =
                 RowId = 1
                 TypeDefRowId = MetadataTokens.GetRowNumber typeHandle
                 FirstPropertyRowId = Some 1
-                IsAdded = true } ]
+                IsAdded = false } ]
 
         let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
 
@@ -582,6 +657,48 @@ module internal MetadataDeltaTestHelpers =
                 []
                 []
                 updates
+                MetadataHeapOffsets.Zero
+
+        inspectDeltaMetadata "delta" metadataDelta.Metadata
+
+        if shouldTraceMetadata () then
+            let srmMetadata = serializeWithMetadataBuilder builder.MetadataBuilder
+            dumpMetadataLayout "delta-custom" metadataDelta.Metadata
+            dumpMetadataLayout "delta-srm" srmMetadata
+            printfn "[hotreload-metadata] delta-custom total-bytes=%d" metadataDelta.Metadata.Length
+            printfn "[hotreload-metadata] delta-srm     total-bytes=%d" srmMetadata.Length
+            let dumpDir = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-md-dumps")
+            Directory.CreateDirectory(dumpDir) |> ignore
+            File.WriteAllBytes(Path.Combine(dumpDir, "delta-custom.bin"), metadataDelta.Metadata)
+            File.WriteAllBytes(Path.Combine(dumpDir, "delta-custom-table.bin"), metadataDelta.TableStream.Bytes)
+            File.WriteAllBytes(Path.Combine(dumpDir, "delta-srm.bin"), srmMetadata)
+            let logRowCounts label (counts: int[]) =
+                counts
+                |> Array.mapi (fun idx count -> idx, count)
+                |> Array.filter (fun (_, count) -> count <> 0)
+                |> Array.iter (fun (idx, count) ->
+                    let table = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte idx)
+                    printfn "[hotreload-metadata] %s row-count %-15A = %d" label table count)
+
+            logRowCounts "delta-custom" metadataDelta.TableRowCounts
+            printfn
+                "[hotreload-metadata] delta-custom heap sizes strings=%d blobs=%d guids=%d"
+                metadataDelta.HeapSizes.StringHeapSize
+                metadataDelta.HeapSizes.BlobHeapSize
+                metadataDelta.HeapSizes.GuidHeapSize
+
+            use srmProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(srmMetadata))
+            let srmReader = srmProvider.GetMetadataReader()
+            let srmCounts =
+                Array.init MetadataTokens.TableCount (fun idx ->
+                    let table = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte idx)
+                    srmReader.GetTableRowCount table)
+            logRowCounts "delta-srm" srmCounts
+            printfn
+                "[hotreload-metadata] delta-srm     heap sizes strings=%d blobs=%d guids=%d"
+                (srmReader.GetHeapSize HeapIndex.String)
+                (srmReader.GetHeapSize HeapIndex.Blob)
+                (srmReader.GetHeapSize HeapIndex.Guid)
 
         { BaselineBytes = assemblyBytes
           Delta = metadataDelta }
@@ -627,7 +744,8 @@ module internal MetadataDeltaTestHelpers =
                           if paramDef.Name.IsNil then
                               None
                           else
-                              Some(metadataReader.GetString paramDef.Name) }
+                              Some(metadataReader.GetString paramDef.Name)
+                      NameHandle = if paramDef.Name.IsNil then None else Some paramDef.Name }
                 row)
             |> Seq.toList
 
@@ -640,7 +758,9 @@ module internal MetadataDeltaTestHelpers =
               Attributes = methodDef.Attributes
               ImplAttributes = methodDef.ImplAttributes
               Name = metadataReader.GetString methodDef.Name
+              NameHandle = if methodDef.Name.IsNil then None else Some methodDef.Name
               Signature = metadataReader.GetBlobBytes methodDef.Signature
+              SignatureHandle = if methodDef.Signature.IsNil then None else Some methodDef.Signature
               FirstParameterRowId = firstParamRowId }
 
         let methodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle)

@@ -64,29 +64,58 @@ type DeltaMetadataSizes =
     { RowCounts: int[]
       HeapSizes: MetadataHeapSizes
       BitMasks: TableBitMasks
-      IndexSizes: CodedIndexSizes }
+      IndexSizes: CodedIndexSizes
+      IsEncDelta: bool }
+
+let private promoteIndicesForEncDelta (sizes: CodedIndexSizes) : CodedIndexSizes =
+    let simpleIndexBig = Array.create MetadataTokens.TableCount true
+    { sizes with
+        StringsBig = true
+        GuidsBig = true
+        BlobsBig = true
+        SimpleIndexBig = simpleIndexBig
+        TypeDefOrRefBig = true
+        TypeOrMethodDefBig = true
+        HasConstantBig = true
+        HasCustomAttributeBig = true
+        HasFieldMarshalBig = true
+        HasDeclSecurityBig = true
+        MemberRefParentBig = true
+        HasSemanticsBig = true
+        MethodDefOrRefBig = true
+        MemberForwardedBig = true
+        ImplementationBig = true
+        CustomAttributeTypeBig = true
+        ResolutionScopeBig = true }
 
 let computeMetadataSizes (tableMirror: DeltaMetadataTables) : DeltaMetadataSizes =
     let rowCounts = tableMirror.TableRowCounts
     let heapSizes = tableMirror.HeapSizes
     let bitMasks = DeltaTableLayout.computeBitMasks rowCounts
+    let isEncDelta =
+        rowCounts[int TableIndex.EncLog] > 0
+        || rowCounts[int TableIndex.EncMap] > 0
     let indexSizes =
         DeltaIndexSizing.compute
             rowCounts
             heapSizes.StringHeapSize
             heapSizes.BlobHeapSize
             heapSizes.GuidHeapSize
+        |> fun sizes -> if isEncDelta then promoteIndicesForEncDelta sizes else sizes
 
     { RowCounts = rowCounts
       HeapSizes = heapSizes
       BitMasks = bitMasks
-      IndexSizes = indexSizes }
+      IndexSizes = indexSizes
+      IsEncDelta = isEncDelta }
 
 type DeltaTableSerializerInput =
     { Tables: TableRows
       MetadataSizes: DeltaMetadataSizes
       StringHeap: byte[]
+      StringHeapOffsets: int[]
       BlobHeap: byte[]
+      BlobHeapOffsets: int[]
       GuidHeap: byte[] }
 
 let private writeUInt16 (writer: BinaryWriter) (value: int) =
@@ -112,6 +141,8 @@ let private tableRowsByIndex (tables: TableRows) =
     rows[int TableIndex.PropertyMap] <- tables.PropertyMap
     rows[int TableIndex.EventMap] <- tables.EventMap
     rows[int TableIndex.MethodSemantics] <- tables.MethodSemantics
+    rows[int TableIndex.EncLog] <- tables.EncLog
+    rows[int TableIndex.EncMap] <- tables.EncMap
     rows
 
 let private isTablePresent (bitmaskLow: int) (bitmaskHigh: int) (index: int) =
@@ -120,7 +151,7 @@ let private isTablePresent (bitmaskLow: int) (bitmaskHigh: int) (index: int) =
     else
         ((bitmaskHigh >>> (index - 32)) &&& 1) <> 0
 
-let private writeRowElement (writer: BinaryWriter) (indexSizes: CodedIndexSizes) (element: RowElementData) =
+let private writeRowElement (writer: BinaryWriter) (indexSizes: CodedIndexSizes) (input: DeltaTableSerializerInput) (element: RowElementData) =
     let tag = element.Tag
     let value = element.Value
 
@@ -129,9 +160,11 @@ let private writeRowElement (writer: BinaryWriter) (indexSizes: CodedIndexSizes)
     elif tag = RowElementTags.ULong then
         writeUInt32 writer value
     elif tag = RowElementTags.String then
-        writeHeapIndex writer indexSizes.StringsBig value
+        let offset = if value = 0 then 0 else input.StringHeapOffsets.[value]
+        writeHeapIndex writer indexSizes.StringsBig offset
     elif tag = RowElementTags.Blob then
-        writeHeapIndex writer indexSizes.BlobsBig value
+        let offset = if value = 0 then 0 else input.BlobHeapOffsets.[value]
+        writeHeapIndex writer indexSizes.BlobsBig offset
     elif tag = RowElementTags.Guid then
         writeHeapIndex writer indexSizes.GuidsBig value
     elif tag >= RowElementTags.SimpleIndexMin && tag <= RowElementTags.SimpleIndexMax then
@@ -189,13 +222,16 @@ let buildTableStream (input: DeltaTableSerializerInput) : DeltaTableStream =
     use writer = new BinaryWriter(ms)
 
     writer.Write(0u)
-    writer.Write(uint16 2)
-    writer.Write(uint16 0)
+    writer.Write(byte 2)
+    writer.Write(byte 0)
 
     let heapFlags =
-        (if indexSizes.StringsBig then 0x01 else 0)
-        ||| (if indexSizes.GuidsBig then 0x02 else 0)
-        ||| (if indexSizes.BlobsBig then 0x04 else 0)
+        let baseFlags =
+            (if indexSizes.StringsBig then 0x01 else 0)
+            ||| (if indexSizes.GuidsBig then 0x02 else 0)
+            ||| (if indexSizes.BlobsBig then 0x04 else 0)
+        let encFlags = if sizes.IsEncDelta then (0x20 ||| 0x80) else 0
+        baseFlags ||| encFlags
 
     writer.Write(byte heapFlags)
     writer.Write(byte 1)
@@ -215,7 +251,7 @@ let buildTableStream (input: DeltaTableSerializerInput) : DeltaTableStream =
         if rows.Length > 0 then
             for row in rows do
                 for element in row do
-                    writeRowElement writer indexSizes element
+                    writeRowElement writer indexSizes input element
 
     writer.Flush()
     let unpaddedSize = int ms.Length
@@ -253,11 +289,12 @@ let private streamHeaderSize (name: string) =
 
 let serializeMetadataRoot (_: DeltaTableSerializerInput) (heaps: DeltaHeapStreams) (tableStream: DeltaTableStream) : byte[] =
     let streams =
-        [ "#~", tableStream.UnpaddedSize, tableStream.Bytes
+        [ "#-", tableStream.UnpaddedSize, tableStream.Bytes
           "#Strings", heaps.StringsLength, heaps.Strings
           "#US", heaps.UserStringsLength, heaps.UserStrings
           "#GUID", heaps.GuidsLength, heaps.Guids
-          "#Blob", heaps.BlobsLength, heaps.Blobs ]
+          "#Blob", heaps.BlobsLength, heaps.Blobs
+          "#JTD", 0, Array.empty ]
 
     let versionBytes = Text.Encoding.UTF8.GetBytes(versionString)
     let versionStringLength = versionBytes.Length + 1
