@@ -268,7 +268,6 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
         3. Broaden coverage: now that `GenericInput_multipleInstantiations` is green again, re-enable the skipped assertions in `TypeProviderDependencyInvalidationTests.fs` and extend them to assert the reflected parameter types (`typeof<Fs1023Consumer.Generic<_>>.GetProperty("Value")`) so future regressions surface immediately.
   - Negative coverage (anonymous records, type parameters, provided types as static arguments) stays enabled and green.
   - ✅ Component sweep: `dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Release` now runs cleanly, so the Fs1023 plumbing no longer regresses the broader suite.
-- ✅ Expanded IDE coverage by attempting to run the legacy suite via `dotnet test tests/fsharp/FSharpSuite.Tests.fsproj --filter "FullyQualifiedName~TypeProviderTests"` (12 Nov 2025). On .NET 10 builds the suite is conditionally compiled out (`#if !NETCOREAPP`), so no tests are currently discovered; this confirms the remaining action is to either re-enable those tests under .NET or execute them via the desktop harness. A matching SDK-side edit was attempted (`FSharp.TypeProviders.SDK/src/ProvidedTypes.fs`) to document the proxy behaviour, but the push failed due to lack of permissions, so no upstream change was made. TPSDK sample expansion remains on the backlog.
 
 ### 5.2 SDK + C# consumer tests
 
