@@ -12,6 +12,10 @@ open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.Service.Tests.Common
 open FSharp.Compiler.Symbols
+open FSharp.Compiler.Text
+open FSharp.Compiler.TypedTree
+open FSharp.Compiler.TypedTreeBasics
+open FSharp.Compiler.TypedTreeOps
 
 module TypeProviderDependencyInvalidationTests =
 
@@ -379,6 +383,30 @@ module UseProvided =
             Directory.CreateDirectory(directory) |> ignore
 
         File.WriteAllText(path, contents)
+
+    let private tyconRefProperty =
+        lazy (
+            typeof<FSharpEntity>.GetProperty(
+                "Entity",
+                BindingFlags.Instance ||| BindingFlags.Public ||| BindingFlags.NonPublic)
+            )
+
+    let private getTyconRef (entity: FSharpEntity) =
+        match tyconRefProperty.Value with
+        | null -> failwith "Unable to access FSharpEntity.Entity via reflection."
+        | prop -> prop.GetValue(entity, null) :?> TyconRef
+
+    let private projectContextCcuField =
+        lazy (
+            typeof<FSharpProjectContext>.GetField(
+                "thisCcu",
+                BindingFlags.Instance ||| BindingFlags.NonPublic)
+            )
+
+    let private getProjectContextCcu (context: FSharpProjectContext) =
+        match projectContextCcuField.Value with
+        | null -> failwith "Unable to access FSharpProjectContext.thisCcu via reflection."
+        | field -> field.GetValue(context) :?> CcuThunk
 
     let private getFullPath path = Path.GetFullPath path
 
@@ -1074,6 +1102,105 @@ module UseProvided =
             let standaloneArgs = Array.append projectArgs [| "--standalone"; "--out:" + standaloneDll |]
             compile standaloneArgs
             assertProperties standaloneDll
+        finally
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``TypeReflectionBuilder captures dependencies for Fs1023 static arguments`` () =
+        let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(tempDir) |> ignore
+
+        let rec collectEntities declarations =
+            seq {
+                for decl in declarations do
+                    match decl with
+                    | FSharpImplementationFileDeclaration.Entity(entity, nested) ->
+                        yield entity
+                        yield! collectEntities nested
+                    | _ -> ()
+            }
+
+        try
+            let providerPath = Path.Combine(tempDir, "Fs1023Provider.fs")
+            let providerDll = Path.Combine(tempDir, "Fs1023Provider.dll")
+
+            writeFile providerPath providerSource
+
+            let providerArgs =
+                Array.append
+                    (mkProjectCommandLineArgs(providerDll, [ providerPath ]))
+                    [| "-r:" + providedTypesAssembly |]
+
+            compile providerArgs
+
+            let modelPath = Path.Combine(tempDir, "Model.fs")
+            let consumerPath = Path.Combine(tempDir, "Consumer.fs")
+
+            writeFile modelPath modelSourceInitial
+            writeFile consumerPath consumerSource
+
+            let outputDll = Path.Combine(tempDir, "Consumer.dll")
+            let projectFile = Path.Combine(tempDir, "Consumer.fsproj")
+
+            let projectArgs =
+                Array.append
+                    (mkProjectCommandLineArgs(outputDll, [ modelPath; consumerPath ]))
+                    [| "-r:" + providerDll |]
+
+            let projectOptions =
+                { checker.GetProjectOptionsFromCommandLineArgs(projectFile, projectArgs) with
+                    SourceFiles = [| modelPath; consumerPath |] }
+
+            let checkerWithContents =
+                FSharpChecker.Create(
+                    keepAssemblyContents = true,
+                    useTransparentCompiler = FSharp.Test.CompilerAssertHelpers.UseTransparentCompiler)
+
+            let projectResults = checkerWithContents.ParseAndCheckProject(projectOptions) |> Async.RunImmediate
+            ensureSuccess projectResults.Diagnostics
+
+            let consumerText = SourceText.ofString(File.ReadAllText(consumerPath))
+            let _, checkAnswer =
+                checkerWithContents.ParseAndCheckFileInProject(consumerPath, 0, consumerText, projectOptions)
+                |> Async.RunImmediate
+
+            let checkResults =
+                match checkAnswer with
+                | FSharpCheckFileAnswer.Succeeded results -> results
+                | FSharpCheckFileAnswer.Aborted -> failwith "Type checking aborted unexpectedly."
+
+            let tcImports =
+                match checkResults.TryGetCurrentTcImports() with
+                | Some imports -> imports
+                | None -> failwith "TcImports were not available from the check results."
+
+            let importMap = tcImports.GetImportMap()
+
+            let modelEntity =
+                projectResults.AssemblyContents.ImplementationFiles
+                |> Seq.collect (fun impl -> collectEntities impl.Declarations)
+                |> Seq.tryFind (fun entity -> entity.FullName = "Fs1023Consumer.Model")
+                |> Option.defaultWith (fun () -> failwith "Expected Fs1023Consumer.Model in AssemblyContents.")
+
+            let modelTyconRef = getTyconRef modelEntity
+            let projectContext = checkResults.ProjectContext
+            let topCcu =
+                match ccuOfTyconRef modelTyconRef with
+                | Some ccu -> ccu
+                | None -> getProjectContextCcu projectContext
+
+            let nonNull = Nullness.Known NullnessInfo.WithoutNull
+            let modelTy = TType_app(modelTyconRef, [], nonNull)
+
+            let reflectedType, dependencies = importMap.ReflectTypeWithDependencies(topCcu, modelTy)
+
+            Assert.Equal("Fs1023Consumer.Model", reflectedType.FullName)
+            Assert.True(
+                dependencies |> Array.exists (fun dep -> dep.Stamp = modelTyconRef.Stamp),
+                "Expected TypeReflectionBuilder to report the Fs1023Consumer.Model dependency.")
         finally
             if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
                 printfn "[fs1023] preserving temp dir %s" tempDir

@@ -275,6 +275,7 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
         2. Clean up the heavy TastReflection logging once we’re comfortable with the fix (it’s still invaluable for FS1023_TRACE repros, but we should scope it behind a separate verbosity flag before merging).
         3. Broaden coverage: now that `GenericInput_multipleInstantiations` is green again, re-enable the skipped assertions in `TypeProviderDependencyInvalidationTests.fs` and extend them to assert the reflected parameter types (`typeof<Fs1023Consumer.Generic<_>>.GetProperty("Value")`) so future regressions surface immediately.
   - Negative coverage (anonymous records, type parameters, provided types as static arguments) stays enabled and green.
+  - ✅ `TypeReflectionBuilder captures dependencies for Fs1023 static arguments` — new coverage in `TypeProviderDependencyInvalidationTests` spins up `FSharpChecker` with `keepAssemblyContents`, reflects `Fs1023Consumer.Model` via `ImportMap.ReflectTypeWithDependencies`, and asserts the returned `System.Type` is the compiler proxy while the dependency list includes the model `TyconRef`. The test uses reflection to grab the underlying `TyconRef`/`thisCcu`, ensuring the public service surface can drive the same APIs providers will call.
   - ✅ Component sweep: `dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Release` now runs cleanly, so the Fs1023 plumbing no longer regresses the broader suite.
 
 ### 5.2 SDK + C# consumer tests
@@ -298,7 +299,7 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 1. **ProvidedTypes documentation**
    - ✅ `docs/upcoming/fs-1023.md` now includes detailed guidance for provider authors (use TastReflection proxies, keep invoker quotations self-contained, rely on `ConvertTargetTypeToSource`, avoid double-registering relocated types). When we cut the next TPSDK preview, mirror the same text into the SDK changelog so the guidance ships alongside the SDK NuGet.
 2. **TPSDK regression coverage**
-   - Extend `FSharp.TypeProviders.SDK/tests/ProxyTypeTests.fs` (or add a new test) that invokes `ProvidedTypes.ConvertTargetTypeToSource` against the FS-1023 compiler and asserts attribute instances round-trip.
+   - ⏳ `actual TastReflection proxy round-trips through ProvidedTypesContext` now lives in `FSharp.TypeProviders.SDK/tests/ProxyTypeTests.fs` and uses `FSharpChecker` + `ImportMap.ReflectTypeWithDependencies` to obtain a real compiler proxy before calling `ProvidedTypesContext.ConvertTargetTypeToSource`. Running the test required temporarily overriding `global.json` (the repo still targets `net5.0`/SDK 8.0), and the build currently fails with `MSB3277` because NuGet pulls in both `FSharp.Core, Version=4.7.0.0` (from the SDK package) and the locally built `FSharp.Core, Version=11.0.0.0`. Logs: `/tmp/tpsdk_tests.log`. Next action: reconcile the dual `FSharp.Core` references (or multi-target the tests) so the suite can execute under the compiler’s `.NET 10.0` toolset.
 3. **Release coordination**
    - Once the compiler and SDK changes are ready, publish a preview TPSDK package and document the minimum compiler/SDK pairing required for FS-1023 providers. Ensure `docs/upcoming/fs-1023.md` and the SDK release notes reference the pairing.
 
