@@ -314,6 +314,7 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
    - ✅ 12 Nov 2025 — Completed the top-level sweep via `./build.sh --testcoreclr -c Release /p:WarningsNotAsErrors=FS0066;FS3261;FS0760;FS0026` (equivalent to `./build.sh Test` for the .NET Core leg). Build + tests succeeded end-to-end, so Phase 7’s “full suite” milestone is complete.
 2. **Review API surface** to ensure no public breaking changes.
    - 🔜 Collect the list of new/changed public entry points (`FSharpEntity.GetTypeReflectionProxy`, `TcImports.GetTypeReflectionBuilder`, TPSDK release-note guidance) and verify they remain behind the preview contract. Cross-check `PublicAPI.Unshipped.txt` plus `docs/upcoming/fs-1023.md` before requesting sign-off from the area owners.
+   - ✅ 12 Nov 2025 — Tagged the new `FSharpEntity.GetTypeReflectionProxy` and `TcImports.GetTypeReflectionBuilder` APIs with `[<Experimental("FS-1023 preview API. Subject to change.")>]` so consumers see the preview banner in IntelliSense; documented the requirement in `docs/upcoming/fs-1023.md`/TPSDK release notes earlier.
 3. **Prepare PR** targeting `dotnet/fsharp` with summary, risk assessment, and links to design docs.
 4. **Coordinate with SDK release plan** if updates are required in `FSharp.TypeProviders.SDK` NuGet package.
 

@@ -708,6 +708,7 @@ type FSharpEntity(cenv: SymbolEnv, entity: EntityRef, tyargs: TType list) =
 
 #if !NO_TYPEPROVIDERS
     /// Returns the TastReflection `System.Type` proxy for this definition.
+    [<Experimental("FS-1023 preview API. Subject to change.")>]
     member _.GetTypeReflectionProxy() =
         protect (fun _ ->
             let builder = cenv.tcImports.GetTypeReflectionBuilder()

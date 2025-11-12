@@ -329,6 +329,7 @@ type FSharpEntity =
 
 #if !NO_TYPEPROVIDERS
     /// Returns the TastReflection proxy `System.Type` for this entity.
+    [<Experimental("FS-1023 preview API. Subject to change.")>]
     member GetTypeReflectionProxy: unit -> Type
 #endif
 

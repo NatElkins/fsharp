@@ -1889,6 +1889,7 @@ and [<Sealed>] TcImports
 #endif
         ImportMap(tcImports.GetTcGlobals(), loaderInterface)
 
+    [<Experimental("FS-1023 preview API. Subject to change.")>]
     member tcImports.GetTypeReflectionBuilder() =
         CheckDisposed()
 

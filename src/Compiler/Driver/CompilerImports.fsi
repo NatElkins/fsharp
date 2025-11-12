@@ -174,6 +174,7 @@ type TcImports =
     member ProviderGeneratedTypeRoots: ProviderGeneratedType list
     member PopTypeProviderTypeDependencies: unit -> TyconRef list
     member SkipProviderStaticLinking: bool with get, set
+    [<Experimental("FS-1023 preview API. Subject to change.")>]
     member GetTypeReflectionBuilder: unit -> TypeReflectionBuilder
 #endif
 
