@@ -168,7 +168,17 @@ type Fs1023Provider(config: TypeProviderConfig) as this =
                 | m ->
                     match m.GetParameters() |> Array.tryHead with
                     | None -> "none"
-                    | Some p -> sprintf "%s:%b:%b" p.Name p.IsOptional p.HasDefaultValue
+                    | Some p ->
+                        let attributeNames =
+                            p.GetCustomAttributes(false)
+                            |> Seq.map (fun attr -> attr.GetType().Name)
+                            |> Seq.toArray
+                        let attributeSummary =
+                            if attributeNames.Length = 0 then
+                                "none"
+                            else
+                                String.concat "," attributeNames
+                        sprintf "%s:%b:%b:%s" p.Name p.IsOptional p.HasDefaultValue attributeSummary
 
             let optionalLiteralSummary =
                 match sourceType.GetMethod("OptionalLiteral", BindingFlags.Public ||| BindingFlags.Instance) with
@@ -857,7 +867,7 @@ module UseProvided =
                 printfn "[fs1023][assert] IndexerParameters=%s" indexerSummary
 
                 Assert.Equal("value:required:normal;rest:required:paramarray", mapSummary)
-                Assert.Equal("value:true:true", optionalSummary)
+                Assert.Equal("value:true:true:OptionalArgumentAttribute", optionalSummary)
                 Assert.Equal("value:true:true:42", optionalLiteralSummary)
                 Assert.Equal("index:Int32", indexerSummary)
             finally
@@ -932,7 +942,7 @@ module UseProvided =
 
                 assertValueProperty()
                 assertStaticStringProperty "MapParameters" "value:required:normal;rest:required:paramarray"
-                assertStaticStringProperty "OptionalParameter" "value:true:true"
+                assertStaticStringProperty "OptionalParameter" "value:true:true:OptionalArgumentAttribute"
                 assertStaticStringProperty "OptionalLiteralParameter" "value:true:true:42"
                 assertStaticStringProperty "IndexerParameters" "index:Int32"
 
@@ -1038,7 +1048,7 @@ module UseProvided =
 
                 Assert.Equal("Value", getStaticStringProperty "Value")
                 Assert.Equal("value:required:normal;rest:required:paramarray", getStaticStringProperty "MapParameters")
-                Assert.Equal("value:false:false", getStaticStringProperty "OptionalParameter")
+                Assert.Equal("value:false:false:none", getStaticStringProperty "OptionalParameter")
                 Assert.Equal("value:true:true:42", getStaticStringProperty "OptionalLiteralParameter")
                 Assert.Equal("index:Int32", getStaticStringProperty "IndexerParameters")
 
@@ -1203,7 +1213,7 @@ module UseShapeProvided =
 
             let assertions assemblyPath =
                 let getter = assertProvidedTypeProperties assemblyPath "Fs1023Consumer.Provided"
-                Assert.Equal("value:false:false", getter "OptionalParameter")
+                Assert.Equal("value:false:false:none", getter "OptionalParameter")
                 Assert.Equal("value:true:true:42", getter "OptionalLiteralParameter")
                 Assert.Equal("index:Int32", getter "IndexerParameters")
 

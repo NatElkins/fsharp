@@ -956,6 +956,42 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                     attributeType.IsAssignableFrom proxyType
                 with _ -> false
 
+    let rec instantiateAttributeArgument (arg: CustomAttributeTypedArgument) =
+        match arg.Value with
+        | null -> null
+        | :? IList<CustomAttributeTypedArgument> as nested when
+            not (isNull arg.ArgumentType)
+            && arg.ArgumentType.IsArray ->
+            let elemType =
+                match arg.ArgumentType.GetElementType() with
+                | null -> typeof<obj>
+                | et -> et
+            let array = Array.CreateInstance(elemType, nested.Count)
+            for i = 0 to nested.Count - 1 do
+                array.SetValue(instantiateAttributeArgument nested.[i], i)
+            array :> obj
+        | value -> value
+
+    let instantiateAttributeInstances (data: IList<CustomAttributeData>) =
+        data
+        |> Seq.choose (fun cad ->
+            try
+                match cad.Constructor with
+                | null -> None
+                | ctor ->
+                    let ctorArgs =
+                        cad.ConstructorArguments
+                        |> Seq.map instantiateAttributeArgument
+                        |> Seq.toArray
+                    Some (ctor.Invoke(ctorArgs))
+            with _ -> None)
+        |> Seq.toArray
+
+    let filterAttributesByType (attributeType: Type) (instances: obj[]) =
+        if isNull attributeType then
+            nullArg "attributeType"
+        instances |> Array.filter attributeType.IsInstanceOfType
+
     // Note: For F# type providers we never need to view the custom attributes
     let rec TxCustomAttributesArg (AttribExpr(_,v)) =
         match v with
@@ -994,10 +1030,12 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             member __.NamedArguments = [| |] :> IList<_> 
          }
 
-    and TxCustomAttributesData (attribs:Attribs) = //notRequired "custom attributes are not available for context assemblies"
-         [| for a in attribs do 
-              yield TxCustomAttributesDatum a |]
-         :> IList<CustomAttributeData> 
+    and TxCustomAttributesData (attribs:Attribs) =
+        [|
+            for a in attribs do
+                yield TxCustomAttributesDatum a
+        |]
+        :> IList<CustomAttributeData>
 
     /// Makes a parameter definition read from a binary available as a ParameterInfo. Not all methods are implemented.
     //let rec TxILParameter gps (inp : TyconRef) = 
@@ -1025,6 +1063,9 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             | ValueNone -> None
 #endif
 
+        let methodAttributeData = lazy (vref.Attribs |> TxCustomAttributesData)
+        let methodAttributeInstances = lazy (instantiateAttributeInstances methodAttributeData.Value)
+
         let createParameterInfos memberGetter =
             parameterData
             |> List.mapi (fun position (argTy, argInfo) ->
@@ -1049,6 +1090,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                     |> Option.map (fun ident -> ident.idText)
                     |> Option.defaultValue (sprintf "arg%d" (position + 1))
                 let customAttributesData = TxCustomAttributesData argInfo.Attribs
+                let customAttributesInstances = lazy (instantiateAttributeInstances customAttributesData)
                 let attrTyconRefs =
                     argInfo.Attribs
                     |> List.map (fun (Attrib(tref, _, _, _, _, _, _)) -> tref)
@@ -1062,8 +1104,10 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                     override _.DefaultValue = defaultValueOpt |> Option.defaultValue Type.Missing
                     override _.HasDefaultValue = defaultValueOpt.IsSome
                     override _.GetCustomAttributesData() = customAttributesData
-                    override _.GetCustomAttributes(_inherit) = notRequired "Constructor parameter GetCustomAttributes"
-                    override _.GetCustomAttributes(_attributeType, _inherit) = notRequired "Constructor parameter GetCustomAttributesTyped"
+                    override _.GetCustomAttributes(_inherit) =
+                        customAttributesInstances.Value |> Array.copy
+                    override _.GetCustomAttributes(attributeType, _inherit) =
+                        filterAttributesByType attributeType customAttributesInstances.Value
                     override _.IsDefined(attributeType, _inherit) =
                         let declaredMatch =
                             attrTyconRefs
@@ -1108,7 +1152,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
 #endif
                         createParameterInfos (fun () -> ctorInfo :> MemberInfo))
 
-            { new ConstructorInfo() with
+            { new ConstructorInfo() with 
                 override _.Name = compiledName
                 override _.Attributes = attributes
                 override _.MemberType = MemberTypes.Constructor
@@ -1116,7 +1160,6 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                 override _.CallingConvention = callingConvention
 
                 override _.GetParameters() = parametersLazy.Value
-                override _.GetCustomAttributesData() = vref.Attribs |> TxCustomAttributesData
 
                 override _.GetHashCode() = hash vref.Stamp
                 override this.Equals(that: obj) =
@@ -1137,8 +1180,10 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                 override _.ReflectedType = declTy
                 override _.GetMethodImplementationFlags() = MethodImplAttributes.IL
                 override _.MethodHandle = notRequired "Constructor.MethodHandle"
-                override _.GetCustomAttributes(_inherit) = notRequired "Constructor.GetCustomAttributes"
-                override _.GetCustomAttributes(_attributeType, _inherit) = notRequired "Constructor.GetCustomAttributesTyped"
+                override _.GetCustomAttributesData() = methodAttributeData.Value
+                override _.GetCustomAttributes(_inherit) = methodAttributeInstances.Value |> Array.copy
+                override _.GetCustomAttributes(attributeType, _inherit) =
+                    filterAttributesByType attributeType methodAttributeInstances.Value
                 override _.MetadataToken = int vref.Stamp
                 override _.ToString() = sprintf "ctxt constructor %s(...) in type %s" compiledName declTy.FullName }
 
@@ -1176,6 +1221,9 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         let providedReturnTypeOpt = None
 #endif
 
+        let methodAttributeData = lazy (vref.Attribs |> TxCustomAttributesData)
+        let methodAttributeInstances = lazy (instantiateAttributeInstances methodAttributeData.Value)
+
         let createParameterInfos memberGetter =
             parameterData
             |> List.mapi (fun position (argTy, argInfo) ->
@@ -1200,6 +1248,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                     |> Option.map (fun ident -> ident.idText)
                     |> Option.defaultValue (sprintf "arg%d" (position + 1))
                 let customAttributesData = TxCustomAttributesData argInfo.Attribs
+                let customAttributesInstances = lazy (instantiateAttributeInstances customAttributesData)
                 let attrTyconRefs =
                     argInfo.Attribs
                     |> List.map (fun (Attrib(tref, _, _, _, _, _, _)) -> tref)
@@ -1213,8 +1262,10 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                     override _.DefaultValue = defaultValueOpt |> Option.defaultValue Type.Missing
                     override _.HasDefaultValue = defaultValueOpt.IsSome
                     override _.GetCustomAttributesData() = customAttributesData
-                    override _.GetCustomAttributes(_inherit) = notRequired "Method parameter GetCustomAttributes"
-                    override _.GetCustomAttributes(_attributeType, _inherit) = notRequired "Method parameter GetCustomAttributesTyped"
+                    override _.GetCustomAttributes(_inherit) =
+                        customAttributesInstances.Value |> Array.copy
+                    override _.GetCustomAttributes(attributeType, _inherit) =
+                        filterAttributesByType attributeType customAttributesInstances.Value
                     override _.IsDefined(attributeType, _inherit) =
                         let declaredMatch =
                             attrTyconRefs
@@ -1281,7 +1332,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             override __.GetParameters()   = parametersLazy.Value
             override __.CallingConvention = callingConvention
             override __.ReturnType        = returnType
-            override __.GetCustomAttributesData() = vref.Attribs |> TxCustomAttributesData
+            override __.GetCustomAttributesData() = methodAttributeData.Value
             override __.GetGenericArguments() = gps2
             override __.IsGenericMethod = (gps2.Length <> 0)
             override __.IsGenericMethodDefinition = __.IsGenericMethod
@@ -1314,8 +1365,9 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             override __.GetMethodImplementationFlags() = MethodImplAttributes.IL
             override __.Invoke(obj, invokeAttr, binder, parameters, culture)  = notRequired "Invoke"
             override __.ReflectedType = declTy
-            override __.GetCustomAttributes(inherited) = notRequired "GetCustomAttributes"
-            override __.GetCustomAttributes(attributeType, inherited) = notRequired "GetCustomAttributes" 
+            override __.GetCustomAttributes(_inherited) = methodAttributeInstances.Value |> Array.copy
+            override __.GetCustomAttributes(attributeType, _inherited) =
+                filterAttributesByType attributeType methodAttributeInstances.Value 
 #if !NO_TYPEPROVIDERS
             override __.ReturnParameter =
                 match providedReturnParameterOpt with
@@ -1366,6 +1418,8 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
 
         let getterMethodOpt = getterValOpt |> Option.map (TxMethodDef asm declTy)
         let setterMethodOpt = setterValOpt |> Option.map (TxMethodDef asm declTy)
+        let propertyAttributeData = lazy (inp.Attribs |> TxCustomAttributesData)
+        let propertyAttributeInstances = lazy (instantiateAttributeInstances propertyAttributeData.Value)
 
         let propertyAttributes =
             if String.Equals(inp.PropertyName, "Item", StringComparison.Ordinal) then
@@ -1413,7 +1467,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                     | Some setter when nonPublic || setter.IsPublic -> yield setter
                     | _ -> ()
                 |]
-            override __.GetCustomAttributesData() = inp.Attribs |> TxCustomAttributesData
+            override __.GetCustomAttributesData() = propertyAttributeData.Value
 
             override this.GetHashCode() = hash compiledName
             override this.Equals(that:obj) = 
@@ -1426,9 +1480,12 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             override __.GetValue(obj, invokeAttr, binder, index, culture) = notRequired "GetValue"
             override __.SetValue(obj, _value, invokeAttr, binder, index, culture) = notRequired "SetValue"
             override __.ReflectedType = declTy
-            override __.GetCustomAttributes(inherited) = notRequired "GetCustomAttributes"
-            override __.GetCustomAttributes(attributeType, inherited) = notRequired "GetCustomAttributes"
-            override __.IsDefined(attributeType, inherited) = notRequired "IsDefined"
+            override __.GetCustomAttributes(_inherited) = propertyAttributeInstances.Value |> Array.copy
+            override __.GetCustomAttributes(attributeType, _inherited) =
+                filterAttributesByType attributeType propertyAttributeInstances.Value
+            override __.IsDefined(attributeType, _inherited) =
+                inp.Attribs
+                |> List.exists (fun (Attrib(tref, _, _, _, _, _, _)) -> attributeTypeMatchesTycon attributeType tref)
 
             override __.ToString() = sprintf "ctxt property %s(...) in type %s" compiledName declTy.Name }
 
@@ -1455,6 +1512,13 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             else
                 parameters.[parameters.Length - 1].ParameterType
 
+        let eventAttribs =
+            match propertyVal with
+            | Some vref -> vref.Attribs
+            | None -> []
+        let eventAttributeData = lazy (eventAttribs |> TxCustomAttributesData)
+        let eventAttributeInstances = lazy (instantiateAttributeInstances eventAttributeData.Value)
+
         { new EventInfo() with
             override _.Name = eventName
             override _.MemberType = MemberTypes.Event
@@ -1464,13 +1528,13 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             override _.GetAddMethod(_nonPublic) = addMethod
             override _.GetRemoveMethod(_nonPublic) = removeMethod
             override _.GetRaiseMethod(_nonPublic) = null
-            override _.GetCustomAttributesData() =
-                match propertyVal with
-                | Some vref -> vref.Attribs |> TxCustomAttributesData
-                | None -> Array.empty<CustomAttributeData> :> IList<_>
-            override _.GetCustomAttributes(_inherited) = notRequired "TxEventDefinition.GetCustomAttributes"
-            override _.GetCustomAttributes(_attributeType, _inherited) = notRequired "TxEventDefinition.GetCustomAttributes"
-            override _.IsDefined(_attributeType, _inherited) = false
+            override _.GetCustomAttributesData() = eventAttributeData.Value
+            override _.GetCustomAttributes(_inherited) = eventAttributeInstances.Value |> Array.copy
+            override _.GetCustomAttributes(attributeType, _inherited) =
+                filterAttributesByType attributeType eventAttributeInstances.Value
+            override _.IsDefined(attributeType, _inherited) =
+                eventAttribs
+                |> List.exists (fun (Attrib(tref, _, _, _, _, _, _)) -> attributeTypeMatchesTycon attributeType tref)
             override _.ReflectedType = declTy
             override this.GetHashCode() = hash (declTy, eventName)
             override this.Equals(other: obj) =
@@ -1500,7 +1564,9 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         | Const.Unit -> box ()
         | Const.Zero -> box 0
     
-    and TxFieldDefinition (asm: ReflectAssembly) declTy _ (* gps *) (inp: RecdField) = 
+    and TxFieldDefinition (asm: ReflectAssembly) declTy _ (* gps *) (inp: RecdField) =
+        let fieldAttributeData = lazy (inp.FieldAttribs |> TxCustomAttributesData)
+        let fieldAttributeInstances = lazy (instantiateAttributeInstances fieldAttributeData.Value)
         { new FieldInfo() with 
 
             override __.Name = inp.rfield_id.idText 
@@ -1515,7 +1581,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             override __.DeclaringType = declTy
             override __.FieldType = inp.FormalType |> asm.TxTType
             override __.GetRawConstantValue()  = match inp.LiteralValue with None -> null | Some v -> TxConst v
-            override __.GetCustomAttributesData() = [| |] :> IList<_> // notRequired "CustomAttribute data" // inp.FieldAttribs |> TxCustomAttributesData
+            override __.GetCustomAttributesData() = fieldAttributeData.Value
 
             override __.GetHashCode() = hash inp.rfield_id.idText
             override this.Equals(that:obj) = 
@@ -1524,11 +1590,14 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                     inp.rfield_id.idText = thatFI.Name  &&
                     eqType this.DeclaringType thatFI.DeclaringType 
                 | _ -> false
-    
+   
             override __.ReflectedType = notRequired "ReflectedType"
-            override __.GetCustomAttributes(inherited) = notRequired "GetCustomAttributes"
-            override __.GetCustomAttributes(attributeType, inherited) = notRequired "GetCustomAttributes"
-            override __.IsDefined(attributeType, inherited) = notRequired "IsDefined"
+            override __.GetCustomAttributes(_inherited) = fieldAttributeInstances.Value |> Array.copy
+            override __.GetCustomAttributes(attributeType, _inherited) =
+                filterAttributesByType attributeType fieldAttributeInstances.Value
+            override __.IsDefined(attributeType, _inherited) =
+                inp.FieldAttribs
+                |> List.exists (fun (Attrib(tref, _, _, _, _, _, _)) -> attributeTypeMatchesTycon attributeType tref)
             override __.SetValue(obj, _value, invokeAttr, binder, culture) = notRequired "SetValue"
             override __.GetValue(obj) = notRequired "GetValue"
             override __.FieldHandle = notRequired "FieldHandle"
@@ -1547,6 +1616,8 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             |> Option.map (TxMethodDef asm declTy)
 
         let propertyType = field.FormalType |> asm.TxTType
+        let propertyAttributeData = lazy (field.PropertyAttribs |> TxCustomAttributesData)
+        let propertyAttributeInstances = lazy (instantiateAttributeInstances propertyAttributeData.Value)
 
         { new PropertyInfo() with
             override _.Name = field.LogicalName
@@ -1559,7 +1630,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             override _.CanWrite = field.IsMutable
             override _.GetGetMethod(_nonPublic) = getter |> optionToNull
             override _.GetSetMethod(_nonPublic) = setter |> optionToNull
-            override _.GetCustomAttributesData() = field.PropertyAttribs |> TxCustomAttributesData
+            override _.GetCustomAttributesData() = propertyAttributeData.Value
 
             override this.GetHashCode() = hash field.LogicalName
 
@@ -1569,9 +1640,12 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                     this.Name = propertyInfo.Name && eqType this.DeclaringType propertyInfo.DeclaringType
                 | _ -> false
 
-            override _.GetCustomAttributes(_inherited) = notRequired "TxRecordFieldPropertyDefinition.GetCustomAttributes"
-            override _.GetCustomAttributes(_attributeType, _inherited) = notRequired "TxRecordFieldPropertyDefinition.GetCustomAttributesTyped"
-            override _.IsDefined(_attributeType, _inherited) = notRequired "TxRecordFieldPropertyDefinition.IsDefined"
+            override _.GetCustomAttributes(_inherited) = propertyAttributeInstances.Value |> Array.copy
+            override _.GetCustomAttributes(attributeType, _inherited) =
+                filterAttributesByType attributeType propertyAttributeInstances.Value
+            override _.IsDefined(attributeType, _inherited) =
+                field.PropertyAttribs
+                |> List.exists (fun (Attrib(tref, _, _, _, _, _, _)) -> attributeTypeMatchesTycon attributeType tref)
             override _.GetValue(_obj, _invokeAttr, _binder, _index, _culture) = notRequired "TxRecordFieldPropertyDefinition.GetValue"
             override _.SetValue(_obj, _value, _invokeAttr, _binder, _index, _culture) = notRequired "TxRecordFieldPropertyDefinition.SetValue"
             override _.GetAccessors(_nonPublic) = notRequired "TxRecordFieldPropertyDefinition.GetAccessors"
