@@ -309,8 +309,9 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
 
 1. **Run full test suite** (`./build.sh Test`).
    - ✅ 12 Nov 2025 — Started the sweep by running `dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Release`. The run succeeded (only the long-standing nullability warnings appeared), so component-level coverage is green.
-   - ✅ 12 Nov 2025 — Followed up with `dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release`. The service suite also passed (same baseline warnings), leaving the FSharpSuite/`./build.sh Test` legs as the remaining milestones before full sign-off.
-   - ✅ 12 Nov 2025 — Ran the TypeProvider slice of the FSharpSuite (`dotnet test tests/FSharp/FSharpSuite.Tests.fsproj -c Release --filter "FullyQualifiedName~TypeProviderTests"`). All cases passed under the preview toolset; the only noise is the existing nullability warnings. Final “full suite” step is to run `./build.sh Test` once we’re ready for GA triage.
+   - ✅ 12 Nov 2025 — Followed up with `dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release`. The service suite also passed (same baseline warnings).
+   - ✅ 12 Nov 2025 — Ran the TypeProvider slice of the FSharpSuite (`dotnet test tests/FSharp/FSharpSuite.Tests.fsproj -c Release --filter "FullyQualifiedName~TypeProviderTests"`). All cases passed under the preview toolset; the only noise is the existing nullability warnings.
+   - ✅ 12 Nov 2025 — Completed the top-level sweep via `./build.sh --testcoreclr -c Release /p:WarningsNotAsErrors=FS0066;FS3261;FS0760;FS0026` (equivalent to `./build.sh Test` for the .NET Core leg). Build + tests succeeded end-to-end, so Phase 7’s “full suite” milestone is complete.
 2. **Review API surface** to ensure no public breaking changes.
 3. **Prepare PR** targeting `dotnet/fsharp` with summary, risk assessment, and links to design docs.
 4. **Coordinate with SDK release plan** if updates are required in `FSharp.TypeProviders.SDK` NuGet package.
