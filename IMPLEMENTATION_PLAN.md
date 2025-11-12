@@ -228,6 +228,14 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
   6. **Regression coverage:** extend `tests/FSharp.Compiler.Service.Tests/TypeProviderDependencyInvalidationTests.fs` with a reflection-based assertion that the compiled `Fs1023Consumer.Provided` type exposes the summary properties (e.g., call `typeof<Provided>.GetProperty("MapParameters")`). This ensures IlxGen emits real IL for the summaries before we reintroduce additional static members.
      - ✅ The `provided type publishes members into the TAST` regression now compiles both the normal and `/standalone` binaries and reflects over `Fs1023Consumer.Provided` to assert the summary getters return the expected strings, proving the emitted IL works even after static linking.
 
+- **Next breakdown (Phase 4.4 remaining work):**
+  1. **Finalize member harvesting (`IlxGen.fs`)** — add a helper that walks `tycon.TypeContents.tcaug_adhoc_list`, pairs each `ValRef` with its `ProvidedMemberBinding`, and caches metadata (property shape, member flags, invoker body) so later codegen stages reuse a single catalog.
+  2. **Emit methods/ctors (`GenProvidedTypeDef`)** — consume the catalog and call `GenMethodForBinding`/`IteratedAdjustLambdaToMatchValReprInfo` for each provided method/constructor, ensuring `ComputeMethodAccessRestrictedBySig` and `ValReprInfo` align with the generated IL.
+  3. **Emit properties/events** — once getter/setter methods exist, produce matching `ILPropertyDef`/`ILEventDef` entries that reference the generated methods, replacing the current placeholder `genProvidedMemberBinding` logic.
+  4. **Wire `skipProviderStaticLinking`** — teach `StaticLinking.fs`/`ProvidedAssemblyStaticLinkingMap` to skip provider IL only when IlxGen has emitted a complete `ILTypeDef`, and guard it with `FS1023_TRACE` logging so we can verify when the compiler flips between provider IL and IlxGen output.
+  5. **Validation hooks** — extend IlxGen tracing to log the generated provided type name and member counts, and add a narrow IL-level test (golden diff or reflection assert) to ensure the emitted IL contains the expected method bodies.
+  6. **Standalone regression** — after the above lands, run/exercise one of the Fs1023 summaries directly from the `/standalone` binary (e.g., via reflection invocation) to prove the IlxGen-generated IL behaves identically to the provider’s original IL.
+
 - **Current failure signal:** with static linking suppressed we now crash later in codegen: the regression emits `internal error: One of your modules expects the type 'Fs1023Consumer.Provided' to be defined...`. That confirms the GenLambda issue is gone and the remaining work is to make `GenTypeDef` emit `TProvidedTypeRepr` bodies.
 - **Known gap:** compiling a consumer that passes a generic type (e.g., `Generic<'T>`) as the static argument currently hangs inside `checker.Compile`. The new `GenericInput_multipleInstantiations` regression is skipped until we diagnose the hang (suspect: TastReflection/ProvidedMemberBinding handling of optional generic parameters). Latest `FS1023_TRACE` runs show that `ImportMap.ReflectTypeWithDependencies` and `TypeReflectionBuilder.CaptureTypeDependencies` both return almost immediately for `Generic<int>` (deps reported as `Generic\`1,Int32` with <10 ms total), so the stall happens downstream—likely while reusing the reflected `System.Type` inside static-parameter application. We have now instrumented both `TryApplyProvidedType` and `TryApplyProvidedMethod` (wrapped around `provider.ApplyStaticArguments{,ForMethod}`) so future traces will tell us whether the provider call returns or hangs; next step is to re-run the generic regression under `FS1023_TRACE=1` once the baseline build is fixed (current tree fails earlier because `ProvidedGeneratedTypeRegistry` is missing from the working copy).
 
@@ -273,6 +281,10 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 
 - **Goal:** add a minimal C# consumer that references the generated F# assembly, executes the relocation-safe members, and validates the IL does not reference the provider binary.
 - **Status:** ✅ `csharp consumer executes generated member` now targets `net10.0`, references the freshly built Fs1023 consumer DLL plus `FSharp.Core`, and the reflection asserts prove both `Value` and `MapParameters` flow across the language boundary. The Fs1023 generic regression now also recompiles the consumer with `--standalone`, so static-link coverage guards the IlxGen-emitted IL path.
+- **Outstanding IDE-style coverage:** The historical `tests/fsharp/typeProviders/**` suite is still compiled out on `NETCOREAPP`; running `dotnet test tests/fsharp/FSharpSuite.Tests.fsproj --filter "FullyQualifiedName~TypeProviderTests"` currently discovers zero tests. Next steps:
+  1. Decide whether to multi-target the suite (add `net48`/`net10.0-windows` to `FSharpSuite.Tests.fsproj`) or reintroduce the desktop harness used on the old Visual Studio builds.
+  2. Update the test tooling (`tests/fsharp/tools/*`) so provider tests can run under dotnet if we cross-target, or add a new CI leg that executes the desktop harness.
+  3. Once re-enabled, capture baseline results and mention them here to show IDE-style regressions are back online.
 - ⚠️ Legacy provider samples under `tests/fsharp/typeProviders` are still compiled out on NETCOREAPP; running `dotnet test tests/fsharp/FSharpSuite.Tests.fsproj --filter "FullyQualifiedName~TypeProviderTests"` discovers zero tests. Re-enabling those IDE scenarios (or running the desktop harness) stays on the backlog.
 
 ### 5.3 Negative tests
@@ -282,6 +294,17 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 
 2. **Create developer guidance**
    - Draft doc (e.g., `docs/upcoming/fs-1023.md`) describing how provider authors can use the new capability and restrictions (no anonymous records, no direct references to project types).
+
+---
+
+## Phase 6 — SDK alignment (Status: Not started)
+
+1. **ProvidedTypes documentation**
+   - Update `FSharp.TypeProviders.SDK/src/ProvidedTypes.fs` (and accompanying README/changelog) to call out that FS-1023 proxies now surface real `CustomAttributeData`/`GetCustomAttributes` results so provider authors can inspect optional/paramarray metadata without re-querying the compiler.
+2. **TPSDK regression coverage**
+   - Extend `FSharp.TypeProviders.SDK/tests/ProxyTypeTests.fs` (or add a new test) that invokes `ProvidedTypes.ConvertTargetTypeToSource` against the FS-1023 compiler and asserts attribute instances round-trip.
+3. **Release coordination**
+   - Once the compiler and SDK changes are ready, publish a preview TPSDK package and document the minimum compiler/SDK pairing required for FS-1023 providers. Ensure `docs/upcoming/fs-1023.md` and the SDK release notes reference the pairing.
 
 ---
 
