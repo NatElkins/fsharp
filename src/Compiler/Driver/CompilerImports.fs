@@ -18,6 +18,9 @@ open Internal.Utilities.FSharpEnvironment
 open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras
 
+open System
+open System.IO
+
 open FSharp.Compiler
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryReader
@@ -49,6 +52,30 @@ open FSharp.Core.CompilerServices
 #endif
 
 let (++) x s = x @ [ s ]
+
+let private fs1023TraceEnabled () =
+    match Environment.GetEnvironmentVariable("FS1023_TRACE") with
+    | null -> false
+    | value when String.IsNullOrWhiteSpace value -> false
+    | value when String.Equals(value.Trim(), "0", StringComparison.Ordinal) -> false
+    | _ -> true
+
+let private fs1023Trace format =
+    Printf.ksprintf
+        (fun message ->
+            if fs1023TraceEnabled () then
+                let path =
+                    match Environment.GetEnvironmentVariable("FS1023_TRACE_PATH") with
+                    | null
+                    | "" -> "/tmp/fs1023_trace.log"
+                    | custom -> custom
+
+                let entry = sprintf "%s [fs1023][imports] %s%s" (DateTime.UtcNow.ToString("O")) message Environment.NewLine
+
+                try
+                    File.AppendAllText(path, entry)
+                with _ -> ())
+        format
 
 //----------------------------------------------------------------------------
 // Signature and optimization data blobs
@@ -1654,11 +1681,13 @@ and [<Sealed>] TcImports
             RequireTcImportsLock(tcitok, generatedTycons)
             let stamp = tycon.Stamp
             if not (generatedTycons.ContainsKey stamp) then
-                generatedTycons[stamp] <- tycon
+                generatedTycons[stamp] <- tycon)
 
-            skipProviderStaticLinking <- true)
+        fs1023Trace "record-tycon %s" tycon.CompiledName
 
-        printfn "[fs1023][imports] record tycon %s" tycon.CompiledName
+    member _.MarkProvidedTypeIlEmitted (tycon: Tycon) =
+        tciLock.AcquireLock(fun _tcitok -> skipProviderStaticLinking <- true)
+        fs1023Trace "il-emitted %s skipProviderStaticLinking=true" tycon.CompiledName
 
     member _.PopProvidedGeneratedTycons() =
         tciLock.AcquireLock(fun tcitok ->
@@ -1670,7 +1699,7 @@ and [<Sealed>] TcImports
             generatedTypeRoots.Clear()
 
             for tycon in tycons do
-                printfn "[fs1023][imports] pop tycon %s" tycon.CompiledName
+                fs1023Trace "pop-tycon %s" tycon.CompiledName
 
             tycons)
 
@@ -1848,6 +1877,8 @@ and [<Sealed>] TcImports
                 member _.RecordGeneratedTypeRoot root = tcImports.RecordGeneratedTypeRoot root
 
                 member _.RecordGeneratedTycon tycon = tcImports.RecordGeneratedTycon tycon
+
+                member _.MarkProvidedTypeIlEmitted tycon = tcImports.MarkProvidedTypeIlEmitted tycon
 
                 member _.PopProvidedGeneratedTycons() = tcImports.PopProvidedGeneratedTycons()
 

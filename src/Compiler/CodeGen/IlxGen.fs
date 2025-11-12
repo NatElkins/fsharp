@@ -11252,6 +11252,8 @@ and private GenProvidedTypeDef cenv (mgbuf: AssemblyBuilder) eenv m (tycon: Tyco
 
                 mgbuf.AddOrMergePropertyDef(tref, propDef, vspec.Range))
 
+    cenv.amap.assemblyLoader.MarkProvidedTypeIlEmitted tycon
+
     Some tref
 #endif
 
