@@ -283,3 +283,43 @@ module FSharpMetadataAggregatorTests =
         Assert.Equal(0, generation)
         let baselineParamHandle = firstParameter baselineReader baselineAdd
         Assert.Equal(baselineParamHandle, translatedHandle)
+
+    [<Fact>]
+    let ``aggregator translates closure method handles across generations`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitClosureMultiGenerationArtifacts ()
+        let baselineBytes = artifacts.BaselineBytes
+        let deltaGen1 = artifacts.Generation1
+        let deltaGen2 = artifacts.Generation2
+
+        use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
+        let baselineReader = peReader.GetMetadataReader()
+
+        use deltaProvider1 =
+            MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(deltaGen1.Metadata))
+        let deltaReader1 = deltaProvider1.GetMetadataReader()
+
+        use deltaProvider2 =
+            MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(deltaGen2.Metadata))
+        let deltaReader2 = deltaProvider2.GetMetadataReader()
+
+        let aggregator =
+            FSharpMetadataAggregator.Create(
+                [ baselineReader
+                  deltaReader1
+                  deltaReader2 ])
+
+        let findMethod reader name =
+            reader.MethodDefinitions
+            |> Seq.find (fun handle ->
+                let methodDef = reader.GetMethodDefinition(handle)
+                reader.GetString(methodDef.Name) = name)
+
+        let assertTranslated name =
+            let deltaHandle = findMethod deltaReader2 name
+            let struct (generation, translated) = aggregator.TranslateMethodDefinitionHandle deltaHandle
+            Assert.Equal(0, generation)
+            let baselineHandle = findMethod baselineReader name
+            Assert.Equal(baselineHandle, translated)
+
+        assertTranslated "InvokeOuter"
+        assertTranslated "Invoke@40-1"
