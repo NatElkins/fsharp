@@ -229,12 +229,15 @@ module internal MetadataDeltaTestHelpers =
             let name = readStreamName ()
             printfn "[hotreload-metadata]   stream %-8s offset=%6d size=%6d" name offset size
 
-    let methodKey (typeName: string) name returnType =
+    let methodKeyWithParameters (typeName: string) name (parameterTypes: ILType list) returnType =
         { DeclaringType = typeName
           Name = name
           GenericArity = 0
-          ParameterTypes = []
+          ParameterTypes = parameterTypes
           ReturnType = returnType }
+
+    let methodKey (typeName: string) name returnType =
+        methodKeyWithParameters typeName name [] returnType
 
     let private getHeapSizes (metadataReader: MetadataReader) =
         { StringHeapSize = metadataReader.GetHeapSize HeapIndex.String
@@ -636,7 +639,7 @@ module internal MetadataDeltaTestHelpers =
         let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
             [ { Key = methodKey
                 RowId = 1
-                IsAdded = false
+                IsAdded = true
                 Attributes = getterDef.Attributes
                 ImplAttributes = getterDef.ImplAttributes
                 Name = metadataReader.GetString getterDef.Name
@@ -665,7 +668,7 @@ module internal MetadataDeltaTestHelpers =
         let propertyRows: DeltaWriter.PropertyDefinitionRowInfo list =
             [ { Key = propertyKey
                 RowId = 1
-                IsAdded = false
+                IsAdded = true
                 Name = metadataReader.GetString propertyDef.Name
                 NameHandle = if propertyDef.Name.IsNil then None else Some propertyDef.Name
                 Signature = metadataReader.GetBlobBytes propertyDef.Signature
@@ -677,7 +680,7 @@ module internal MetadataDeltaTestHelpers =
                 RowId = 1
                 TypeDefRowId = MetadataTokens.GetRowNumber typeHandle
                 FirstPropertyRowId = Some 1
-                IsAdded = false } ]
+                IsAdded = true } ]
 
         let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
 
@@ -765,7 +768,7 @@ module internal MetadataDeltaTestHelpers =
         let methodHandle = findMethodHandle metadataReader "Sample.AsyncHost" "RunAsync"
 
         let methodKey =
-            methodKey "Sample.AsyncHost" "RunAsync" [ ilGlobals.typ_Int32 ] ilGlobals.typ_String
+            methodKeyWithParameters "Sample.AsyncHost" "RunAsync" [ ilGlobals.typ_Int32 ] ilGlobals.typ_String
 
         let methodDef = metadataReader.GetMethodDefinition methodHandle
         let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
@@ -795,9 +798,9 @@ module internal MetadataDeltaTestHelpers =
         DeltaWriter.emit
             builder.MetadataBuilder
             moduleName
-            (Guid.NewGuid())
-            (Guid.NewGuid())
-            (Guid.NewGuid())
+            (System.Guid.NewGuid())
+            (System.Guid.NewGuid())
+            (System.Guid.NewGuid())
             methodDefinitionRows
             []
             []
@@ -881,7 +884,7 @@ module internal MetadataDeltaTestHelpers =
                     let row: DeltaWriter.ParameterDefinitionRowInfo =
                         { Key = key
                           RowId = MetadataTokens.GetRowNumber parameterHandle
-                          IsAdded = false
+                          IsAdded = true
                           Attributes = parameter.Attributes
                           SequenceNumber = int parameter.SequenceNumber
                           Name =
@@ -902,7 +905,7 @@ module internal MetadataDeltaTestHelpers =
         let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
             [ { Key = methodKey
                 RowId = 1
-                IsAdded = false
+                IsAdded = true
                 Attributes = addDef.Attributes
                 ImplAttributes = addDef.ImplAttributes
                 Name = metadataReader.GetString addDef.Name
@@ -934,7 +937,7 @@ module internal MetadataDeltaTestHelpers =
         let eventRows: DeltaWriter.EventDefinitionRowInfo list =
             [ { Key = eventKey
                 RowId = 1
-                IsAdded = false
+                IsAdded = true
                 Name = metadataReader.GetString eventDef.Name
                 NameHandle = if eventDef.Name.IsNil then None else Some eventDef.Name
                 Attributes = eventDef.Attributes
@@ -948,7 +951,7 @@ module internal MetadataDeltaTestHelpers =
                     |> Seq.find (fun handle -> metadataReader.GetString(metadataReader.GetTypeDefinition(handle).Name) = "EventHost")
                     |> MetadataTokens.GetRowNumber
                 FirstEventRowId = Some 1
-                IsAdded = false } ]
+                IsAdded = true } ]
 
         let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
 
@@ -957,7 +960,7 @@ module internal MetadataDeltaTestHelpers =
                 Association = MetadataTokens.EventDefinitionHandle 1 |> EventDefinitionHandle.op_Implicit
                 MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit addHandle)
                 Attributes = MethodSemanticsAttributes.Adder
-                IsAdded = false
+                IsAdded = true
                 AssociationInfo = Some(MethodSemanticsAssociation.EventAssociation(eventKey, 1)) } ]
 
         DeltaWriter.emit
@@ -1005,77 +1008,6 @@ module internal MetadataDeltaTestHelpers =
             advanceHeapOffsets baseOffsets generation1.Delta
 
         let generation2 = emitEventDeltaFromBaseline generation1.BaselineBytes nextOffsets
-
-        { BaselineBytes = generation1.BaselineBytes
-          Generation1 = generation1.Delta
-          Generation2 = generation2 }
-
-    let private emitClosureDeltaCore
-        (metadataReader: MetadataReader)
-        (builder: IlDeltaStreamBuilder)
-        (heapOffsets: MetadataHeapOffsets)
-        : DeltaWriter.MetadataDelta =
-        let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
-        let stringType = ilGlobals.typ_String
-
-        let nextMethodRowId = ref 1
-        let nextParamRowId = ref 1
-
-        let artifacts : AddedMethodArtifacts list =
-            [ buildAddedMethod metadataReader nextMethodRowId nextParamRowId "Sample.ClosureHost" "InvokeOuter" [ stringType ] stringType
-              buildAddedMethod metadataReader nextMethodRowId nextParamRowId "Sample.ClosureHost" "Invoke@40-1" [ stringType ] stringType ]
-
-        let methodRows = artifacts |> List.map (fun a -> a.MethodRow)
-        let parameterRows = artifacts |> List.collect (fun a -> a.ParameterRows)
-        let updates = artifacts |> List.map (fun a -> a.Update)
-
-        DeltaWriter.emit
-            builder.MetadataBuilder
-            moduleName
-            (Guid.NewGuid())
-            (Guid.NewGuid())
-            (Guid.NewGuid())
-            methodRows
-            parameterRows
-            []
-            []
-            []
-            []
-            []
-            updates
-            heapOffsets
-            (getRowCounts metadataReader)
-
-    let emitClosureDeltaArtifacts () : MetadataDeltaArtifacts =
-        let moduleDef = createClosureModule ()
-        let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
-        use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
-        let metadataReader = peReader.GetMetadataReader()
-        let builder = IlDeltaStreamBuilder None
-        let heapOffsets = computeHeapOffsets metadataReader
-        let delta = emitClosureDeltaCore metadataReader builder heapOffsets
-
-        assertTableStreamMatches delta
-
-        { BaselineBytes = assemblyBytes
-          Delta = delta }
-
-    let private emitClosureDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) =
-        use peReader = new PEReader(new MemoryStream(baselineBytes, false))
-        let metadataReader = peReader.GetMetadataReader()
-        let builder = IlDeltaStreamBuilder None
-        emitClosureDeltaCore metadataReader builder heapOffsets
-
-    let emitClosureMultiGenerationArtifacts () : MultiGenerationMetadataArtifacts =
-        let generation1 = emitClosureDeltaArtifacts ()
-
-        let nextOffsets =
-            use peReader = new PEReader(new MemoryStream(generation1.BaselineBytes, false))
-            let metadataReader = peReader.GetMetadataReader()
-            let baseOffsets = computeHeapOffsets metadataReader
-            advanceHeapOffsets baseOffsets generation1.Delta
-
-        let generation2 = emitClosureDeltaFromBaseline generation1.BaselineBytes nextOffsets
 
         { BaselineBytes = generation1.BaselineBytes
           Generation1 = generation1.Delta
@@ -1156,6 +1088,78 @@ module internal MetadataDeltaTestHelpers =
         { MethodRow = methodRow
           ParameterRows = parameterRows
           Update = update }
+
+    let private emitClosureDeltaCore
+        (metadataReader: MetadataReader)
+        (builder: IlDeltaStreamBuilder)
+        (heapOffsets: MetadataHeapOffsets)
+        : DeltaWriter.MetadataDelta =
+        let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
+        let stringType = ilGlobals.typ_String
+
+        let nextMethodRowId = ref 1
+        let nextParamRowId = ref 1
+
+        let artifacts : AddedMethodArtifacts list =
+            [ buildAddedMethod metadataReader nextMethodRowId nextParamRowId "Sample.ClosureHost" "InvokeOuter" [ stringType ] stringType
+              buildAddedMethod metadataReader nextMethodRowId nextParamRowId "Sample.ClosureHost" "Invoke@40-1" [ stringType ] stringType ]
+
+        let methodRows = artifacts |> List.map (fun a -> a.MethodRow)
+        let parameterRows = artifacts |> List.collect (fun a -> a.ParameterRows)
+        let updates = artifacts |> List.map (fun a -> a.Update)
+
+        DeltaWriter.emit
+            builder.MetadataBuilder
+            moduleName
+            (System.Guid.NewGuid())
+            (System.Guid.NewGuid())
+            (System.Guid.NewGuid())
+            methodRows
+            parameterRows
+            []
+            []
+            []
+            []
+            []
+            updates
+            heapOffsets
+            (getRowCounts metadataReader)
+
+    let emitClosureDeltaArtifacts () : MetadataDeltaArtifacts =
+        let moduleDef = createClosureModule ()
+        let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
+        use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+        let builder = IlDeltaStreamBuilder None
+        let heapOffsets = computeHeapOffsets metadataReader
+        let delta = emitClosureDeltaCore metadataReader builder heapOffsets
+
+        assertTableStreamMatches delta
+
+        { BaselineBytes = assemblyBytes
+          Delta = delta }
+
+    let private emitClosureDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) =
+        use peReader = new PEReader(new MemoryStream(baselineBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+        let builder = IlDeltaStreamBuilder None
+        emitClosureDeltaCore metadataReader builder heapOffsets
+
+    let emitClosureMultiGenerationArtifacts () : MultiGenerationMetadataArtifacts =
+        let generation1 = emitClosureDeltaArtifacts ()
+
+        let nextOffsets =
+            use peReader = new PEReader(new MemoryStream(generation1.BaselineBytes, false))
+            let metadataReader = peReader.GetMetadataReader()
+            let baseOffsets = computeHeapOffsets metadataReader
+            advanceHeapOffsets baseOffsets generation1.Delta
+
+        let generation2 = emitClosureDeltaFromBaseline generation1.BaselineBytes nextOffsets
+
+        { BaselineBytes = generation1.BaselineBytes
+          Generation1 = generation1.Delta
+          Generation2 = generation2 }
+
     type MetadataStreamHeader =
         { Name: string
           Offset: int

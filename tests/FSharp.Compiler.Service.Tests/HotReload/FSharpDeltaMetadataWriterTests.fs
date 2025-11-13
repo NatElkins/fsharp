@@ -267,8 +267,8 @@ module FSharpDeltaMetadataWriterTests =
                (TableIndex.Property, 1)
                (TableIndex.PropertyMap, 1) |]
 
-        Assert.Equal(expectedEncLog, metadataDelta.EncLog)
-        Assert.Equal(expectedEncMap, metadataDelta.EncMap)
+        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, metadataDelta.EncLog)
+        Assert.Equal<(TableIndex * int)[]>(expectedEncMap, metadataDelta.EncMap)
         Assert.True(metadataDelta.Metadata.Length > 0)
         Assert.Contains("Message", Encoding.UTF8.GetString(metadataDelta.StringHeap))
         assertTableStreamMatches metadataDelta
@@ -276,36 +276,6 @@ module FSharpDeltaMetadataWriterTests =
         assertBitMasksMatch metadataDelta.Metadata metadataDelta.TableBitMasks
         assertEncLogMatches metadataDelta.Metadata metadataDelta.EncLog
         assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap
-
-    [<Fact>]
-    let ``event multi-generation deltas preserve EncLog ordering`` () =
-        let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
-
-        let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
-            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
-               (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
-               (TableIndex.Event, 1, EditAndContinueOperation.AddEvent)
-               (TableIndex.EventMap, 1, EditAndContinueOperation.AddEvent)
-               (TableIndex.MethodSemantics, 1, EditAndContinueOperation.AddMethod) |]
-
-        let expectedEncMap: (TableIndex * int)[] =
-            [| (TableIndex.Module, 1)
-               (TableIndex.MethodDef, 1)
-               (TableIndex.Event, 1)
-               (TableIndex.EventMap, 1)
-               (TableIndex.MethodSemantics, 1) |]
-
-        let assertDelta (delta: DeltaWriter.MetadataDelta) =
-            Assert.Equal(expectedEncLog, delta.EncLog)
-            Assert.Equal(expectedEncMap, delta.EncMap)
-            assertTableStreamMatches delta
-            assertTableCountsMatch delta.Metadata delta.TableRowCounts
-            assertBitMasksMatch delta.Metadata delta.TableBitMasks
-            assertEncLogMatches delta.Metadata delta.EncLog
-            assertEncMapMatches delta.Metadata delta.EncMap
-
-        assertDelta artifacts.Generation1
-        assertDelta artifacts.Generation2
 
     [<Fact>]
     let ``property multi-generation deltas preserve EncLog ordering`` () =
@@ -324,8 +294,8 @@ module FSharpDeltaMetadataWriterTests =
                (TableIndex.PropertyMap, 1) |]
 
         let assertDelta (delta: DeltaWriter.MetadataDelta) =
-            Assert.Equal(expectedEncLog, delta.EncLog)
-            Assert.Equal(expectedEncMap, delta.EncMap)
+            Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, delta.EncLog)
+            Assert.Equal<(TableIndex * int)[]>(expectedEncMap, delta.EncMap)
             assertTableStreamMatches delta
             assertTableCountsMatch delta.Metadata delta.TableRowCounts
             assertBitMasksMatch delta.Metadata delta.TableBitMasks
@@ -478,8 +448,8 @@ module FSharpDeltaMetadataWriterTests =
                (TableIndex.EventMap, 1)
                (TableIndex.MethodSemantics, 1) |]
 
-        Assert.Equal(expectedEncLog, metadataDelta.EncLog)
-        Assert.Equal(expectedEncMap, metadataDelta.EncMap)
+        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, metadataDelta.EncLog)
+        Assert.Equal<(TableIndex * int)[]>(expectedEncMap, metadataDelta.EncMap)
         Assert.Contains("OnChanged", Encoding.UTF8.GetString(metadataDelta.StringHeap))
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
@@ -494,6 +464,7 @@ module FSharpDeltaMetadataWriterTests =
         let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
             [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
                (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
+               (TableIndex.Param, 1, EditAndContinueOperation.AddParameter)
                (TableIndex.Event, 1, EditAndContinueOperation.AddEvent)
                (TableIndex.EventMap, 1, EditAndContinueOperation.AddEvent)
                (TableIndex.MethodSemantics, 1, EditAndContinueOperation.AddMethod) |]
@@ -501,13 +472,14 @@ module FSharpDeltaMetadataWriterTests =
         let expectedEncMap: (TableIndex * int)[] =
             [| (TableIndex.Module, 1)
                (TableIndex.MethodDef, 1)
+               (TableIndex.Param, 1)
                (TableIndex.Event, 1)
                (TableIndex.EventMap, 1)
                (TableIndex.MethodSemantics, 1) |]
 
         let assertDelta (delta: DeltaWriter.MetadataDelta) =
-            Assert.Equal(expectedEncLog, delta.EncLog)
-            Assert.Equal(expectedEncMap, delta.EncMap)
+            Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, delta.EncLog)
+            Assert.Equal<(TableIndex * int)[]>(expectedEncMap, delta.EncMap)
             assertTableStreamMatches delta
             assertTableCountsMatch delta.Metadata delta.TableRowCounts
             assertBitMasksMatch delta.Metadata delta.TableBitMasks
@@ -533,8 +505,8 @@ module FSharpDeltaMetadataWriterTests =
             [| (TableIndex.Module, 1)
                (TableIndex.MethodDef, 1) |]
 
-        Assert.Equal(expectedEncLog, metadataDelta.EncLog)
-        Assert.Equal(expectedEncMap, metadataDelta.EncMap)
+        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, metadataDelta.EncLog)
+        Assert.Equal<(TableIndex * int)[]>(expectedEncMap, metadataDelta.EncMap)
         Assert.True(metadataDelta.Metadata.Length > 0)
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
@@ -557,8 +529,8 @@ module FSharpDeltaMetadataWriterTests =
                (TableIndex.MethodDef, 1) |]
 
         let assertDelta (delta: DeltaWriter.MetadataDelta) =
-            Assert.Equal(expectedEncLog, delta.EncLog)
-            Assert.Equal(expectedEncMap, delta.EncMap)
+            Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, delta.EncLog)
+            Assert.Equal<(TableIndex * int)[]>(expectedEncMap, delta.EncMap)
             assertTableStreamMatches delta
             assertTableCountsMatch delta.Metadata delta.TableRowCounts
             assertBitMasksMatch delta.Metadata delta.TableBitMasks
@@ -685,6 +657,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 updates
                 MetadataHeapOffsets.Zero
+                (getRowCounts metadataReader)
 
         assertTableStreamMatches metadataDelta
 
@@ -725,8 +698,6 @@ module FSharpDeltaMetadataWriterTests =
                 updates
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
-                (getRowCounts metadataReader)
-                (getRowCounts metadataReader)
 
         Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
         Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.Param])
@@ -740,8 +711,8 @@ module FSharpDeltaMetadataWriterTests =
                (TableIndex.MethodDef, methodRows.Head.RowId)
                (TableIndex.Param, parameterRows.Head.RowId) |]
 
-        Assert.Equal(expectedEncLog, metadataDelta.EncLog)
-        Assert.Equal(expectedEncMap, metadataDelta.EncMap)
+        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, metadataDelta.EncLog)
+        Assert.Equal<(TableIndex * int)[]>(expectedEncMap, metadataDelta.EncMap)
         Assert.True(metadataDelta.Metadata.Length > 0)
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
@@ -805,8 +776,8 @@ module FSharpDeltaMetadataWriterTests =
                (TableIndex.Param, parameterRows[0].RowId)
                (TableIndex.Param, parameterRows[1].RowId) |]
 
-        Assert.Equal(expectedEncLog, metadataDelta.EncLog)
-        Assert.Equal(expectedEncMap, metadataDelta.EncMap)
+        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, metadataDelta.EncLog)
+        Assert.Equal<(TableIndex * int)[]>(expectedEncMap, metadataDelta.EncMap)
         Assert.True(metadataDelta.Metadata.Length > 0)
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
@@ -833,8 +804,8 @@ module FSharpDeltaMetadataWriterTests =
                (TableIndex.Param, 2) |]
 
         let assertDelta (delta: DeltaWriter.MetadataDelta) =
-            Assert.Equal(expectedEncLog, delta.EncLog)
-            Assert.Equal(expectedEncMap, delta.EncMap)
+            Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, delta.EncLog)
+            Assert.Equal<(TableIndex * int)[]>(expectedEncMap, delta.EncMap)
             assertTableStreamMatches delta
             assertTableCountsMatch delta.Metadata delta.TableRowCounts
             assertBitMasksMatch delta.Metadata delta.TableBitMasks
@@ -889,17 +860,17 @@ module FSharpDeltaMetadataWriterTests =
         let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
             [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
                (TableIndex.MethodDef, methodRows[0].RowId, EditAndContinueOperation.AddMethod)
-               (TableIndex.Param, parameterRows[0].RowId, EditAndContinueOperation.AddParameter)
-               (TableIndex.MethodDef, methodRows[1].RowId, EditAndContinueOperation.AddMethod) |]
+               (TableIndex.MethodDef, methodRows[1].RowId, EditAndContinueOperation.AddMethod)
+               (TableIndex.Param, parameterRows[0].RowId, EditAndContinueOperation.AddParameter) |]
 
         let expectedEncMap: (TableIndex * int)[] =
             [| (TableIndex.Module, 1)
                (TableIndex.MethodDef, methodRows[0].RowId)
-               (TableIndex.Param, parameterRows[0].RowId)
-               (TableIndex.MethodDef, methodRows[1].RowId) |]
+               (TableIndex.MethodDef, methodRows[1].RowId)
+               (TableIndex.Param, parameterRows[0].RowId) |]
 
-        Assert.Equal(expectedEncLog, metadataDelta.EncLog)
-        Assert.Equal(expectedEncMap, metadataDelta.EncMap)
+        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, metadataDelta.EncLog)
+        Assert.Equal<(TableIndex * int)[]>(expectedEncMap, metadataDelta.EncMap)
         Assert.True(metadataDelta.Metadata.Length > 0)
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts

@@ -6,6 +6,7 @@ open System.Collections.Immutable
 open System.Linq
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
+open Microsoft.FSharp.Collections
 
 /// <summary>
 /// Lightweight wrapper around <see cref="MetadataAggregator"/> that retains the baseline reader and the
@@ -21,6 +22,9 @@ type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
     let readersArray = readers.ToArray()
     let baseline = readersArray.[0]
     let deltas = readersArray |> Array.skip 1
+    let readerGeneration = Dictionary<MetadataReader, int>(HashIdentity.Reference)
+    do
+        readersArray |> Array.iteri (fun generation reader -> readerGeneration[reader] <- generation)
     let baselineStringHandles =
         let dict = Dictionary<string, StringHandle>(StringComparer.Ordinal)
 
@@ -72,18 +76,20 @@ type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
         let struct (generation, translated) = this.TranslateHandle(ParameterHandle.op_Implicit handle)
         struct (generation, ParameterHandle.op_Explicit translated)
 
-    member this.TranslateStringHandle(handle: StringHandle) =
-        let struct (generation, translated) = this.TranslateHandle(StringHandle.op_Implicit handle)
+    member _.TranslateStringHandle(sourceReader: MetadataReader, handle: StringHandle) =
+        let generation =
+            match readerGeneration.TryGetValue sourceReader with
+            | true, value -> value
+            | _ -> invalidArg (nameof sourceReader) "Metadata reader is not part of this aggregator."
+
         if generation = 0 then
-            struct (generation, StringHandle.op_Explicit translated)
+            struct (0, handle)
         else
-            let reader = readersArray.[generation]
-            let translatedHandle = StringHandle.op_Explicit translated
-            let value = reader.GetString translatedHandle
+            let value = sourceReader.GetString handle
 
             match baselineStringHandles.TryGetValue value with
             | true, baselineHandle -> struct (0, baselineHandle)
-            | _ -> struct (generation, translatedHandle)
+            | _ -> struct (generation, handle)
 
     static member Create(readers: seq<MetadataReader>) =
         FSharpMetadataAggregator(ImmutableArray.CreateRange(readers))

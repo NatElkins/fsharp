@@ -72,7 +72,7 @@ module FSharpMetadataAggregatorTests =
             |> Seq.head
 
         let deltaMethodDef = deltaReader.GetMethodDefinition deltaMethodHandle
-        let struct(stringGeneration, translatedString) = aggregator.TranslateStringHandle deltaMethodDef.Name
+        let struct(stringGeneration, translatedString) = aggregator.TranslateStringHandle(deltaReader, deltaMethodDef.Name)
 
         Assert.Equal(0, stringGeneration)
         let baselineValue = baselineReader.GetString translatedString
@@ -138,7 +138,7 @@ module FSharpMetadataAggregatorTests =
             |> Seq.head
 
         let delta2MethodDef = deltaReader2.GetMethodDefinition delta2MethodHandle
-        let struct (stringGeneration, translatedHandle) = aggregator.TranslateStringHandle delta2MethodDef.Name
+        let struct (stringGeneration, translatedHandle) = aggregator.TranslateStringHandle(deltaReader2, delta2MethodDef.Name)
 
         Assert.Equal(0, stringGeneration)
         Assert.Equal(
@@ -228,7 +228,7 @@ module FSharpMetadataAggregatorTests =
         let baselineParam = baselineReader.GetParameter baselineParamHandle
         let deltaParam = deltaReader.GetParameter deltaParamHandle
 
-        let struct (stringGeneration, translatedHandle) = aggregator.TranslateStringHandle deltaParam.Name
+        let struct (stringGeneration, translatedHandle) = aggregator.TranslateStringHandle(deltaReader, deltaParam.Name)
 
         Assert.Equal(0, stringGeneration)
         Assert.Equal(
@@ -308,7 +308,7 @@ module FSharpMetadataAggregatorTests =
                   deltaReader1
                   deltaReader2 ])
 
-        let findMethod reader name =
+        let findMethod (reader: MetadataReader) name =
             reader.MethodDefinitions
             |> Seq.find (fun handle ->
                 let methodDef = reader.GetMethodDefinition(handle)

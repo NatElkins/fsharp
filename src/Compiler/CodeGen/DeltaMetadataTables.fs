@@ -86,40 +86,12 @@ type private RowTableBuilder() =
     member _.Entries = rows.ToArray()
     member _.Count = rows.Count
 
-type private StringHeapEntry =
-    | New of string
-    | Existing of int * string
-
-type private StringHeapBuilder(baselineLength: int) =
-    let entries = ResizeArray<StringHeapEntry>()
+type private StringHeapBuilder(_baselineLength: int) =
+    let entries = ResizeArray<string>()
     let lookup = Dictionary<string, int>(StringComparer.Ordinal)
-    let existingLookup = Dictionary<int, int>()
     let utf8 = Encoding.UTF8
     let mutable bytesCache: byte[] option = None
     let mutable offsetsCache: int[] option = None
-    let mutable prefixBuffer : byte[] option =
-        if baselineLength > 0 then
-            let buffer = Array.zeroCreate<byte> baselineLength
-            if buffer.Length > 0 then
-                buffer[0] <- 0uy
-            Some buffer
-        else
-            None
-
-    let ensurePrefix lengthNeeded =
-        match prefixBuffer with
-        | Some buffer when buffer.Length >= lengthNeeded -> buffer
-        | Some buffer ->
-            let resized = Array.zeroCreate<byte> lengthNeeded
-            Buffer.BlockCopy(buffer, 0, resized, 0, buffer.Length)
-            prefixBuffer <- Some resized
-            resized
-        | None ->
-            let length = max lengthNeeded 1
-            let buffer = Array.zeroCreate<byte> length
-            buffer[0] <- 0uy
-            prefixBuffer <- Some buffer
-            buffer
 
     member _.AddSharedEntry(value: string) : int =
         if String.IsNullOrEmpty value then
@@ -129,56 +101,28 @@ type private StringHeapBuilder(baselineLength: int) =
             | true, index -> index
             | _ ->
                 let index = entries.Count + 1
-                entries.Add(StringHeapEntry.New value)
+                entries.Add value
                 lookup[value] <- index
                 bytesCache <- None
                 offsetsCache <- None
                 index
 
-    member _.AddExistingEntry(offset: int, value: string) : int =
-        match existingLookup.TryGetValue offset with
-        | true, index -> index
-        | _ ->
-            let index = entries.Count + 1
-            entries.Add(StringHeapEntry.Existing(offset, value))
-            existingLookup[offset] <- index
-            bytesCache <- None
-            offsetsCache <- None
-            index
-
     member private this.BuildIfNeeded() =
         match bytesCache, offsetsCache with
         | Some _, Some _ -> ()
         | _ ->
-            // Ensure prefix buffer carries all reused entries before writing.
-            for entry in entries do
-                match entry with
-                | StringHeapEntry.Existing(offset, value) ->
-                    let bytes = utf8.GetBytes value
-                    let neededLength = offset + bytes.Length + 1
-                    let prefix = ensurePrefix neededLength
-                    Buffer.BlockCopy(bytes, 0, prefix, offset, bytes.Length)
-                    prefix[offset + bytes.Length] <- 0uy
-                | _ -> ()
-
             use ms = new MemoryStream()
             use writer = new BinaryWriter(ms, utf8, leaveOpen = true)
             let entryOffsets = Array.zeroCreate (entries.Count + 1)
-            match prefixBuffer with
-            | Some prefix -> writer.Write(prefix)
-            | None -> writer.Write(byte 0)
+            writer.Write(byte 0)
             let mutable currentOffset = int ms.Length
             for i = 0 to entries.Count - 1 do
                 let entryIndex = i + 1
-                match entries.[i] with
-                | StringHeapEntry.Existing(offset, _) ->
-                    entryOffsets.[entryIndex] <- offset
-                | StringHeapEntry.New value ->
-                    entryOffsets.[entryIndex] <- currentOffset
-                    let bytes = utf8.GetBytes value
-                    writer.Write(bytes)
-                    writer.Write(byte 0)
-                    currentOffset <- currentOffset + bytes.Length + 1
+                entryOffsets.[entryIndex] <- currentOffset
+                let bytes = utf8.GetBytes entries.[i]
+                writer.Write(bytes)
+                writer.Write(byte 0)
+                currentOffset <- currentOffset + bytes.Length + 1
             writer.Flush()
             bytesCache <- Some(ms.ToArray())
             offsetsCache <- Some entryOffsets
@@ -193,18 +137,11 @@ type private StringHeapBuilder(baselineLength: int) =
             this.BuildIfNeeded()
             offsetsCache.Value
 
-type private BlobHeapEntry =
-    | New of byte[]
-    | Existing of int * byte[]
-
-type private ByteArrayHeapBuilder(baselineLength: int) =
-    let entries = ResizeArray<BlobHeapEntry>()
+type private ByteArrayHeapBuilder(_baselineLength: int) =
+    let entries = ResizeArray<byte[]>()
     let lookup = Dictionary<byte[], int>(byteArrayComparer)
-    let existingLookup = Dictionary<int, int>()
     let mutable bytesCache: byte[] option = None
     let mutable offsetsCache: int[] option = None
-    let mutable prefixBuffer : byte[] option =
-        if baselineLength > 0 then Some(Array.zeroCreate<byte> baselineLength) else None
 
     let encodeCompressedUnsigned value =
         use ms = new MemoryStream()
@@ -212,20 +149,6 @@ type private ByteArrayHeapBuilder(baselineLength: int) =
         writeCompressedUnsigned writer value
         writer.Flush()
         ms.ToArray()
-
-    let ensurePrefix lengthNeeded =
-        match prefixBuffer with
-        | Some buffer when buffer.Length >= lengthNeeded -> buffer
-        | Some buffer ->
-            let resized = Array.zeroCreate<byte> lengthNeeded
-            Buffer.BlockCopy(buffer, 0, resized, 0, buffer.Length)
-            prefixBuffer <- Some resized
-            resized
-        | None ->
-            let length = max lengthNeeded 1
-            let buffer = Array.zeroCreate<byte> length
-            prefixBuffer <- Some buffer
-            buffer
 
     member _.AddSharedEntry(value: byte[]) : int =
         if isNull (box value) || value.Length = 0 then
@@ -235,56 +158,29 @@ type private ByteArrayHeapBuilder(baselineLength: int) =
             | true, index -> index
             | _ ->
                 let index = entries.Count + 1
-                entries.Add(BlobHeapEntry.New value)
+                entries.Add value
                 lookup[value] <- index
                 bytesCache <- None
                 offsetsCache <- None
                 index
 
-    member _.AddExistingEntry(offset: int, value: byte[]) : int =
-        match existingLookup.TryGetValue offset with
-        | true, index -> index
-        | _ ->
-            let index = entries.Count + 1
-            entries.Add(BlobHeapEntry.Existing(offset, value))
-            existingLookup[offset] <- index
-            bytesCache <- None
-            offsetsCache <- None
-            index
-
     member private this.BuildIfNeeded() =
         match bytesCache, offsetsCache with
         | Some _, Some _ -> ()
         | _ ->
-            for entry in entries do
-                match entry with
-                | BlobHeapEntry.Existing(offset, value) ->
-                    let encodedLength = encodeCompressedUnsigned value.Length
-                    let neededLength = offset + encodedLength.Length + value.Length
-                    let prefix = ensurePrefix neededLength
-                    Buffer.BlockCopy(encodedLength, 0, prefix, offset, encodedLength.Length)
-                    if value.Length > 0 then
-                        Buffer.BlockCopy(value, 0, prefix, offset + encodedLength.Length, value.Length)
-                | _ -> ()
-
             use ms = new MemoryStream()
             use writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen = true)
             let entryOffsets = Array.zeroCreate (entries.Count + 1)
-            match prefixBuffer with
-            | Some prefix when prefix.Length > 0 -> writer.Write(prefix)
-            | _ -> writer.Write(byte 0)
+            writer.Write(byte 0)
             let mutable currentOffset = int ms.Length
             for i = 0 to entries.Count - 1 do
                 let entryIndex = i + 1
-                match entries.[i] with
-                | BlobHeapEntry.Existing(offset, _) ->
-                    entryOffsets.[entryIndex] <- offset
-                | BlobHeapEntry.New value ->
-                    entryOffsets.[entryIndex] <- currentOffset
-                    writeCompressedUnsigned writer value.Length
-                    if value.Length > 0 then
-                        writer.Write(value)
-                    currentOffset <- int ms.Length
+                entryOffsets.[entryIndex] <- currentOffset
+                let value = entries.[i]
+                writeCompressedUnsigned writer value.Length
+                if value.Length > 0 then
+                    writer.Write(value)
+                currentOffset <- int ms.Length
             writer.Flush()
             bytesCache <- Some(ms.ToArray())
             offsetsCache <- Some entryOffsets
@@ -299,12 +195,7 @@ type private ByteArrayHeapBuilder(baselineLength: int) =
             this.BuildIfNeeded()
             offsetsCache.Value
 
-    member _.Entries =
-        entries
-        |> Seq.choose (function
-            | BlobHeapEntry.New value -> Some value
-            | _ -> None)
-        |> Seq.toArray
+    member _.Entries = entries |> Seq.toArray
 
 type private UserStringHeapBuilder() =
     let entries = HashSet<int>()
@@ -399,9 +290,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let rowElementUShort (value: uint16) = rowElement RowElementTags.UShort (int value)
     let rowElementULong (value: int) = rowElement RowElementTags.ULong value
     let rowElementString value = rowElement RowElementTags.String value
-    let rowElementStringAbsolute value = rowElementAbsolute RowElementTags.String value
     let rowElementBlob value = rowElement RowElementTags.Blob value
-    let rowElementBlobAbsolute value = rowElementAbsolute RowElementTags.Blob value
     let rowElementGuid value = rowElement RowElementTags.Guid value
     let rowElementSimpleIndex table value = rowElement (RowElementTags.SimpleIndex table) value
     let rowElementTypeDefOrRef tag value = rowElement (RowElementTags.TypeDefOrRefOrSpec tag) value
@@ -409,15 +298,9 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
 
     let addStringValue (value: string) = if String.IsNullOrEmpty value then 0 else strings.AddSharedEntry value
 
-    let addExistingStringHandle (handle: StringHandle option) (value: string) : int * bool =
-        match handle with
-        | Some h when not h.IsNil ->
-            let offset = MetadataTokens.GetHeapOffset h
-            strings.AddExistingEntry(offset, value) |> ignore
-            offset, true
-        | _ ->
-            let idx = addStringValue value
-            idx, false
+    let addExistingStringHandle (_handle: StringHandle option) (value: string) : int * bool =
+        let idx = addStringValue value
+        idx, false
 
     let addStringOption (value: string option) : int * bool =
         match value with
@@ -428,15 +311,9 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
 
     let addBlobBytes (bytes: byte[]) = if obj.ReferenceEquals(bytes, null) || bytes.Length = 0 then 0 else blobs.AddSharedEntry bytes
 
-    let addExistingBlobHandle (handle: BlobHandle option) (value: byte[]) : int * bool =
-        match handle with
-        | Some h when not h.IsNil ->
-            let offset = MetadataTokens.GetHeapOffset h
-            blobs.AddExistingEntry(offset, value) |> ignore
-            offset, true
-        | _ ->
-            let idx = addBlobBytes value
-            idx, false
+    let addExistingBlobHandle (_handle: BlobHandle option) (value: byte[]) : int * bool =
+        let idx = addBlobBytes value
+        idx, false
 
     let addGuidValue (value: Guid) =
         if value = System.Guid.Empty then 0 else guids.AddSharedEntry(value.ToByteArray())
@@ -483,58 +360,51 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             moduleRows.Add row
 
     member _.AddMethodRow(row: MethodDefinitionRowInfo, body: MethodBodyUpdate) =
-        let nameToken, nameAbsolute = addExistingStringHandle row.NameHandle row.Name
+        let nameToken, _ = addExistingStringHandle row.NameHandle row.Name
 
-        let signatureToken, signatureAbsolute = addExistingBlobHandle row.SignatureHandle row.Signature
+        let signatureToken, _ = addExistingBlobHandle row.SignatureHandle row.Signature
 
         let rowElements =
             [|
                 rowElementULong body.CodeOffset
                 rowElementUShort (uint16 row.ImplAttributes)
                 rowElementUShort (uint16 row.Attributes)
-                (if nameAbsolute then rowElementStringAbsolute nameToken else rowElementString nameToken)
-                (if signatureAbsolute then rowElementBlobAbsolute signatureToken else rowElementBlob signatureToken)
+                rowElementString nameToken
+                rowElementBlob signatureToken
                 rowElementSimpleIndex TableNames.Param (row.FirstParameterRowId |> Option.defaultValue 0)
             |]
         methodRows.Add rowElements
 
     member _.AddParameterRow(row: ParameterDefinitionRowInfo) =
-        let nameIdx, nameAbsolute =
-            match row.NameHandle with
-            | Some handle when not handle.IsNil ->
-                let literal = defaultArg row.Name ""
-                let offset = MetadataTokens.GetHeapOffset handle
-                strings.AddExistingEntry(offset, literal) |> ignore
-                offset, true
-            | _ -> addStringOption row.Name
+        let nameIdx, _ = addStringOption row.Name
         let rowElements =
             [|
                 rowElementUShort (uint16 row.Attributes)
                 rowElementUShort (uint16 row.SequenceNumber)
-                (if nameAbsolute then rowElementStringAbsolute nameIdx else rowElementString nameIdx)
+                rowElementString nameIdx
             |]
         paramRows.Add rowElements
 
     member _.AddPropertyRow(row: PropertyDefinitionRowInfo) =
-        let nameToken, nameAbsolute = addExistingStringHandle row.NameHandle row.Name
+        let nameToken, _ = addExistingStringHandle row.NameHandle row.Name
 
-        let signatureToken, signatureAbsolute = addExistingBlobHandle row.SignatureHandle row.Signature
+        let signatureToken, _ = addExistingBlobHandle row.SignatureHandle row.Signature
 
         let rowElements =
             [|
                 rowElementUShort (uint16 row.Attributes)
-                (if nameAbsolute then rowElementStringAbsolute nameToken else rowElementString nameToken)
-                (if signatureAbsolute then rowElementBlobAbsolute signatureToken else rowElementBlob signatureToken)
+                rowElementString nameToken
+                rowElementBlob signatureToken
             |]
         propertyRows.Add rowElements
 
     member _.AddEventRow(row: EventDefinitionRowInfo) =
         let tdorTag, tdorRow = encodeTypeDefOrRef row.EventType
-        let nameToken, nameAbsolute = addExistingStringHandle row.NameHandle row.Name
+        let nameToken, _ = addExistingStringHandle row.NameHandle row.Name
         let rowElements =
             [|
                 rowElementUShort (uint16 row.Attributes)
-                (if nameAbsolute then rowElementStringAbsolute nameToken else rowElementString nameToken)
+                rowElementString nameToken
                 rowElementTypeDefOrRef tdorTag tdorRow
             |]
         eventRows.Add rowElements
