@@ -313,6 +313,16 @@ module FSharpDeltaMetadataWriterTests =
         assertTableStreamMatches metadataDelta
 
     [<Fact>]
+    let ``metadata writer emits async method rows`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
+        let metadataDelta = artifacts.Delta
+
+        Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
+        Assert.Equal(0, metadataDelta.TableRowCounts.[int TableIndex.Param])
+        Assert.True(metadataDelta.Metadata.Length > 0)
+        assertTableStreamMatches metadataDelta
+
+    [<Fact>]
     let ``metadata writer reports small index sizes for property delta`` () =
         let delta = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
         let indexSizes = delta.Delta.IndexSizes
@@ -518,7 +528,7 @@ module FSharpDeltaMetadataWriterTests =
 
     [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for async methods`` () =
-        let moduleDef = createAsyncModule ()
+        let moduleDef = createAsyncModule None ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()

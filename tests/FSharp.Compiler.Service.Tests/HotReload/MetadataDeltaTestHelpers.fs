@@ -518,17 +518,18 @@ module internal MetadataDeltaTestHelpers =
             (mkILExportedTypes [])
             "v4.0.30319"
 
-    let createAsyncModule () =
+    let createAsyncModule (messageLiteral: string option) () =
         let ilg = ilGlobals
         let stringType = ilg.typ_String
         let boolType = ilg.typ_Bool
+        let literal = defaultArg messageLiteral "async"
 
         let runBody =
             mkMethodBody(
                 false,
                 [],
                 2,
-                nonBranchingInstrsToCode [ I_ldstr "async"; I_ret ],
+                nonBranchingInstrsToCode [ I_ldstr literal; I_ret ],
                 None,
                 None)
 
@@ -752,6 +753,66 @@ module internal MetadataDeltaTestHelpers =
                 (srmReader.GetHeapSize HeapIndex.String)
                 (srmReader.GetHeapSize HeapIndex.Blob)
                 (srmReader.GetHeapSize HeapIndex.Guid)
+
+        { BaselineBytes = assemblyBytes
+          Delta = metadataDelta }
+
+    let emitAsyncDeltaArtifacts (messageLiteral: string option) () : MetadataDeltaArtifacts =
+        let moduleDef = createAsyncModule messageLiteral ()
+        let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
+        use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+        let builder = IlDeltaStreamBuilder None
+
+        let methodHandle = findMethodHandle metadataReader "Sample.AsyncHost" "RunAsync"
+
+        let methodKey =
+            methodKey "Sample.AsyncHost" "RunAsync" [ ilGlobals.typ_Int32 ] ilGlobals.typ_String
+
+        let methodDef = metadataReader.GetMethodDefinition methodHandle
+        let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
+            [ { Key = methodKey
+                RowId = 1
+                IsAdded = false
+                Attributes = methodDef.Attributes
+                ImplAttributes = methodDef.ImplAttributes
+                Name = metadataReader.GetString methodDef.Name
+                NameHandle = if methodDef.Name.IsNil then None else Some methodDef.Name
+                Signature = metadataReader.GetBlobBytes methodDef.Signature
+                SignatureHandle = if methodDef.Signature.IsNil then None else Some methodDef.Signature
+                FirstParameterRowId = None } ]
+
+        let updates: DeltaWriter.MethodMetadataUpdate list =
+            [ { MethodKey = methodKey
+                MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle)
+                MethodHandle = methodHandle
+                Body =
+                    { MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle)
+                      LocalSignatureToken = 0
+                      CodeOffset = 0
+                      CodeLength = 4 } } ]
+
+        let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
+
+        let metadataDelta =
+            DeltaWriter.emit
+                builder.MetadataBuilder
+                moduleName
+                (Guid.NewGuid())
+                (Guid.NewGuid())
+                (Guid.NewGuid())
+                methodDefinitionRows
+                []
+                []
+                []
+                []
+                []
+                []
+                updates
+                MetadataHeapOffsets.Zero
+                (getRowCounts metadataReader)
+
+        assertTableStreamMatches metadataDelta
 
         { BaselineBytes = assemblyBytes
           Delta = metadataDelta }
