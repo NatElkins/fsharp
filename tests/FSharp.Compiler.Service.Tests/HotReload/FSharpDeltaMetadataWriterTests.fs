@@ -278,6 +278,36 @@ module FSharpDeltaMetadataWriterTests =
         assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap
 
     [<Fact>]
+    let ``event multi-generation deltas preserve EncLog ordering`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
+
+        let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
+            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
+               (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
+               (TableIndex.Event, 1, EditAndContinueOperation.AddEvent)
+               (TableIndex.EventMap, 1, EditAndContinueOperation.AddEvent)
+               (TableIndex.MethodSemantics, 1, EditAndContinueOperation.AddMethod) |]
+
+        let expectedEncMap: (TableIndex * int)[] =
+            [| (TableIndex.Module, 1)
+               (TableIndex.MethodDef, 1)
+               (TableIndex.Event, 1)
+               (TableIndex.EventMap, 1)
+               (TableIndex.MethodSemantics, 1) |]
+
+        let assertDelta (delta: DeltaWriter.MetadataDelta) =
+            Assert.Equal(expectedEncLog, delta.EncLog)
+            Assert.Equal(expectedEncMap, delta.EncMap)
+            assertTableStreamMatches delta
+            assertTableCountsMatch delta.Metadata delta.TableRowCounts
+            assertBitMasksMatch delta.Metadata delta.TableBitMasks
+            assertEncLogMatches delta.Metadata delta.EncLog
+            assertEncMapMatches delta.Metadata delta.EncMap
+
+        assertDelta artifacts.Generation1
+        assertDelta artifacts.Generation2
+
+    [<Fact>]
     let ``property multi-generation deltas preserve EncLog ordering`` () =
         let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
 
@@ -456,6 +486,36 @@ module FSharpDeltaMetadataWriterTests =
         assertBitMasksMatch metadataDelta.Metadata metadataDelta.TableBitMasks
         assertEncLogMatches metadataDelta.Metadata metadataDelta.EncLog
         assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap
+
+    [<Fact>]
+    let ``event multi-generation deltas preserve EncLog ordering`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
+
+        let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
+            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
+               (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
+               (TableIndex.Event, 1, EditAndContinueOperation.AddEvent)
+               (TableIndex.EventMap, 1, EditAndContinueOperation.AddEvent)
+               (TableIndex.MethodSemantics, 1, EditAndContinueOperation.AddMethod) |]
+
+        let expectedEncMap: (TableIndex * int)[] =
+            [| (TableIndex.Module, 1)
+               (TableIndex.MethodDef, 1)
+               (TableIndex.Event, 1)
+               (TableIndex.EventMap, 1)
+               (TableIndex.MethodSemantics, 1) |]
+
+        let assertDelta (delta: DeltaWriter.MetadataDelta) =
+            Assert.Equal(expectedEncLog, delta.EncLog)
+            Assert.Equal(expectedEncMap, delta.EncMap)
+            assertTableStreamMatches delta
+            assertTableCountsMatch delta.Metadata delta.TableRowCounts
+            assertBitMasksMatch delta.Metadata delta.TableBitMasks
+            assertEncLogMatches delta.Metadata delta.EncLog
+            assertEncMapMatches delta.Metadata delta.EncMap
+
+        assertDelta artifacts.Generation1
+        assertDelta artifacts.Generation2
 
     [<Fact>]
     let ``metadata writer emits async method rows`` () =
