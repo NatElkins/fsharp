@@ -436,6 +436,17 @@ module FSharpDeltaMetadataWriterTests =
 
         Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
         Assert.Equal(0, metadataDelta.TableRowCounts.[int TableIndex.Param])
+
+        let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
+            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
+               (TableIndex.MethodDef, 1, EditAndContinueOperation.Default) |]
+
+        let expectedEncMap: (TableIndex * int)[] =
+            [| (TableIndex.Module, 1)
+               (TableIndex.MethodDef, 1) |]
+
+        Assert.Equal(expectedEncLog, metadataDelta.EncLog)
+        Assert.Equal(expectedEncMap, metadataDelta.EncMap)
         Assert.True(metadataDelta.Metadata.Length > 0)
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
@@ -753,4 +764,3 @@ module FSharpDeltaMetadataWriterTests =
         assertBitMasksMatch metadataDelta.Metadata metadataDelta.TableBitMasks
         assertEncLogMatches metadataDelta.Metadata metadataDelta.EncLog
         assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap
-
