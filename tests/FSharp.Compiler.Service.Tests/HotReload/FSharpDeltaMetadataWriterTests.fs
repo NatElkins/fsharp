@@ -8,6 +8,7 @@ open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
 open System.Collections.Immutable
 open System.Text
+open System.Text
 open Xunit
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
@@ -26,10 +27,7 @@ module DeltaWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
 module FSharpDeltaMetadataWriterTests =
 
-    let private metadataStreamNames (metadata: byte[]) =
-        use stream = new MemoryStream(metadata, false)
-        use reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen = true)
-
+    let private readMetadataRoot metadata (reader: BinaryReader) =
         let readUInt32 () = reader.ReadUInt32()
         let readUInt16 () = reader.ReadUInt16()
 
@@ -39,7 +37,7 @@ module FSharpDeltaMetadataWriterTests =
         let _reserved = readUInt32 ()
         let versionLength = int (readUInt32 ())
         reader.ReadBytes(versionLength) |> ignore
-        while stream.Position % 4L <> 0L do
+        while reader.BaseStream.Position % 4L <> 0L do
             reader.ReadByte() |> ignore
 
         let _flags = readUInt16 ()
@@ -54,14 +52,51 @@ module FSharpDeltaMetadataWriterTests =
                     finished <- true
                 else
                     buffer.Add b
-            while stream.Position % 4L <> 0L do
+            while reader.BaseStream.Position % 4L <> 0L do
                 reader.ReadByte() |> ignore
             Encoding.UTF8.GetString(buffer.ToArray())
 
         [ for _ in 1 .. streamCount do
-              let _offset = readUInt32 ()
-              let _size = readUInt32 ()
-              yield readStreamName () ]
+              let offset = readUInt32 ()
+              let size = readUInt32 ()
+              let name = readStreamName ()
+              yield struct (offset, size, name) ]
+
+    let private metadataStreamNames (metadata: byte[]) =
+        use stream = new MemoryStream(metadata, false)
+        use reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen = true)
+        readMetadataRoot metadata reader
+        |> List.map (fun struct (_, _, name) -> name)
+
+    let private readTableBitMasksFromMetadata (metadata: byte[]) : TableBitMasks =
+        use stream = new MemoryStream(metadata, false)
+        use reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen = true)
+
+        let streams = readMetadataRoot metadata reader
+
+        let tableStreamOffset =
+            streams
+            |> List.tryFind (fun struct (_, _, name) -> name = "#-" || name = "#~")
+            |> Option.map (fun struct (offset, _, _) -> offset)
+            |> Option.defaultWith (fun () -> failwith "Table stream not found in metadata")
+
+        reader.BaseStream.Position <- int64 tableStreamOffset
+
+        let _reserved = reader.ReadUInt32()
+        let _major = reader.ReadByte()
+        let _minor = reader.ReadByte()
+        let _heapSizes = reader.ReadByte()
+        reader.ReadByte() |> ignore // reserved
+
+        let validLow = reader.ReadUInt32() |> int
+        let validHigh = reader.ReadUInt32() |> int
+        let sortedLow = reader.ReadUInt32() |> int
+        let sortedHigh = reader.ReadUInt32() |> int
+
+        { ValidLow = validLow
+          ValidHigh = validHigh
+          SortedLow = sortedLow
+          SortedHigh = sortedHigh }
 
     let private isTablePresent (bitmask: TableBitMasks) (table: TableIndex) =
         let index = int table
@@ -75,7 +110,7 @@ module FSharpDeltaMetadataWriterTests =
             let table = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte i)
             reader.GetTableRowCount table)
 
-    let private withMetadataReader (metadata: byte[]) (action: MetadataReader -> unit) =
+    let private withMetadataReader (metadata: byte[]) (action: MetadataReader -> 'T) : 'T =
         use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange metadata)
         let reader = provider.GetMetadataReader()
         action reader
@@ -87,18 +122,41 @@ module FSharpDeltaMetadataWriterTests =
                 let actual = reader.GetTableRowCount table
                 Assert.Equal(expected.[i], actual))
 
-    let private assertBitMasksMatch (bitMasks: TableBitMasks) (rowCounts: int[]) =
-        let mutable validLow = 0
-        let mutable validHigh = 0
-        for tableIndex = 0 to rowCounts.Length - 1 do
-            if rowCounts.[tableIndex] <> 0 then
-                if tableIndex < 32 then
-                    validLow <- validLow ||| (1 <<< tableIndex)
-                else
-                    validHigh <- validHigh ||| (1 <<< (tableIndex - 32))
+    let private assertBitMasksMatch (metadata: byte[]) (bitMasks: TableBitMasks) =
+        let actual = readTableBitMasksFromMetadata metadata
+        Assert.Equal(actual.ValidLow, bitMasks.ValidLow)
+        Assert.Equal(actual.ValidHigh, bitMasks.ValidHigh)
+        Assert.Equal(actual.SortedLow, bitMasks.SortedLow)
+        Assert.Equal(actual.SortedHigh, bitMasks.SortedHigh)
 
-        Assert.Equal(validLow, bitMasks.ValidLow)
-        Assert.Equal(validHigh, bitMasks.ValidHigh)
+    let private decodeEntityHandle (handle: EntityHandle) =
+        let token = MetadataTokens.GetToken(handle)
+        let tableValue = byte (token >>> 24)
+        let table = LanguagePrimitives.EnumOfValue<byte, TableIndex>(tableValue)
+        let rowId = token &&& 0x00FFFFFF
+        (table, rowId)
+
+    let private readEncLogEntriesFromMetadata metadata =
+        withMetadataReader metadata (fun reader ->
+            reader.GetEditAndContinueLogEntries()
+            |> Seq.map (fun entry ->
+                let (table, rowId) = decodeEntityHandle entry.Handle
+                (table, rowId, entry.Operation))
+            |> Seq.toArray)
+
+    let private readEncMapEntriesFromMetadata metadata =
+        withMetadataReader metadata (fun reader ->
+            reader.GetEditAndContinueMapEntries()
+            |> Seq.map decodeEntityHandle
+            |> Seq.toArray)
+
+    let private assertEncLogMatches metadata expected =
+        let actual = readEncLogEntriesFromMetadata metadata
+        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expected, actual)
+
+    let private assertEncMapMatches metadata expected =
+        let actual = readEncMapEntriesFromMetadata metadata
+        Assert.Equal<(TableIndex * int)[]>(expected, actual)
 
     [<Fact>]
     let ``metadata writer emits property rows`` () =
@@ -207,7 +265,9 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Contains("Message", Encoding.UTF8.GetString(metadataDelta.StringHeap))
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
-        assertBitMasksMatch metadataDelta.TableBitMasks metadataDelta.TableRowCounts
+        assertBitMasksMatch metadataDelta.Metadata metadataDelta.TableBitMasks
+        assertEncLogMatches metadataDelta.Metadata metadataDelta.EncLog
+        assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap
 
     [<Fact>]
     let ``metadata root omits #JTD when no ENC tables are present`` () =
@@ -340,7 +400,9 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Contains("OnChanged", Encoding.UTF8.GetString(metadataDelta.StringHeap))
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
-        assertBitMasksMatch metadataDelta.TableBitMasks metadataDelta.TableRowCounts
+        assertBitMasksMatch metadataDelta.Metadata metadataDelta.TableBitMasks
+        assertEncLogMatches metadataDelta.Metadata metadataDelta.EncLog
+        assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap
 
     [<Fact>]
     let ``metadata writer emits async method rows`` () =
@@ -352,9 +414,11 @@ module FSharpDeltaMetadataWriterTests =
         Assert.True(metadataDelta.Metadata.Length > 0)
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
-        assertBitMasksMatch metadataDelta.TableBitMasks metadataDelta.TableRowCounts
+        assertBitMasksMatch metadataDelta.Metadata metadataDelta.TableBitMasks
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
-        assertBitMasksMatch metadataDelta.TableBitMasks metadataDelta.TableRowCounts
+        assertBitMasksMatch metadataDelta.Metadata metadataDelta.TableBitMasks
+        assertEncLogMatches metadataDelta.Metadata metadataDelta.EncLog
+        assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap
 
     [<Fact>]
     let ``metadata writer reports small index sizes for property delta`` () =
@@ -563,7 +627,7 @@ module FSharpDeltaMetadataWriterTests =
         Assert.True(metadataDelta.Metadata.Length > 0)
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
-        assertBitMasksMatch metadataDelta.TableBitMasks metadataDelta.TableRowCounts
+        assertBitMasksMatch metadataDelta.Metadata metadataDelta.TableBitMasks
 
     [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for async methods`` () =
