@@ -1543,14 +1543,75 @@ type EventDemo() =
         File.WriteAllBytes(meta2Path, delta2.Metadata)
 
         let methodToken = baselineArtifacts.Baseline.MethodTokens[methodKey]
+        let methodRowId = methodRowIdFromToken methodToken
         assertMethodEncLog delta1 methodToken
+        assertEncMapContains(delta1, TableIndex.MethodDef, methodRowId)
         assertMethodEncLog delta2 methodToken
+        assertEncMapContains(delta2, TableIndex.MethodDef, methodRowId)
 
         let literal1 = Text.Encoding.Unicode.GetBytes "Closure helper generation 1"
         Assert.True(containsSubsequence delta1.Metadata literal1, "Expected generation 1 closure metadata to contain updated literal.")
 
         let literal2 = Text.Encoding.Unicode.GetBytes "Closure helper generation 2"
         Assert.True(containsSubsequence delta2.Metadata literal2, "Expected generation 2 closure metadata to contain updated literal.")
+
+        if not (keepArtifacts ()) then
+            try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
+            match baselineArtifacts.PdbPath with
+            | Some path -> try File.Delete(path) with _ -> ()
+            | None -> ()
+
+    [<Fact>]
+    let ``mdv helper validates multi-generation async metadata`` () =
+        let typeName = "Sample.AsyncDemo"
+        let methodKey = TestHelpers.methodKey typeName "RunAsync" [ PrimaryAssemblyILGlobals.typ_Int32 ] PrimaryAssemblyILGlobals.typ_String
+        let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createAsyncModule "Async helper baseline message")
+
+        use deltaDir = new TemporaryDirectory()
+        let meta1Path = Path.Combine(deltaDir.Path, "1.meta")
+        let meta2Path = Path.Combine(deltaDir.Path, "2.meta")
+
+        let request1 : IlxDeltaRequest =
+            { Baseline = baselineArtifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = TestHelpers.createAsyncModule "Async helper generation 1"
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta1 = emitDelta request1
+        File.WriteAllBytes(meta1Path, delta1.Metadata)
+
+        let baseline2 =
+            match delta1.UpdatedBaseline with
+            | Some b -> b
+            | None -> failwith "First async delta did not expose an updated baseline."
+
+        let request2 : IlxDeltaRequest =
+            { request1 with
+                Baseline = baseline2
+                Module = TestHelpers.createAsyncModule "Async helper generation 2"
+                CurrentGeneration = 2
+                PreviousGenerationId = Some delta1.GenerationId }
+
+        let delta2 = emitDelta request2
+        File.WriteAllBytes(meta2Path, delta2.Metadata)
+
+        let methodToken = baselineArtifacts.Baseline.MethodTokens[methodKey]
+        let methodRowId = methodRowIdFromToken methodToken
+        assertMethodEncLog delta1 methodToken
+        assertEncMapContains delta1 TableIndex.MethodDef methodRowId
+        assertMethodEncLog delta2 methodToken
+        assertEncMapContains delta2 TableIndex.MethodDef methodRowId
+
+        let literal1 = Text.Encoding.Unicode.GetBytes "Async helper generation 1"
+        Assert.True(containsSubsequence delta1.Metadata literal1, "Expected generation 1 async metadata to contain updated literal.")
+
+        let literal2 = Text.Encoding.Unicode.GetBytes "Async helper generation 2"
+        Assert.True(containsSubsequence delta2.Metadata literal2, "Expected generation 2 async metadata to contain updated literal.")
 
         if not (keepArtifacts ()) then
             try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
