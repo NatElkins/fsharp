@@ -607,6 +607,24 @@ module FSharpDeltaMetadataWriterTests =
 
         Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
         Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.Param])
+        let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
+            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
+               (TableIndex.MethodDef, methodRows.Head.RowId, EditAndContinueOperation.AddMethod)
+               (TableIndex.Param, parameterRows.Head.RowId, EditAndContinueOperation.AddParameter) |]
+
+        let expectedEncMap: (TableIndex * int)[] =
+            [| (TableIndex.Module, 1)
+               (TableIndex.MethodDef, methodRows.Head.RowId)
+               (TableIndex.Param, parameterRows.Head.RowId) |]
+
+        Assert.Equal(expectedEncLog, metadataDelta.EncLog)
+        Assert.Equal(expectedEncMap, metadataDelta.EncMap)
+        Assert.True(metadataDelta.Metadata.Length > 0)
+        assertTableStreamMatches metadataDelta
+        assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
+        assertBitMasksMatch metadataDelta.Metadata metadataDelta.TableBitMasks
+        assertEncLogMatches metadataDelta.Metadata metadataDelta.EncLog
+        assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap
 
     [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for closure methods`` () =
@@ -649,10 +667,29 @@ module FSharpDeltaMetadataWriterTests =
 
         Assert.Equal(2, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
         Assert.Equal(2, metadataDelta.TableRowCounts.[int TableIndex.Param])
+
+        let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
+            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
+               (TableIndex.MethodDef, methodRows[0].RowId, EditAndContinueOperation.AddMethod)
+               (TableIndex.MethodDef, methodRows[1].RowId, EditAndContinueOperation.AddMethod)
+               (TableIndex.Param, parameterRows[0].RowId, EditAndContinueOperation.AddParameter)
+               (TableIndex.Param, parameterRows[1].RowId, EditAndContinueOperation.AddParameter) |]
+
+        let expectedEncMap: (TableIndex * int)[] =
+            [| (TableIndex.Module, 1)
+               (TableIndex.MethodDef, methodRows[0].RowId)
+               (TableIndex.MethodDef, methodRows[1].RowId)
+               (TableIndex.Param, parameterRows[0].RowId)
+               (TableIndex.Param, parameterRows[1].RowId) |]
+
+        Assert.Equal(expectedEncLog, metadataDelta.EncLog)
+        Assert.Equal(expectedEncMap, metadataDelta.EncMap)
         Assert.True(metadataDelta.Metadata.Length > 0)
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
         assertBitMasksMatch metadataDelta.Metadata metadataDelta.TableBitMasks
+        assertEncLogMatches metadataDelta.Metadata metadataDelta.EncLog
+        assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap
 
     [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for async methods`` () =
