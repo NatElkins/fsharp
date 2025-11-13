@@ -1107,10 +1107,55 @@ module UseProvided =
 
                 Assert.Equal("Value", getStaticStringProperty "Value")
 
+            let assertGenericSourceType (assembly: Assembly) =
+                let genericTypeDef = assembly.GetType("Fs1023Consumer.Generic`1", throwOnError = true, ignoreCase = false)
+                let bindingFlags = BindingFlags.Public ||| BindingFlags.Instance
+
+                let assertForType (ty: Type) =
+                    let closed = genericTypeDef.MakeGenericType([| ty |])
+
+                    let valueProp = closed.GetProperty("Value", bindingFlags)
+                    Assert.NotNull(valueProp)
+                    Assert.Equal(ty, valueProp.PropertyType)
+                    Assert.Empty(valueProp.GetIndexParameters())
+
+                    let mapMethod = closed.GetMethod("Map", bindingFlags)
+                    let mapParameters = mapMethod.GetParameters()
+                    Assert.Equal(2, mapParameters.Length)
+                    Assert.Equal(ty, mapParameters[0].ParameterType)
+                    let restParam = mapParameters.[1]
+                    Assert.Equal(typeof<string[]>, restParam.ParameterType)
+                    let hasParamArray =
+                        restParam.GetCustomAttributes(typeof<ParamArrayAttribute>, inherit = false)
+                        |> Array.isEmpty
+                        |> not
+                    Assert.True(hasParamArray, "Expected rest parameter to carry ParamArrayAttribute.")
+
+                    let optionalMethod = closed.GetMethod("Optional", bindingFlags)
+                    let optionalParam = optionalMethod.GetParameters() |> Array.exactlyOne
+                    Assert.True(optionalParam.IsOptional, "Expected Optional parameter to be optional.")
+                    Assert.Equal(ty, optionalParam.ParameterType)
+
+                    let indexerProp = closed.GetProperty("Item", bindingFlags)
+                    Assert.NotNull(indexerProp)
+                    let indexParameters = indexerProp.GetIndexParameters()
+                    Assert.Equal(1, indexParameters.Length)
+                    Assert.Equal(typeof<int>, indexParameters.[0].ParameterType)
+
+                    let optionalLiteralMethod = closed.GetMethod("OptionalLiteral", bindingFlags)
+                    let literalParam = optionalLiteralMethod.GetParameters() |> Array.exactlyOne
+                    Assert.True(literalParam.IsOptional, "Expected OptionalLiteral parameter to be optional.")
+                    Assert.True(literalParam.HasDefaultValue, "Expected OptionalLiteral parameter to expose a default value.")
+                    Assert.Equal(42, literalParam.DefaultValue)
+                    Assert.Equal(typeof<int>, literalParam.ParameterType)
+
+                [ typeof<int>; typeof<string> ] |> List.iter assertForType
+
             let consumerAssembly = loadAssembly outputDll
 
             assertProvidedType consumerAssembly "Fs1023Consumer.ProvidedGenericInt"
             assertProvidedType consumerAssembly "Fs1023Consumer.ProvidedGenericString"
+            assertGenericSourceType consumerAssembly
 
             // Recompile with /standalone to ensure the IlxGen-emitted IL survives static linking.
             let standaloneDll = Path.Combine(tempDir, "GenericConsumer.standalone.dll")
@@ -1123,6 +1168,7 @@ module UseProvided =
 
             assertProvidedType standaloneAssembly "Fs1023Consumer.ProvidedGenericInt"
             assertProvidedType standaloneAssembly "Fs1023Consumer.ProvidedGenericString"
+            assertGenericSourceType standaloneAssembly
         finally
             if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
                 printfn "[fs1023] preserving temp dir %s" tempDir
