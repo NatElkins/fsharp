@@ -443,13 +443,14 @@ module PdbTests =
         let methodKey = TestHelpers.methodKeyByName artifacts.Baseline typeName "get_Message"
         let methodToken = artifacts.Baseline.MethodTokens[methodKey]
 
-        let emitAndAssert request =
+        let emitAndAssert request expectedMarker =
             let delta = emitDelta request
             let pdbBytes =
                 match delta.Pdb with
                 | Some bytes -> bytes
                 | None -> failwith "Expected portable PDB delta for property getter edit."
             assertPdbContainsMethodToken pdbBytes methodToken
+            assertPdbContainsLiteral pdbBytes expectedMarker
             delta
 
         let accessorUpdate =
@@ -466,7 +467,7 @@ module PdbTests =
               PreviousGenerationId = None
               SynthesizedNames = None }
 
-        let delta1 = emitAndAssert request1
+        let delta1 = emitAndAssert request1 "Property helper generation 1"
 
         let baseline2 =
             match delta1.UpdatedBaseline with
@@ -487,7 +488,7 @@ module PdbTests =
               PreviousGenerationId = Some delta1.GenerationId
               SynthesizedNames = None }
 
-        let delta2 = emitAndAssert request2
+        let delta2 = emitAndAssert request2 "Property helper generation 2"
         Assert.NotEqual(System.Guid.Empty, delta2.BaseGenerationId)
         Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
 
@@ -505,13 +506,14 @@ module PdbTests =
         let methodKey = TestHelpers.methodKey typeName "add_OnChanged" [ PrimaryAssemblyILGlobals.typ_Object ] ILType.Void
         let methodToken = artifacts.Baseline.MethodTokens[methodKey]
 
-        let emitAndAssert request =
+        let emitAndAssert request expectedMarker =
             let delta = emitDelta request
             let pdbBytes =
                 match delta.Pdb with
                 | Some bytes -> bytes
                 | None -> failwith "Expected portable PDB delta for event accessor edit."
             assertPdbContainsMethodToken pdbBytes methodToken
+            assertPdbContainsLiteral pdbBytes expectedMarker
             delta
 
         let request1 : IlxDeltaRequest =
@@ -525,7 +527,7 @@ module PdbTests =
               PreviousGenerationId = None
               SynthesizedNames = None }
 
-        let delta1 = emitAndAssert request1
+        let delta1 = emitAndAssert request1 "Event helper generation 1"
 
         let baseline2 =
             match delta1.UpdatedBaseline with
@@ -543,7 +545,7 @@ module PdbTests =
               PreviousGenerationId = Some delta1.GenerationId
               SynthesizedNames = None }
 
-        let delta2 = emitAndAssert request2
+        let delta2 = emitAndAssert request2 "Event helper generation 2"
         Assert.NotEqual(System.Guid.Empty, delta2.BaseGenerationId)
         Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
 
