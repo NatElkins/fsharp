@@ -11,6 +11,7 @@ open System.Collections.Concurrent
 open System.Diagnostics
 open System.Globalization
 open System.Reflection
+open System.Runtime.Serialization
 open System.Threading
 open FSharp.Compiler
 open FSharp.Compiler.CompilerGlobalState
@@ -404,7 +405,7 @@ type ReflectTypeSymbolKind =
 /// Represents an array or other symbolic type involving a provided type as the argument.
 /// See the type provider spec for the methods that must be implemented.
 /// Note that the type provider specification does not require us to implement pointer-equality for provided types.
-and ReflectTypeSymbol(kind: ReflectTypeSymbolKind, args: Type[]) =
+and [<DebuggerDisplay("{FullName}")>] ReflectTypeSymbol(kind: ReflectTypeSymbolKind, args: Type[]) =
     inherit Type()
 
     let notRequired msg = 
@@ -500,7 +501,14 @@ and ReflectTypeSymbol(kind: ReflectTypeSymbolKind, args: Type[]) =
     override __.HasElementTypeImpl() = (match kind with ReflectTypeSymbolKind.Generic _ -> false | _ -> true)
     override __.GetElementType() = (match kind,args with (ReflectTypeSymbolKind.Array _  | ReflectTypeSymbolKind.SDArray | ReflectTypeSymbolKind.ByRef | ReflectTypeSymbolKind.Pointer),[| e |] -> e | _ -> invalidOp (sprintf "%+A, %+A: not an array, pointer or byref type" kind args))
 
-    override this.Module : Module = notRequired "Module" this.Name
+    override this.Module : Module =
+        match kind, args with
+        | ReflectTypeSymbolKind.SDArray, [| arg |]
+        | ReflectTypeSymbolKind.Array _, [| arg |]
+        | ReflectTypeSymbolKind.Pointer, [| arg |]
+        | ReflectTypeSymbolKind.ByRef, [| arg |] -> arg.Module
+        | ReflectTypeSymbolKind.Generic gtd, _ -> gtd.Module
+        | _ -> notRequired "Module" this.Name
 
     override this.GetHashCode()                                                                    = 
         match kind,args with 
@@ -742,7 +750,14 @@ and ReflectTypeSymbol(kind: ReflectTypeSymbolKind, args: Type[]) =
 
     override this.GetCustomAttributesData()                                                        =  ([| |] :> IList<_>)
     override this.MemberType                                                                       = notRequired "MemberType" this.Name
-    override this.GetMember(_name,_mt,_bindingAttr)                                                = notRequired "GetMember" this.Name
+    override this.GetMember(name, memberTypes, bindingAttr) =
+        match kind, args with
+        | ReflectTypeSymbolKind.SDArray, [| arg |]
+        | ReflectTypeSymbolKind.Array _, [| arg |]
+        | ReflectTypeSymbolKind.Pointer, [| arg |]
+        | ReflectTypeSymbolKind.ByRef, [| arg |] -> arg.GetMember(name, memberTypes, bindingAttr)
+        | ReflectTypeSymbolKind.Generic gtd, _ -> gtd.GetMember(name, memberTypes, bindingAttr)
+        | _ -> [||]
     override this.GUID                                                                             = notRequired "GUID" this.Name
     override this.InvokeMember(name, invokeAttr, binder, target, args, modifiers, culture, namedParameters) =
         invokeMemberCore (this :> Type) name invokeAttr binder target args modifiers culture namedParameters
@@ -1760,6 +1775,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
     override __.Name = tcref.CompiledName 
     override __.Assembly = (asm :> Assembly) 
     override __.DeclaringType = declTyOpt |> optionToNull
+    override _.Module = asm.ManifestModule
     override __.MemberType = if isNested then MemberTypes.NestedType else MemberTypes.TypeInfo
 
     override __.FullName = tcref.CompiledRepresentationForNamedType.FullName
@@ -2178,7 +2194,6 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
     override __.GetCustomAttributes(_attributeType, _inherited)                                             = notRequired "TxILTypeDef: GetCustomAttributes"
     override __.IsDefined(_attributeType, _inherited)                                                       = notRequired "TxILTypeDef: IsDefined"
     override __.GetInterface(_name, _ignoreCase)                                                            = notRequired "TxILTypeDef: GetInterface"
-    override __.Module                                                                                    = notRequired "TxILTypeDef: Module" : Module 
     override __.GetElementType()                                                                          = notRequired "TxILTypeDef: GetElementType"
     override this.InvokeMember(name, invokeAttr, binder, target, args, modifiers, culture, namedParameters) =
         invokeMemberCore (this :> Type) name invokeAttr binder target args modifiers culture namedParameters
@@ -2237,12 +2252,26 @@ and [<DebuggerDisplay("{FullName}")>] ReflectAssembly(builder: TypeReflectionBui
             builder.NotifyTypeCreated duration
             typ)
 
+    let manifestModule = lazy (ReflectModule(asm))
     let name = lazy new AssemblyName(match ccu.ILScopeRef with ILScopeRef.Local -> ccu.AssemblyName | _ -> ccu.ILScopeRef.QualifiedName)
     let fullName = lazy name.Value.ToString()
     let types = lazy [| for td in ccu.RootModulesAndNamespaces -> txTypeDef None (mkLocalEntityRef td) |]
 
     override x.GetTypes () = types.Value
     override x.Location = location
+
+    override x.ManifestModule = manifestModule.Value :> Module
+
+    override x.GetModules(_getResourceModules: bool) : Module[] = [| manifestModule.Value :> Module |]
+
+    override x.GetLoadedModules(_getResourceModules: bool) : Module[] = [| manifestModule.Value :> Module |]
+
+    override x.GetModule(name: string) =
+        let moduleInstance = manifestModule.Value :> Module
+        if String.Equals(moduleInstance.Name, name, StringComparison.Ordinal) then
+            moduleInstance
+        else
+            null
 
     override x.GetType (nm:string) = 
         if nm.Contains("+") then 
@@ -2278,61 +2307,40 @@ and [<DebuggerDisplay("{FullName}")>] ReflectAssembly(builder: TypeReflectionBui
 
     override x.ReflectionOnly = true
 
-    override x.GetManifestResourceStream(_:string) = 
-        notRequired "GetManifestResourceStreams"
-
-    member x.TryBindType(nsp:string option, nm:string) : Type option = 
-        match ccu.RootModulesAndNamespaces |> List.tryFind (fun x -> x.CompiledName = nm) with 
-        | Some td -> txTypeDef None (mkLocalTyconRef td) |> Some
-        | None -> 
-        match ccu.RootTypeAndExceptionDefinitions |> List.tryFind (fun x -> x.CompiledName = nm) with 
-        | Some td -> txTypeDef None (mkLocalTyconRef td) |> Some
-        | None -> 
-        txTable.Values |> Seq.tryFind (fun t -> (match nsp with | Some ns -> t.Namespace = ns | None -> true) && t.Name = nm)
-
-    override x.ToString() = "ctxt assembly " + x.FullName
-
-
-    member __.TxTypeDef declTyOpt inp = txTypeDef declTyOpt inp
-    member internal _.Builder = builder
-    member internal _.Fs1023TraceEnabled() = builder.Fs1023TraceEnabled()
-    member internal _.Fs1023TraceMessage(message: string) = builder.Fs1023TraceMessage(message)
-    member internal _.PushTyparScope(pairs: seq<Typar * Type>) = pushTyparScope pairs
-
-        /// Makes a field definition read from a binary available as a FieldInfo. Not all methods are implemented.
-    member asm.TxTType (typ:TType) = 
+    /// Makes a field definition read from a binary available as a FieldInfo. Not all methods are implemented.
+    member asm.TxTType (typ: TType) =
         // TODO: may need something special for "System.Void"
         let typ = stripTyEqnsWrtErasure Erasure.EraseAll g typ
         if isUnitTy g typ then typeof<Void>
         else
-            match typ with 
-            | AppTy g (tcref, tinst) -> 
+            match typ with
+            | AppTy g (tcref, tinst) ->
                 builder.RecordDependency tcref
-                let ccuofTyconRef = 
-                    match ccuOfTyconRef tcref with 
+                let ccuofTyconRef =
+                    match ccuOfTyconRef tcref with
                     | Some ccuofTyconRef -> ccuofTyconRef
                     | None -> ccu
-                let reflAssem = 
+                let reflAssem =
                     if obj.ReferenceEquals(ccuofTyconRef, ccu) then asm
                     else builder.GetOrAddAssembly ccuofTyconRef
                 let tcrefR = reflAssem.TxTypeDef None tcref
                 match tinst with
-                | [] -> tcrefR 
-                | args -> tcrefR.MakeGenericType(Array.map asm.TxTType (Array.ofList args))  
-            | ty when isArrayTy g ty -> 
-                let ety = destArrayTy g ty 
+                | [] -> tcrefR
+                | args -> tcrefR.MakeGenericType(Array.map asm.TxTType (Array.ofList args))
+            | ty when isArrayTy g ty ->
+                let ety = destArrayTy g ty
                 let etyR = asm.TxTType ety
                 match rankOfArrayTy g ty with
-                | 1 -> etyR.MakeArrayType()  
-                | n -> etyR.MakeArrayType(n)  
-            | ty when isNativePtrTy g ty -> 
-                let etyR = destNativePtrTy g ty  |> asm.TxTType 
-                etyR.MakePointerType()  
-            | ty when isByrefTy g ty -> 
-                let etyR = destByrefTy g ty  |> asm.TxTType 
-                etyR.MakeByRefType()  
-            | ty when isTyparTy g ty -> 
-                let tp = destTyparTy g ty  
+                | 1 -> etyR.MakeArrayType()
+                | n -> etyR.MakeArrayType(n)
+            | ty when isNativePtrTy g ty ->
+                let etyR = destNativePtrTy g ty |> asm.TxTType
+                etyR.MakePointerType()
+            | ty when isByrefTy g ty ->
+                let etyR = destByrefTy g ty |> asm.TxTType
+                etyR.MakeByRefType()
+            | ty when isTyparTy g ty ->
+                let tp = destTyparTy g ty
                 match tp.Solution with
                 | Some solvedTy ->
                     asm.TxTType solvedTy
@@ -2365,8 +2373,152 @@ and [<DebuggerDisplay("{FullName}")>] ReflectAssembly(builder: TypeReflectionBui
                     else
                         resolved
             | _ -> failwithf "Unsupported TxTType %+A" typ
-     
+
     member _.TcGlobals = g
+
+    member x.TryBindType(nsp: string option, nm: string) : Type option =
+        match ccu.RootModulesAndNamespaces |> List.tryFind (fun x -> x.CompiledName = nm) with
+        | Some td -> txTypeDef None (mkLocalTyconRef td) |> Some
+        | None ->
+            match ccu.RootTypeAndExceptionDefinitions |> List.tryFind (fun x -> x.CompiledName = nm) with
+            | Some td -> txTypeDef None (mkLocalTyconRef td) |> Some
+            | None ->
+                txTable.Values
+                |> Seq.tryFind (fun t ->
+                    (match nsp with
+                     | Some ns -> t.Namespace = ns
+                     | None -> true)
+                    && t.Name = nm)
+
+    override x.ToString() = "ctxt assembly " + x.FullName
+
+    member __.TxTypeDef declTyOpt inp = txTypeDef declTyOpt inp
+    member internal _.Builder = builder
+    member internal _.Fs1023TraceEnabled() = builder.Fs1023TraceEnabled()
+    member internal _.Fs1023TraceMessage(message: string) = builder.Fs1023TraceMessage(message)
+    member internal _.PushTyparScope(pairs: seq<Typar * Type>) = pushTyparScope pairs
+
+and [<DebuggerDisplay("{Name}")>] ReflectModule(asm: ReflectAssembly) =
+    inherit Module()
+
+    let moduleVersionId = Guid.NewGuid()
+    let defaultBindingFlags = BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Static ||| BindingFlags.Instance
+    let moduleName =
+        let asmName = asm.GetName()
+        if isNull asmName || String.IsNullOrEmpty asmName.Name then
+            "TastReflectionModule"
+        else
+            asmName.Name
+
+    let bindingFlagsOrDefault flags =
+        if flags = BindingFlags.Default then defaultBindingFlags else flags
+
+    let allTypes () = asm.GetTypes()
+
+    let tryGetTypeByName (name: string) (ignoreCase: bool) =
+        let comparison = if ignoreCase then StringComparison.OrdinalIgnoreCase else StringComparison.Ordinal
+        allTypes ()
+        |> Array.tryFind (fun ty ->
+            String.Equals(ty.FullName, name, comparison)
+            || String.Equals(ty.Name, name, comparison))
+
+    let tryPick projection =
+        allTypes () |> Array.tryPick projection
+
+    let gather projection =
+        allTypes () |> Array.collect projection
+
+    let notSupported memberName =
+        raise (NotSupportedException(sprintf "%s is not supported for TastReflection modules." memberName))
+
+    override _.Assembly = asm :> Assembly
+    override _.Name = moduleName
+    override _.FullyQualifiedName = moduleName
+    override _.ScopeName = moduleName
+    override _.ModuleVersionId = moduleVersionId
+    override _.MDStreamVersion = 0
+    override _.MetadataToken = 0
+
+    override _.GetPEKind(peKind, machine) =
+        peKind <- PortableExecutableKinds.ILOnly
+        machine <- ImageFileMachine.I386
+
+    override _.IsResource() = false
+
+    override _.IsDefined(_attributeType, _inherit) = false
+
+    override _.GetTypes() = allTypes ()
+
+    override _.GetType(name: string) =
+        tryGetTypeByName name false |> optionToNull
+
+    override _.GetType(name: string, ignoreCase: bool) =
+        tryGetTypeByName name ignoreCase |> optionToNull
+
+    override _.GetType(name: string, throwOnError: bool, ignoreCase: bool) =
+        match tryGetTypeByName name ignoreCase with
+        | Some ty -> ty
+        | None when throwOnError ->
+            raise (TypeLoadException(sprintf "Type '%s' not found in module '%s'." name moduleName))
+        | None -> null
+
+    override _.FindTypes(filter, filterCriteria) =
+        let predicate =
+            if isNull filter then (fun _ -> true)
+            else fun ty -> filter.Invoke(ty, filterCriteria)
+        allTypes () |> Array.filter predicate
+
+    override _.GetCustomAttributesData() : IList<CustomAttributeData> =
+        upcast List<CustomAttributeData>()
+
+    override _.GetCustomAttributes(_inherit) = [| |]
+
+    override _.GetCustomAttributes(_attributeType, _inherit) = [| |]
+
+    override _.GetMethods(bindingAttr) =
+        let flags = bindingFlagsOrDefault bindingAttr
+        gather (fun ty -> ty.GetMethods(flags))
+
+    override _.GetMethodImpl(name, bindingAttr, binder, callConvention, types, modifiers) =
+        let flags = bindingFlagsOrDefault bindingAttr
+        tryPick (fun ty ->
+            match ty.GetMethod(name, flags, binder, callConvention, types, modifiers) with
+            | null -> None
+            | mi -> Some mi)
+        |> optionToNull
+
+    override _.GetFields(bindingAttr) =
+        let flags = bindingFlagsOrDefault bindingAttr
+        gather (fun ty -> ty.GetFields(flags))
+
+    override _.GetField(name: string, bindingAttr) =
+        let flags = bindingFlagsOrDefault bindingAttr
+        tryPick (fun ty ->
+            match ty.GetField(name, flags) with
+            | null -> None
+            | fi -> Some fi)
+        |> optionToNull
+
+    override _.ResolveField(metadataToken: int, _genericTypeArguments, _genericMethodArguments) =
+        notSupported (sprintf "ResolveField(%d, ..., ...)" metadataToken)
+
+    override _.ResolveMethod(metadataToken: int, _genericTypeArguments, _genericMethodArguments) =
+        notSupported (sprintf "ResolveMethod(%d, ..., ...)" metadataToken)
+
+    override _.ResolveMember(metadataToken: int, _genericTypeArguments, _genericMethodArguments) =
+        notSupported (sprintf "ResolveMember(%d, ..., ...)" metadataToken)
+
+    override _.ResolveType(metadataToken: int, _genericTypeArguments, _genericMethodArguments) =
+        notSupported (sprintf "ResolveType(%d, ..., ...)" metadataToken)
+
+    override _.ResolveSignature(metadataToken: int) = notSupported (sprintf "ResolveSignature(%d)" metadataToken)
+
+    override _.ResolveString(metadataToken: int) = notSupported (sprintf "ResolveString(%d)" metadataToken)
+
+    override _.GetObjectData(_info: SerializationInfo, _context: StreamingContext) =
+        raise (SerializationException(sprintf "Module '%s' cannot be serialized." moduleName))
+
+    override _.ToString() = moduleName
 
 and TypeReflectionBuilderStats =
     { AssembliesCreated: int

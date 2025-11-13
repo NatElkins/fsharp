@@ -331,6 +331,17 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
 > - Added per-tycon event metadata (`TyconProvidedEventInfo`), taught `publishProvidedMembers` to project `ProvidedEventInfo` (adder/remover bindings plus handler types), and extended `collectProvidedMembersForTycon`/`GenProvidedTypeDef` so IlxGen emits `ILEventDef`s from the compiler-generated catalog instead of depending on provider IL.
 > - `dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release --filter "DisplayName~mutable provided type exposes setter and constructor"` stays green, and the new `"provided event surfaces in emitted IL"` regression reflects over both the normal and `/standalone` consumers to assert that `GetEvent("Triggered")` plus `Get{Add,Remove}Method()` survive relocation.
 
+> **2025-11-13 module reflection follow-up:** Finished the first pass of `ReflectModule` and revalidated the Fs1023 smoke tests.
+>
+> - `ReflectModule` now inherits `System.Reflection.Module`, reuses `ReflectAssembly.GetTypes()` for discovery, and only overrides the virtual members available in the netstandard2.0 surface (`GetTypes`, `FindTypes`, `GetFields`, `GetMethods`, `GetMethodImpl`, `Resolve*`, etc.). We explicitly *do not* attempt to override sealed accessors such as `ModuleHandle`, so unsupported APIs funnel through `NotSupportedException` instead—this was necessary after a failed experiment to replace `GetModuleHandleImpl`, which netstandard treats as a non-virtual helper.
+> - Extracting the module proxy temporarily severed the `TxTypeDef`/`TxTType`/`TryBindType` helpers from `ReflectAssembly`; those members (plus typar-scope management and tracing) are now reintroduced so `TypeReflectionBuilder` still has a single locus for caching and dependency capture. This keeps TastReflection projections + dependency tracking stable while the module object focuses purely on reflection APIs.
+> - Re-ran the targeted regressions under `-c Release` to confirm nothing regressed:
+>   - `timeout 300s dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj --filter "DisplayName~mutable provided type exposes setter and constructor"`
+>   - `timeout 300s dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj --filter "DisplayName~provided event surfaces in emitted IL"`
+>   - `timeout 300s dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj --filter "DisplayName~record input compiles generated summaries"`
+>   All three passed on `net10.0`, giving us confidence that both the mutable setter/ctor path and the newer event/property regressions survived the reflection changes.
+> - Next up for Phase 1: finish the `ReflectModule` debugger ergonomics (`ToString`/`DebuggerDisplay`) and resume the event/indexer parity work listed above, then re-run the broader Fs1023 regression filters before queuing the PR.
+
 ---
 
 ## Phase 8 — Rollout and monitoring (Status: Not started)
