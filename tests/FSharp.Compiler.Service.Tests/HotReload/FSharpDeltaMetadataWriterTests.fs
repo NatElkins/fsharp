@@ -545,6 +545,30 @@ module FSharpDeltaMetadataWriterTests =
         assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap
 
     [<Fact>]
+    let ``async multi-generation deltas preserve EncLog ordering`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
+
+        let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
+            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
+               (TableIndex.MethodDef, 1, EditAndContinueOperation.Default) |]
+
+        let expectedEncMap: (TableIndex * int)[] =
+            [| (TableIndex.Module, 1)
+               (TableIndex.MethodDef, 1) |]
+
+        let assertDelta (delta: DeltaWriter.MetadataDelta) =
+            Assert.Equal(expectedEncLog, delta.EncLog)
+            Assert.Equal(expectedEncMap, delta.EncMap)
+            assertTableStreamMatches delta
+            assertTableCountsMatch delta.Metadata delta.TableRowCounts
+            assertBitMasksMatch delta.Metadata delta.TableBitMasks
+            assertEncLogMatches delta.Metadata delta.EncLog
+            assertEncMapMatches delta.Metadata delta.EncMap
+
+        assertDelta artifacts.Generation1
+        assertDelta artifacts.Generation2
+
+    [<Fact>]
     let ``metadata writer reports small index sizes for property delta`` () =
         let delta = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
         let indexSizes = delta.Delta.IndexSizes

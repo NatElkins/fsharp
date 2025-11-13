@@ -757,13 +757,11 @@ module internal MetadataDeltaTestHelpers =
         { BaselineBytes = assemblyBytes
           Delta = metadataDelta }
 
-    let emitAsyncDeltaArtifacts (messageLiteral: string option) () : MetadataDeltaArtifacts =
-        let moduleDef = createAsyncModule messageLiteral ()
-        let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
-        use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
-        let metadataReader = peReader.GetMetadataReader()
-        let builder = IlDeltaStreamBuilder None
-
+    let private emitAsyncDeltaCore
+        (metadataReader: MetadataReader)
+        (builder: IlDeltaStreamBuilder)
+        (heapOffsets: MetadataHeapOffsets)
+        : DeltaWriter.MetadataDelta =
         let methodHandle = findMethodHandle metadataReader "Sample.AsyncHost" "RunAsync"
 
         let methodKey =
@@ -794,28 +792,57 @@ module internal MetadataDeltaTestHelpers =
 
         let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
 
-        let metadataDelta =
-            DeltaWriter.emit
-                builder.MetadataBuilder
-                moduleName
-                (Guid.NewGuid())
-                (Guid.NewGuid())
-                (Guid.NewGuid())
-                methodDefinitionRows
-                []
-                []
-                []
-                []
-                []
-                []
-                updates
-                MetadataHeapOffsets.Zero
-                (getRowCounts metadataReader)
+        DeltaWriter.emit
+            builder.MetadataBuilder
+            moduleName
+            (Guid.NewGuid())
+            (Guid.NewGuid())
+            (Guid.NewGuid())
+            methodDefinitionRows
+            []
+            []
+            []
+            []
+            []
+            []
+            updates
+            heapOffsets
+            (getRowCounts metadataReader)
+
+    let emitAsyncDeltaArtifacts (messageLiteral: string option) () : MetadataDeltaArtifacts =
+        let moduleDef = createAsyncModule messageLiteral ()
+        let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
+        use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+        let builder = IlDeltaStreamBuilder None
+        let heapOffsets = computeHeapOffsets metadataReader
+        let metadataDelta = emitAsyncDeltaCore metadataReader builder heapOffsets
 
         assertTableStreamMatches metadataDelta
 
         { BaselineBytes = assemblyBytes
           Delta = metadataDelta }
+
+    let private emitAsyncDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) =
+        use peReader = new PEReader(new MemoryStream(baselineBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+        let builder = IlDeltaStreamBuilder None
+        emitAsyncDeltaCore metadataReader builder heapOffsets
+
+    let emitAsyncMultiGenerationArtifacts () : MultiGenerationMetadataArtifacts =
+        let generation1 = emitAsyncDeltaArtifacts None ()
+
+        let nextOffsets =
+            use peReader = new PEReader(new MemoryStream(generation1.BaselineBytes, false))
+            let metadataReader = peReader.GetMetadataReader()
+            let baseOffsets = computeHeapOffsets metadataReader
+            advanceHeapOffsets baseOffsets generation1.Delta
+
+        let generation2 = emitAsyncDeltaFromBaseline generation1.BaselineBytes nextOffsets
+
+        { BaselineBytes = generation1.BaselineBytes
+          Generation1 = generation1.Delta
+          Generation2 = generation2 }
 
     let emitPropertyMultiGenerationArtifacts () : MultiGenerationMetadataArtifacts =
         let generation1 = emitPropertyDeltaArtifacts None ()
