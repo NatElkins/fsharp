@@ -118,9 +118,9 @@ module RoslynBaselineComparisons =
     [<Fact>]
     let ``async multi-generation delta rows match Roslyn baseline`` () =
         let baselines = loadRoslynTables ()
-        let roslynAsync = baselines |> Map.tryFind "Async" |> Option.defaultWith (fun () -> failwith "Roslyn async baseline missing")
-        let roslynRows = roslynAsync.rows
+        let roslynAdd = baselines |> Map.tryFind "Async" |> Option.defaultWith (fun () -> failwith "Roslyn async baseline missing")
+        let roslynUpdate = baselines |> Map.tryFind "AsyncUpdate" |> Option.defaultWith (fun () -> failwith "Roslyn async update baseline missing")
 
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
-        assertMatches roslynRows artifacts.Generation1.Metadata
-        assertMatches roslynRows artifacts.Generation2.Metadata
+        assertMatches roslynAdd artifacts.Generation1.Metadata
+        assertMatches roslynUpdate artifacts.Generation2.Metadata
