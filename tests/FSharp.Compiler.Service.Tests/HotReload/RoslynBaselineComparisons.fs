@@ -2,8 +2,16 @@ namespace FSharp.Compiler.Service.Tests.HotReload
 
 open System
 open System.IO
+open System.Collections.Immutable
+open System.Reflection.Metadata
 open System.Text.Json
 open Xunit
+open FSharp.Compiler.Service.Tests.HotReload
+
+module private MetadataHelpers =
+    let countRows (metadata: byte[]) (table: TableIndex) =
+        use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange metadata)
+        provider.GetMetadataReader().GetTableRowCount(table)
 
 module RoslynBaselineComparisons =
 
@@ -26,3 +34,23 @@ module RoslynBaselineComparisons =
         let delta2 = baselines[1].rows
         Assert.Equal(1, delta2.['Module'])
         Assert.Equal(2, delta2.['MethodDef'])
+
+    [<Fact>]
+    let ``property delta row counts do not exceed Roslyn baseline`` () =
+        let baselines = loadRoslynTables ()
+        let roslyn = baselines |> List.tryHead |> Option.defaultWith (fun () -> failwith "Roslyn property baseline missing")
+
+        let roslynEncLog = roslyn.rows.['EncLog']
+        let roslynEncMap = roslyn.rows.['EncMap']
+        let roslynMethodDef = roslyn.rows.['MethodDef']
+
+        let propertyDelta = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
+        let deltaBytes = propertyDelta.Delta.Metadata
+
+        let encLog = MetadataHelpers.countRows deltaBytes TableIndex.EncLog
+        let encMap = MetadataHelpers.countRows deltaBytes TableIndex.EncMap
+        let methodDef = MetadataHelpers.countRows deltaBytes TableIndex.MethodDef
+
+        Assert.True(encLog <= roslynEncLog, sprintf "EncLog rows (%d) exceed Roslyn baseline (%d)" encLog roslynEncLog)
+        Assert.True(encMap <= roslynEncMap, sprintf "EncMap rows (%d) exceed Roslyn baseline (%d)" encMap roslynEncMap)
+        Assert.True(methodDef <= roslynMethodDef, sprintf "MethodDef rows (%d) exceed Roslyn baseline (%d)" methodDef roslynMethodDef)
