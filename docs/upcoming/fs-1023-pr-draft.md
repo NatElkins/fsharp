@@ -16,9 +16,9 @@
 ## Validation evidence
 | Area | Command |
 | --- | --- |
-| Component suite | `dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Release` |
-| Service suite | `dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release` |
-| FsSuite TypeProvider slice | `dotnet test tests/FSharp/FSharpSuite.Tests.fsproj -c Release --filter "FullyQualifiedName~TypeProviderTests"` |
+| Component suite | `timeout 600s dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Release` |
+| Fs1023 regression suite | `timeout 600s dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release --filter "FullyQualifiedName~TypeProviderDependencyInvalidationTests"` |
+| Targeted regressions | `timeout 300s dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release --filter "DisplayName~mutable provided type exposes setter and constructor"`<br>`timeout 300s dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release --filter "DisplayName~provided event surfaces in emitted IL"`<br>`timeout 300s dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release --filter "DisplayName~record input compiles generated summaries"` |
 | Full build + test leg | `./build.sh --testcoreclr -c Release /p:WarningsNotAsErrors=FS0066;FS3261;FS0760;FS0026` |
 
 All suites pass (nullability warnings tracked separately).

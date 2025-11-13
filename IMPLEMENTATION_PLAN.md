@@ -345,7 +345,7 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
 > - `ReflectTypeDefinition.GetConstructors`, `GetMethods`, `GetFields`, `GetProperties`, and `GetEvents` now rely on `TxConstructorDef` + the shared visibility/scope filter, merge declared/provided members (including `tcaug_provided_events`), deduplicate by `ValRef.Stamp`, and honor `BindingFlags`. The updated regression proves private instance members remain discoverable only when `BindingFlags.NonPublic` is specified.
 > - `ReflectModule` picked up a `DebuggerDisplay`/`ToString` implementation that reports both the module name and parent assembly, so the debugger view now points back to the projected assembly identity.
 > - Broader verification: `timeout 600s dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release --filter "FullyQualifiedName~TypeProviderDependencyInvalidationTests"` now passes end-to-end on `net10.0`, so every Fs1023 regression in that suite is green after the recent TastReflection changes.
-> - Next up for Phase 1: resume the remaining parity work (event/indexer edge cases called out earlier in the plan) and re-run the broader Fs1023 regression filters before queuing the PR.
+> - Next up for Phase 1: finish the lingering parity polish (the indexer/event edge cases called out earlier) and turn the `fs-1023` work into a PR using `docs/upcoming/fs-1023-pr-draft.md`, then begin Phase 8 partner dogfooding + telemetry once the PR is up.
 
 ---
 
