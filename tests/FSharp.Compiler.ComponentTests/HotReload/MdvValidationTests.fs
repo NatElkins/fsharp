@@ -84,6 +84,12 @@ module MdvValidationTests =
                 && (op = EditAndContinueOperation.Default || op = EditAndContinueOperation.AddMethod))
         Assert.True(methodEntry, "Expected EncLog entry for updated method definition")
 
+    let private assertEncMapContains (delta: IlxDelta) (table: TableIndex) (rowId: int) =
+        let entryExists =
+            delta.EncMap
+            |> Array.exists (fun (t, r) -> t = table && r = rowId)
+        Assert.True(entryExists, $"Expected EncMap entry for {table} row {rowId}")
+
     let private createTempProject () =
         let root = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-tests", System.Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(root) |> ignore
@@ -1061,6 +1067,7 @@ type EventDemo() =
         let accessorName = "Message"
         let methodKey = TestHelpers.methodKeyByName baselineArtifacts.Baseline typeName "get_Message"
         let methodToken = baselineArtifacts.Baseline.MethodTokens[methodKey]
+        let methodRowId = methodRowIdFromToken methodToken
         let accessorUpdate =
             TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.PropertyGet accessorName) methodKey
 
@@ -1313,6 +1320,7 @@ type EventDemo() =
             let expectedLiteral1 = Text.Encoding.Unicode.GetBytes "Generation 1 helper message"
             Assert.True(containsSubsequence delta1.Metadata expectedLiteral1, "Expected generation 1 metadata to contain updated literal.")
             assertMethodEncLog delta1 methodToken
+            assertEncMapContains delta1 TableIndex.MethodDef methodRowId
 
             let baseline2 =
                 match delta1.UpdatedBaseline with
@@ -1336,6 +1344,7 @@ type EventDemo() =
             Assert.True(containsSubsequence delta2.Metadata expectedLiteral2, "Expected generation 2 metadata to contain updated literal.")
             assertMethodEncLog delta2 methodToken
             Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
+            assertEncMapContains delta2 TableIndex.MethodDef methodRowId
         finally
             if not (keepArtifacts ()) then
                 try File.Delete(meta1Path) with _ -> ()
