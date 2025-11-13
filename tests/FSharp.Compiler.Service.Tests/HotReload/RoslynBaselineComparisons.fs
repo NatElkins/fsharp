@@ -100,3 +100,23 @@ module RoslynBaselineComparisons =
         Assert.Equal(roslynEncLog, encLog)
         Assert.Equal(roslynEncMap, encMap)
         Assert.Equal(roslynMethodDef, methodDef)
+
+    [<Fact>]
+    let ``event multi-generation delta rows match Roslyn baseline`` () =
+        let baselines = loadRoslynTables ()
+        let roslynEvent = baselines |> List.tryItem 1 |> Option.defaultWith (fun () -> failwith "Roslyn event baseline missing")
+        let roslynRows = roslynEvent.rows
+
+        let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
+        assertMatches roslynRows artifacts.Generation1.Metadata
+        assertMatches roslynRows artifacts.Generation2.Metadata
+
+    [<Fact>]
+    let ``async multi-generation delta rows match Roslyn baseline`` () =
+        let baselines = loadRoslynTables ()
+        let roslynAsync = baselines |> List.tryItem 2 |> Option.defaultWith (fun () -> failwith "Roslyn async baseline missing")
+        let roslynRows = roslynAsync.rows
+
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
+        assertMatches roslynRows artifacts.Generation1.Metadata
+        assertMatches roslynRows artifacts.Generation2.Metadata
