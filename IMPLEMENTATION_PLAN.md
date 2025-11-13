@@ -350,7 +350,7 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
 | Risk | Phase trigger | Mitigation |
 |------|---------------|------------|
 | Projection cache leaks increase memory usage | Phase 1 rollout | Add stress tests with scripted provider reloads; monitor with VS memory snapshots before GA. |
-| Provider invalidation misses edits in signature files | Phase 2/5 testing | Expand integration tests to mutate `.fsi`/`.fs` pairs and assert reruns; audit dependency stamps captured from both declarations. |
+| Provider invalidation misses edits in signature files | Phase 2/5 testing | Guarded by `type provider re-runs when signature file changes`, which mutates only the `.fsi` while counting provider re-executions and inspecting `DependencyFiles`; continue to audit dependency stamps for mixed `.fsi`/`.fs` edits. |
 | TPSDK consumers lag on updates | Phase 3/8 | Publish compatibility matrix in docs and provide a temporary shims package so older providers fail gracefully with actionable errors. |
 | Performance regressions in IDE scenarios | Phase 4–5 | Run VS RPS and Ionide benchmarks; fallback plan is to keep feature behind preview flag while optimising caches. |
 | Diagnostics confuse users when referencing unsupported types | Phase 2/5 | Document error codes, add IDE quick info, and include common remediation steps in docs and release notes. |
