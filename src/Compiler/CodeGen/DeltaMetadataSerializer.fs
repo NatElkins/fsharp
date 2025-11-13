@@ -10,7 +10,6 @@ open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 open FSharp.Compiler.CodeGen.DeltaTableLayout
-open FSharp.Compiler.CodeGen.DeltaIndexSizing
 
 let private padTo4 (bytes: byte[]) =
     if bytes.Length % 4 = 0 then
@@ -69,10 +68,10 @@ type DeltaMetadataSizes =
     { RowCounts: int[]
       HeapSizes: MetadataHeapSizes
       BitMasks: TableBitMasks
-      IndexSizes: CodedIndexSizes
+      IndexSizes: DeltaIndexSizing.CodedIndexSizes
       IsEncDelta: bool }
 
-let private promoteIndicesForEncDelta (sizes: CodedIndexSizes) : CodedIndexSizes =
+let private promoteIndicesForEncDelta (sizes: DeltaIndexSizing.CodedIndexSizes) : DeltaIndexSizing.CodedIndexSizes =
     let simpleIndexBig = Array.create MetadataTokens.TableCount true
     { sizes with
         StringsBig = true
@@ -152,7 +151,7 @@ let private isTablePresent (bitmaskLow: int) (bitmaskHigh: int) (index: int) =
     else
         ((bitmaskHigh >>> (index - 32)) &&& 1) <> 0
 
-let private writeRowElement (writer: BinaryWriter) (indexSizes: CodedIndexSizes) (input: DeltaTableSerializerInput) (element: RowElementData) =
+let private writeRowElement (writer: BinaryWriter) (indexSizes: DeltaIndexSizing.CodedIndexSizes) (input: DeltaTableSerializerInput) (element: RowElementData) =
     let tag = element.Tag
     let value = element.Value
 
