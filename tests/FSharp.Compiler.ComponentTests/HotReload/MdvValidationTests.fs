@@ -1237,6 +1237,11 @@ type EventDemo() =
         let updatedModule = TestHelpers.createEventModule "Event helper added payload"
         let typeName = "Sample.EventDemo"
         let addKey = TestHelpers.methodKey typeName "add_OnChanged" [ PrimaryAssemblyILGlobals.typ_Object ] ILType.Void
+        let methodToken =
+            match Map.tryFind addKey baselineArtifacts.Baseline.MethodTokens with
+            | Some token -> token
+            | None -> failwith "Baseline did not contain add_OnChanged token."
+        let methodRowId = methodRowIdFromToken methodToken
         let removeKey = TestHelpers.methodKey typeName "remove_OnChanged" [ PrimaryAssemblyILGlobals.typ_Object ] ILType.Void
         let accessorUpdates =
             [ TestHelpers.mkAccessorUpdate typeName (SymbolMemberKind.EventAdd "OnChanged") addKey
@@ -1471,16 +1476,13 @@ type EventDemo() =
 
         let delta1 = emitDelta request1
         File.WriteAllBytes(meta1Path, delta1.Metadata)
+        assertMethodEncLog delta1 methodToken
+        assertEncMapContains delta1 TableIndex.MethodDef methodRowId
 
         let baseline2 =
             match delta1.UpdatedBaseline with
             | Some b -> b
             | None -> failwith "First event delta did not provide an updated baseline."
-
-        let methodToken =
-            match delta1.AddedOrChangedMethods with
-            | info :: _ -> info.MethodToken
-            | [] -> failwith "Event accessor delta did not record method info."
 
         let request2 : IlxDeltaRequest =
             { request1 with
@@ -1492,9 +1494,8 @@ type EventDemo() =
 
         let delta2 = emitDelta request2
         File.WriteAllBytes(meta2Path, delta2.Metadata)
-
-        assertMethodEncLog delta1 methodToken
         assertMethodEncLog delta2 methodToken
+        assertEncMapContains delta2 TableIndex.MethodDef methodRowId
 
         if not (keepArtifacts ()) then
             try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
