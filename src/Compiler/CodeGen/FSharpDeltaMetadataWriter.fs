@@ -12,7 +12,6 @@ open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 open FSharp.Compiler.CodeGen.DeltaTableLayout
-open FSharp.Compiler.CodeGen.DeltaIndexSizing
 open FSharp.Compiler.CodeGen.DeltaMetadataSerializer
 
 let private serializeWithMetadataBuilder (metadataBuilder: MetadataBuilder) =
@@ -69,7 +68,7 @@ type MetadataDelta =
         HeapSizes: MetadataHeapSizes
         Tables: TableRows
         TableBitMasks: TableBitMasks
-        IndexSizes: CodedIndexSizes
+        IndexSizes: DeltaIndexSizing.CodedIndexSizes
         TableStream: DeltaTableStream
     }
 
