@@ -207,6 +207,31 @@ type Fs1023Provider(config: TypeProviderConfig) as this =
                     |> Array.map (fun p -> sprintf "%s:%s" p.Name p.ParameterType.Name)
                     |> String.concat ";"
 
+            let eventSummary =
+                let events =
+                    sourceType.GetEvents(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Instance ||| BindingFlags.Static)
+                    |> Array.map (fun ev -> ev.Name)
+                if events.Length = 0 then
+                    "none"
+                else
+                    String.concat ";" events
+
+            let moduleTypeSummary =
+                sourceType.Module.GetTypes()
+                |> Array.filter (fun ty ->
+                    let ns = ty.Namespace
+                    let targetNs = sourceType.Namespace
+                    if String.IsNullOrEmpty targetNs then
+                        true
+                    else
+                        String.Equals(ns, targetNs, StringComparison.Ordinal))
+                |> Array.map (fun ty -> ty.Name)
+                |> Array.distinct
+                |> Array.sort
+                |> function
+                    | [||] -> "none"
+                    | names -> String.concat ";" names
+
             printfn "[fs1023][%s][summary] Map=%s Optional=%s OptionalLiteral=%s Indexer=%s" typeName mapSummary optionalSummary optionalLiteralSummary indexerSummary
 
             let addSummaryProperty name value =
@@ -220,6 +245,8 @@ type Fs1023Provider(config: TypeProviderConfig) as this =
             addSummaryProperty "OptionalParameter" optionalSummary
             addSummaryProperty "OptionalLiteralParameter" optionalLiteralSummary
             addSummaryProperty "IndexerParameters" indexerSummary
+            addSummaryProperty "EventSummary" eventSummary
+            addSummaryProperty "ModuleTypeSummary" moduleTypeSummary
 
             logProvider "define-end"
             provided)
@@ -267,10 +294,13 @@ do ()
 namespace Fs1023Consumer
 
 open System
+open Microsoft.FSharp.Control
 
 type Model =
     { Value: int }
     with
+        [<CLIEvent>]
+        member _.ValueChanged = Event<EventHandler, EventArgs>().Publish
         member _.Map(value: int, [<System.ParamArrayAttribute>] rest: string[]) = value + rest.Length
         member _.Optional(?value: int) = defaultArg value 0
         member _.Item
@@ -295,10 +325,13 @@ type Model =
 namespace Fs1023Consumer
 
 open System
+open Microsoft.FSharp.Control
 
 type Model =
     { Renamed: int }
     with
+        [<CLIEvent>]
+        member _.ValueChanged = Event<EventHandler, EventArgs>().Publish
         member _.Map(value: int, [<System.ParamArrayAttribute>] rest: string[]) = value + rest.Length
         member _.Optional(?value: int) = defaultArg value 0
         member _.Item
@@ -1542,6 +1575,8 @@ module UseProvided =
                 let optionalSummary = readStaticProperty "OptionalParameter"
                 let optionalLiteralSummary = readStaticProperty "OptionalLiteralParameter"
                 let indexerSummary = readStaticProperty "IndexerParameters"
+                let eventSummary = readStaticProperty "EventSummary"
+                let moduleSummary = readStaticProperty "ModuleTypeSummary"
 
                 printfn "[fs1023][assert] MapParameters=%s" mapSummary
                 printfn "[fs1023][assert] OptionalParameter=%s" optionalSummary
@@ -1552,6 +1587,8 @@ module UseProvided =
                 Assert.Equal("value:true:true:OptionalArgumentAttribute", optionalSummary)
                 Assert.Equal("value:true:true:42", optionalLiteralSummary)
                 Assert.Equal("index:Int32", indexerSummary)
+                Assert.Equal("ValueChanged", eventSummary)
+                Assert.Equal("Model;Provided;UseProvided", moduleSummary)
             finally
                 context.Unload()
         finally
@@ -1627,6 +1664,8 @@ module UseProvided =
                 assertStaticStringProperty "OptionalParameter" "value:true:true:OptionalArgumentAttribute"
                 assertStaticStringProperty "OptionalLiteralParameter" "value:true:true:42"
                 assertStaticStringProperty "IndexerParameters" "index:Int32"
+                assertStaticStringProperty "EventSummary" "ValueChanged"
+                assertStaticStringProperty "ModuleTypeSummary" "Model;Provided;UseProvided"
 
                 Assert.Equal("Value", getStaticStringProperty "Value")
 
@@ -1793,6 +1832,8 @@ module UseProvided =
                 Assert.Equal("value:true:true:OptionalArgumentAttribute", getStaticStringProperty "OptionalParameter")
                 Assert.Equal("value:true:true:42", getStaticStringProperty "OptionalLiteralParameter")
                 Assert.Equal("index:Int32", getStaticStringProperty "IndexerParameters")
+                Assert.Equal("ValueChanged", getStaticStringProperty "EventSummary")
+                Assert.Equal("Model;Provided;UseProvided", getStaticStringProperty "ModuleTypeSummary")
 
             compile projectArgs
             assertProperties outputDll

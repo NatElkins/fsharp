@@ -340,6 +340,7 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
 >   - `timeout 300s dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj --filter "DisplayName~provided event surfaces in emitted IL"`
 >   - `timeout 300s dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj --filter "DisplayName~record input compiles generated summaries"`
 >   All three passed on `net10.0`, giving us confidence that both the mutable setter/ctor path and the newer event/property regressions survived the reflection changes.
+> - Augmented `Fs1023Provider` to log both `EventSummary` (`ValueChanged`) and `ModuleTypeSummary` (`Model;Provided;UseProvided`) so we now assert the TastReflection proxies satisfy `Type.GetEvents` and `Type.Module.GetTypes` end-to-end.
 > - Next up for Phase 1: finish the `ReflectModule` debugger ergonomics (`ToString`/`DebuggerDisplay`) and resume the event/indexer parity work listed above, then re-run the broader Fs1023 regression filters before queuing the PR.
 
 ---
