@@ -1882,10 +1882,12 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         |> Option.map (fun field -> TxFieldDefinition asm this gps field) 
         |> optionToNull
 
-    override this.GetFields(_bindingFlags) = 
+    override this.GetFields(bindingAttr) = 
         use _ = pushTyparScope ()
+        let visibilityFilter = createVisibilityScopePredicate bindingAttr (BindingFlags.Public ||| BindingFlags.Instance)
         tcref.AllFieldsArray
         |> Array.map (fun field -> TxFieldDefinition asm this gps field)
+        |> Array.filter (fun fi -> visibilityFilter fi.IsPublic fi.IsStatic)
 
     override this.GetEvent(name, bindingFlags) =
         use _ = pushTyparScope ()
@@ -1893,8 +1895,9 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         |> Array.tryFind (fun ev -> String.Equals(ev.Name, name, StringComparison.Ordinal))
         |> optionToNull
 
-    override this.GetEvents(_bindingFlags) =
+    override this.GetEvents(bindingAttr) =
         use _ = pushTyparScope ()
+        let visibilityFilter = createVisibilityScopePredicate bindingAttr (BindingFlags.Public ||| BindingFlags.Instance ||| BindingFlags.Static)
         let g = asm.TcGlobals
         let eventMap = Dictionary<string, ValRef option ref * ValRef option ref * ValRef option ref>()
 
@@ -1934,10 +1937,16 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                     TxEventDefinition asm this eventName !propertyRef addVal removeVal
                 Some eventInfo
             | _ -> None)
+        |> Seq.filter (fun ev ->
+            let addMethod = ev.GetAddMethod(true)
+            let handlerIsStatic = if isNull addMethod then false else addMethod.IsStatic
+            let handlerIsPublic = if isNull addMethod then true else addMethod.IsPublic
+            visibilityFilter handlerIsPublic handlerIsStatic)
         |> Seq.toArray
 
-    override this.GetProperties(_bindingFlags) =
+    override this.GetProperties(bindingAttr) =
         use _ = pushTyparScope ()
+        let visibilityFilter = createVisibilityScopePredicate bindingAttr (BindingFlags.Public ||| BindingFlags.Instance)
         let propertyValRefs =
             tcref.MembersOfFSharpTyconSorted
             |> List.choose (fun x ->
@@ -1966,15 +1975,24 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             else
                 []
 
-        Array.append (propertyInfos |> List.toArray) (recordFieldProperties |> List.toArray)
+        let properties =
+            Array.append (propertyInfos |> List.toArray) (recordFieldProperties |> List.toArray)
+        properties
+        |> Array.filter (fun prop ->
+            let accessor =
+                match prop.GetGetMethod(true) with
+                | null -> prop.GetSetMethod(true)
+                | getter -> getter
+            if isNull accessor then true else visibilityFilter accessor.IsPublic accessor.IsStatic)
 
-    override this.GetMembers(_bindingFlags) = 
-        let allFlags = BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Instance ||| BindingFlags.Static
-        [| for x in this.GetMethods(allFlags) do yield (x :> MemberInfo)
-           for x in this.GetFields(allFlags) do yield (x :> MemberInfo)
-           for x in this.GetProperties(allFlags) do yield (x :> MemberInfo)
-           for x in this.GetEvents(allFlags) do yield (x :> MemberInfo)
-           for x in this.GetNestedTypes() do yield (x :> MemberInfo) |]
+    override this.GetMembers(bindingAttr) = 
+        let defaultFlags = BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Instance ||| BindingFlags.Static
+        let flags = normalizeBindingFlags bindingAttr defaultFlags
+        [| for x in this.GetMethods(flags) do yield (x :> MemberInfo)
+           for x in this.GetFields(flags) do yield (x :> MemberInfo)
+           for x in this.GetProperties(flags) do yield (x :> MemberInfo)
+           for x in this.GetEvents(flags) do yield (x :> MemberInfo)
+           for x in this.GetNestedTypes(flags) do yield (x :> MemberInfo) |]
  
 #if !NO_TYPEPROVIDERS
     override this.GetNestedTypes(_bindingFlags) =
