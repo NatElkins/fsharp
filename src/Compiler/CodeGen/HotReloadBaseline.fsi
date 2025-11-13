@@ -17,6 +17,7 @@ type MethodDefinitionKey =
       ParameterTypes: ILType list
       ReturnType: ILType }
 
+
 type ParameterDefinitionKey =
     { Method: MethodDefinitionKey
       SequenceNumber: int }
@@ -39,6 +40,25 @@ type EventDefinitionKey =
     { DeclaringType: string
       Name: string
       EventType: ILType option }
+
+type MethodDefinitionMetadataHandles =
+    { NameHandle: StringHandle option
+      SignatureHandle: BlobHandle option
+      FirstParameterRowId: int option }
+
+type ParameterDefinitionMetadataHandles = { NameHandle: StringHandle option }
+
+type PropertyDefinitionMetadataHandles =
+    { NameHandle: StringHandle option
+      SignatureHandle: BlobHandle option }
+
+type EventDefinitionMetadataHandles = { NameHandle: StringHandle option }
+
+type BaselineHandleCache =
+    { MethodHandles: Map<MethodDefinitionKey, MethodDefinitionMetadataHandles>
+      ParameterHandles: Map<ParameterDefinitionKey, ParameterDefinitionMetadataHandles>
+      PropertyHandles: Map<PropertyDefinitionKey, PropertyDefinitionMetadataHandles>
+      EventHandles: Map<EventDefinitionKey, EventDefinitionMetadataHandles> }
 
 type MethodSemanticsAssociation =
     | PropertyAssociation of PropertyDefinitionKey * rowId:int
@@ -83,6 +103,7 @@ type FSharpEmitBaseline =
       IlxGenEnvironment: IlxGenEnvSnapshot option
       PortablePdb: PortablePdbSnapshot option
       SynthesizedNameSnapshot: Map<string, string[]>
+      MetadataHandles: BaselineHandleCache
       TableEntriesAdded: int[]
       StringStreamLengthAdded: int
       UserStringStreamLengthAdded: int
@@ -110,6 +131,8 @@ val createWithEnvironment:
         FSharpEmitBaseline
 
 val metadataSnapshotFromReader: reader: MetadataReader -> MetadataSnapshot
+
+val attachMetadataHandles: metadataReader: MetadataReader -> baseline: FSharpEmitBaseline -> FSharpEmitBaseline
 
 val applyDelta:
     baseline: FSharpEmitBaseline ->

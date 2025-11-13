@@ -542,7 +542,9 @@ module internal TestHelpers =
 
         let portablePdbSnapshot = pdbBytesOpt |> Option.map createPortablePdbSnapshot
 
-        let baseline = create ilModule tokenMappings metadataSnapshot moduleId portablePdbSnapshot
+        let baseline =
+            let core = create ilModule tokenMappings metadataSnapshot moduleId portablePdbSnapshot
+            attachMetadataHandles metadataReader core
 
         { Baseline = baseline
           TokenMappings = tokenMappings

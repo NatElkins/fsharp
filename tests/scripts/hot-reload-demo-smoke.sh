@@ -13,12 +13,13 @@ if [[ ! -d "${APP_DIR}" ]]; then
 fi
 
 export DOTNET_MODIFIABLE_ASSEMBLIES=debug
+export FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY=1
 
 pushd "${APP_DIR}" >/dev/null
 
 echo "Running HotReloadDemoApp in scripted mode..." >&2
 
-output="$(../../../../.dotnet/dotnet run -- --scripted --multi-delta)"
+output="$(../../../../.dotnet/dotnet run -- --scripted --multi-delta --runtime-apply)"
 exit_code=$?
 
 popd >/dev/null

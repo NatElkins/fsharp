@@ -5,4 +5,4 @@ module Demo =
 
     let GetMessage() =
         counter <- counter + 1
-        $"Hello from generation 1 (invocation #{counter})"
+        $"Hello from generation 0 (invocation #{counter})"

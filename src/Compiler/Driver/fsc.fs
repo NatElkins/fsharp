@@ -1227,7 +1227,7 @@ let main6
 
                         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
 
-                        let moduleId, metadataSnapshot =
+                        let baseline =
                             use stream = new MemoryStream(assemblyBytes, writable = false)
                             use peReader = new PEReader(stream)
                             let metadataReader = peReader.GetMetadataReader()
@@ -1237,24 +1237,24 @@ let main6
                                     System.Guid.NewGuid()
                                 else
                                     metadataReader.GetGuid(moduleDef.Mvid)
-                            moduleId, HotReloadBaseline.metadataSnapshotFromReader metadataReader
-
-                        let baseline =
-                            if obj.ReferenceEquals(ilxGenEnvSnapshot, null) then
-                                HotReloadBaseline.create
-                                    ilxMainModule
-                                    tokenMappings
-                                    metadataSnapshot
-                                    moduleId
-                                    portablePdbSnapshot
-                            else
-                                HotReloadBaseline.createWithEnvironment
-                                    ilxMainModule
-                                    tokenMappings
-                                    metadataSnapshot
-                                    ilxGenEnvSnapshot
-                                    moduleId
-                                    portablePdbSnapshot
+                            let metadataSnapshot = HotReloadBaseline.metadataSnapshotFromReader metadataReader
+                            let coreBaseline =
+                                if obj.ReferenceEquals(ilxGenEnvSnapshot, null) then
+                                    HotReloadBaseline.create
+                                        ilxMainModule
+                                        tokenMappings
+                                        metadataSnapshot
+                                        moduleId
+                                        portablePdbSnapshot
+                                else
+                                    HotReloadBaseline.createWithEnvironment
+                                        ilxMainModule
+                                        tokenMappings
+                                        metadataSnapshot
+                                        ilxGenEnvSnapshot
+                                        moduleId
+                                        portablePdbSnapshot
+                            HotReloadBaseline.attachMetadataHandles metadataReader coreBaseline
 
                         FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, optimizedImpls)
                         match tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps with

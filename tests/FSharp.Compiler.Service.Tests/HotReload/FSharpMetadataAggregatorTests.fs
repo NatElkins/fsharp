@@ -14,17 +14,17 @@ open FSharp.Compiler.Service.Tests.HotReload.MetadataDeltaTestHelpers
 module FSharpMetadataAggregatorTests =
     module DeltaWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
-    let private emitPropertyDelta (?messageLiteral: string) () =
-        let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts ?messageLiteral ()
+    let private emitPropertyDelta (messageLiteral: string option) () =
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts messageLiteral ()
         artifacts.BaselineBytes, artifacts.Delta
 
-    let private emitEventDelta (?messageLiteral: string) () =
-        let artifacts = MetadataDeltaTestHelpers.emitEventDeltaArtifacts ?messageLiteral ()
+    let private emitEventDelta (messageLiteral: string option) () =
+        let artifacts = MetadataDeltaTestHelpers.emitEventDeltaArtifacts messageLiteral ()
         artifacts.BaselineBytes, artifacts.Delta
 
     [<Fact>]
     let ``aggregator translates handles to owning generation`` () =
-        let baselineBytes, delta = emitPropertyDelta ()
+        let baselineBytes, delta = emitPropertyDelta None ()
 
         use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
         let baselineReader = peReader.GetMetadataReader()
@@ -41,7 +41,10 @@ module FSharpMetadataAggregatorTests =
 
         let deltaMethodHandle =
             deltaReader.MethodDefinitions
-            |> Seq.head
+            |> Seq.find (fun handle ->
+                let methodDef = deltaReader.GetMethodDefinition(handle)
+                let name = deltaReader.GetString(methodDef.Name)
+                name = "get_Message")
 
         let struct (methodGeneration, translatedMethod) =
             aggregator.TranslateMethodDefinitionHandle deltaMethodHandle
@@ -51,7 +54,7 @@ module FSharpMetadataAggregatorTests =
 
     [<Fact>]
     let ``aggregator translates string handles to baseline generation`` () =
-        let baselineBytes, delta = emitPropertyDelta ()
+        let baselineBytes, delta = emitPropertyDelta None ()
 
         use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
         let baselineReader = peReader.GetMetadataReader()
@@ -78,8 +81,8 @@ module FSharpMetadataAggregatorTests =
 
     [<Fact>]
     let ``aggregator translates event method handles across generations`` () =
-        let baselineBytes, deltaGen1 = emitEventDelta ~messageLiteral:"event-one" ()
-        let _, deltaGen2 = emitEventDelta ~messageLiteral:"event-two" ()
+        let baselineBytes, deltaGen1 = emitEventDelta (Some "event-one") ()
+        let _, deltaGen2 = emitEventDelta (Some "event-two") ()
 
         use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
         let baselineReader = peReader.GetMetadataReader()
@@ -108,8 +111,8 @@ module FSharpMetadataAggregatorTests =
 
     [<Fact>]
     let ``aggregator translates string handles across multiple generations`` () =
-        let baselineBytes, deltaGen1 = emitPropertyDelta ~messageLiteral:"generation-one" ()
-        let _, deltaGen2 = emitPropertyDelta ~messageLiteral:"generation-two" ()
+        let baselineBytes, deltaGen1 = emitPropertyDelta (Some "generation-one") ()
+        let _, deltaGen2 = emitPropertyDelta (Some "generation-two") ()
 
         use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
         let baselineReader = peReader.GetMetadataReader()

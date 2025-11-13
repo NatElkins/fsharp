@@ -444,23 +444,22 @@ type FSharpChecker
         let _, pdbBytesOpt, tokenMappings, _ =
             ILBinaryWriter.WriteILBinaryInMemoryWithArtifacts(writerOptions, ilModule, id)
 
-        let moduleId, metadataSnapshot =
-            use stream = File.OpenRead(outputPath)
-            use peReader = new PEReader(stream)
-            let metadataReader = peReader.GetMetadataReader()
-            let moduleDef = metadataReader.GetModuleDefinition()
-
-            let moduleId =
-                if moduleDef.Mvid.IsNil then
-                    System.Guid.NewGuid()
-                else
-                    metadataReader.GetGuid(moduleDef.Mvid)
-
-            moduleId, HotReloadBaseline.metadataSnapshotFromReader metadataReader
-
         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
 
-        HotReloadBaseline.create ilModule tokenMappings metadataSnapshot moduleId portablePdbSnapshot
+        use stream = File.OpenRead(outputPath)
+        use peReader = new PEReader(stream)
+        let metadataReader = peReader.GetMetadataReader()
+        let moduleDef = metadataReader.GetModuleDefinition()
+
+        let moduleId =
+            if moduleDef.Mvid.IsNil then
+                System.Guid.NewGuid()
+            else
+                metadataReader.GetGuid(moduleDef.Mvid)
+
+        let metadataSnapshot = HotReloadBaseline.metadataSnapshotFromReader metadataReader
+        let baselineCore = HotReloadBaseline.create ilModule tokenMappings metadataSnapshot moduleId portablePdbSnapshot
+        HotReloadBaseline.attachMetadataHandles metadataReader baselineCore
 
     static member getParallelReferenceResolutionFromEnvironment() =
         getParallelReferenceResolutionFromEnvironment ()

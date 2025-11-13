@@ -306,14 +306,74 @@ type private ByteArrayHeapBuilder(baselineLength: int) =
             | _ -> None)
         |> Seq.toArray
 
+type private UserStringHeapBuilder() =
+    let entries = HashSet<int>()
+    let mutable buffer : byte[] option = None
+    let mutable maxLength = 1
+    let mutable bytesCache : byte[] option = None
+
+    let encodeUserString (value: string) =
+        let blobBuilder = BlobBuilder()
+        blobBuilder.WriteUserString(value)
+        blobBuilder.ToArray()
+
+    let ensureBuffer lengthNeeded =
+        let requiredLength = max lengthNeeded 1
+        match buffer with
+        | Some existing when existing.Length >= requiredLength -> existing
+        | Some existing ->
+            let resized = Array.zeroCreate<byte> requiredLength
+            Buffer.BlockCopy(existing, 0, resized, 0, existing.Length)
+            buffer <- Some resized
+            resized
+        | None ->
+            let initial = Array.zeroCreate<byte> requiredLength
+            initial[0] <- 0uy
+            buffer <- Some initial
+            initial
+
+    member _.AddEntry(offset: int, value: string) =
+        if offset <= 0 then
+            ()
+        elif entries.Add offset then
+            let bytes = encodeUserString value
+            let neededLength = offset + bytes.Length
+            let storage = ensureBuffer neededLength
+            Buffer.BlockCopy(bytes, 0, storage, offset, bytes.Length)
+            maxLength <- max maxLength neededLength
+            bytesCache <- None
+
+    member this.Bytes
+        with get () =
+            match buffer with
+            | Some data ->
+                match bytesCache with
+                | Some cached -> cached
+                | None ->
+                    let length = max maxLength 1
+                    let trimmed =
+                        if data.Length = length then
+                            data
+                        else
+                            let slice = Array.zeroCreate<byte> length
+                            Buffer.BlockCopy(data, 0, slice, 0, min data.Length length)
+                            slice
+                    bytesCache <- Some trimmed
+                    trimmed
+            | None ->
+                let minimal = Array.zeroCreate<byte> 1
+                minimal[0] <- 0uy
+                minimal
 type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let heapOffsets = defaultArg heapOffsets MetadataHeapOffsets.Zero
     let strings = StringHeapBuilder(heapOffsets.StringHeapStart)
     let blobs = ByteArrayHeapBuilder(heapOffsets.BlobHeapStart)
     let guids = ByteArrayHeapBuilder(heapOffsets.GuidHeapStart)
+    let userStrings = UserStringHeapBuilder()
     let mutable stringHeapBytesCache: byte[] option = None
     let mutable blobHeapBytesCache: byte[] option = None
     let mutable guidHeapBytesCache: byte[] option = None
+    let mutable userStringHeapBytesCache: byte[] option = None
 
     let moduleRows = RowTableBuilder()
     let methodRows = RowTableBuilder()
@@ -342,11 +402,10 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let addStringValue (value: string) =
         if String.IsNullOrEmpty value then 0 else strings.AddSharedEntry value
 
-    let addExistingStringHandle (handle: StringHandle) (value: string) =
-        if handle.IsNil then
-            0
-        else
-            strings.AddExistingEntry(MetadataTokens.GetHeapOffset handle, value)
+    let addExistingStringHandle (handle: StringHandle option) (value: string) =
+        match handle with
+        | Some h when not h.IsNil -> strings.AddExistingEntry(MetadataTokens.GetHeapOffset h, value)
+        | _ -> addStringValue value
 
     let addStringOption (value: string option) =
         match value with
@@ -356,11 +415,10 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let addBlobBytes (bytes: byte[]) =
         if obj.ReferenceEquals(bytes, null) || bytes.Length = 0 then 0 else blobs.AddSharedEntry bytes
 
-    let addExistingBlobHandle (handle: BlobHandle) (value: byte[]) =
-        if handle.IsNil then
-            0
-        else
-            blobs.AddExistingEntry(MetadataTokens.GetHeapOffset handle, value)
+    let addExistingBlobHandle (handle: BlobHandle option) (value: byte[]) =
+        match handle with
+        | Some h when not h.IsNil -> blobs.AddExistingEntry(MetadataTokens.GetHeapOffset h, value)
+        | _ -> addBlobBytes value
 
     let addGuidValue (value: Guid) =
         if value = System.Guid.Empty then 0 else guids.AddSharedEntry(value.ToByteArray())
@@ -392,6 +450,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
                 invalidArg "entry" "GUID entries must be 16 bytes."
         writer.Flush()
         ms.ToArray()
+    let buildUserStringHeapBytes () = userStrings.Bytes
 
     member _.AddModuleRow(name: string, moduleId: Guid, encId: Guid, encBaseId: Guid) =
         if moduleRows.Count = 0 then
@@ -406,15 +465,9 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             moduleRows.Add row
 
     member _.AddMethodRow(row: MethodDefinitionRowInfo, body: MethodBodyUpdate) =
-        let nameToken =
-            match row.NameHandle with
-            | Some handle when not row.IsAdded -> addExistingStringHandle handle row.Name
-            | _ -> addStringValue row.Name
+        let nameToken = addExistingStringHandle row.NameHandle row.Name
 
-        let signatureToken =
-            match row.SignatureHandle with
-            | Some handle when not row.IsAdded -> addExistingBlobHandle handle row.Signature
-            | _ -> addBlobBytes row.Signature
+        let signatureToken = addExistingBlobHandle row.SignatureHandle row.Signature
 
         let rowElements =
             [|
@@ -430,9 +483,8 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     member _.AddParameterRow(row: ParameterDefinitionRowInfo) =
         let nameIdx =
             match row.NameHandle with
-            | Some handle when not row.IsAdded ->
-                let value = row.Name |> Option.defaultValue String.Empty
-                addExistingStringHandle handle value
+            | Some handle when not handle.IsNil ->
+                strings.AddExistingEntry(MetadataTokens.GetHeapOffset handle, defaultArg row.Name "")
             | _ -> addStringOption row.Name
         let rowElements =
             [|
@@ -443,15 +495,9 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         paramRows.Add rowElements
 
     member _.AddPropertyRow(row: PropertyDefinitionRowInfo) =
-        let nameToken =
-            match row.NameHandle with
-            | Some handle when not row.IsAdded -> addExistingStringHandle handle row.Name
-            | _ -> addStringValue row.Name
+        let nameToken = addExistingStringHandle row.NameHandle row.Name
 
-        let signatureToken =
-            match row.SignatureHandle with
-            | Some handle when not row.IsAdded -> addExistingBlobHandle handle row.Signature
-            | _ -> addBlobBytes row.Signature
+        let signatureToken = addExistingBlobHandle row.SignatureHandle row.Signature
 
         let rowElements =
             [|
@@ -463,10 +509,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
 
     member _.AddEventRow(row: EventDefinitionRowInfo) =
         let tdorTag, tdorRow = encodeTypeDefOrRef row.EventType
-        let nameToken =
-            match row.NameHandle with
-            | Some handle when not row.IsAdded -> addExistingStringHandle handle row.Name
-            | _ -> addStringValue row.Name
+        let nameToken = addExistingStringHandle row.NameHandle row.Name
         let rowElements =
             [|
                 rowElementUShort (uint16 row.Attributes)
@@ -565,6 +608,15 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
                 guidHeapBytesCache <- Some bytes
                 bytes
 
+    member _.UserStringHeapBytes
+        with get () =
+            match userStringHeapBytesCache with
+            | Some bytes -> bytes
+            | None ->
+                let bytes = buildUserStringHeapBytes ()
+                userStringHeapBytesCache <- Some bytes
+                bytes
+
     member this.StringHeapSize = this.StringHeapBytes.Length
 
     member this.BlobHeapSize = this.BlobHeapBytes.Length
@@ -573,7 +625,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
 
     member this.HeapSizes : MetadataHeapSizes =
         { StringHeapSize = this.StringHeapSize
-          UserStringHeapSize = 0
+          UserStringHeapSize = this.UserStringHeapBytes.Length
           BlobHeapSize = this.BlobHeapSize
           GuidHeapSize = this.GuidHeapSize }
 
@@ -604,3 +656,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         counts[int TableIndex.EncLog] <- encLogRows.Count
         counts[int TableIndex.EncMap] <- encMapRows.Count
         counts
+
+    member _.AddUserStringLiteral(offset: int, value: string) =
+        userStrings.AddEntry(offset, value)
+        userStringHeapBytesCache <- None

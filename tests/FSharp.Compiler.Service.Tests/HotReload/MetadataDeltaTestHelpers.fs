@@ -245,7 +245,7 @@ module internal MetadataDeltaTestHelpers =
         metadataRoot.Serialize(blob, 0, 0)
         blob.ToArray()
 
-    let createPropertyModule (?messageLiteral: string) () =
+    let createPropertyModule (messageLiteral: string option) () =
         let ilg = ilGlobals
         let stringType = ilg.typ_String
         let typeName = "Sample.PropertyHost"
@@ -308,7 +308,7 @@ module internal MetadataDeltaTestHelpers =
             (mkILExportedTypes [])
             "v4.0.30319"
 
-    let createEventModule (?messageLiteral: string) () =
+    let createEventModule (messageLiteral: string option) () =
         let ilg = ilGlobals
         let typeName = "Sample.EventHost"
         let typeRef = mkILTyRef(ILScopeRef.Local, typeName)
@@ -585,8 +585,8 @@ module internal MetadataDeltaTestHelpers =
         { BaselineBytes: byte[]
           Delta: DeltaWriter.MetadataDelta }
 
-    let emitPropertyDeltaArtifacts (?messageLiteral: string) () : MetadataDeltaArtifacts =
-        let moduleDef = createPropertyModule ?messageLiteral ()
+    let emitPropertyDeltaArtifacts (messageLiteral: string option) () : MetadataDeltaArtifacts =
+        let moduleDef = createPropertyModule messageLiteral ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()
@@ -715,8 +715,8 @@ module internal MetadataDeltaTestHelpers =
         { BaselineBytes = assemblyBytes
           Delta = metadataDelta }
 
-    let emitEventDeltaArtifacts (?messageLiteral: string) () : MetadataDeltaArtifacts =
-        let moduleDef = createEventModule ?messageLiteral ()
+    let emitEventDeltaArtifacts (messageLiteral: string option) () : MetadataDeltaArtifacts =
+        let moduleDef = createEventModule messageLiteral ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()

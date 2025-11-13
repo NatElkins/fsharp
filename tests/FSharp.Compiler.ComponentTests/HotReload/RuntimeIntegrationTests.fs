@@ -152,16 +152,16 @@ type Type =
         let assemblyBytes, pdbBytesOpt, tokenMappings, _ =
             FSharp.Compiler.AbstractIL.ILBinaryWriter.WriteILBinaryInMemoryWithArtifacts(writerOptions, ilModule, id)
 
-        let moduleId, metadataSnapshot =
-            use peReader = new System.Reflection.PortableExecutable.PEReader(new MemoryStream(assemblyBytes, false))
-            let metadataReader = peReader.GetMetadataReader()
-            let moduleDef = metadataReader.GetModuleDefinition()
-            let moduleId = if moduleDef.Mvid.IsNil then System.Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
-            moduleId, HotReloadBaseline.metadataSnapshotFromReader metadataReader
+        use peReader = new System.Reflection.PortableExecutable.PEReader(new MemoryStream(assemblyBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+        let moduleDef = metadataReader.GetModuleDefinition()
+        let moduleId = if moduleDef.Mvid.IsNil then System.Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
+        let metadataSnapshot = HotReloadBaseline.metadataSnapshotFromReader metadataReader
 
         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
 
-        HotReloadBaseline.create ilModule tokenMappings metadataSnapshot moduleId portablePdbSnapshot
+        let coreBaseline = HotReloadBaseline.create ilModule tokenMappings metadataSnapshot moduleId portablePdbSnapshot
+        HotReloadBaseline.attachMetadataHandles metadataReader coreBaseline
 
     [<Fact>]
     let ``EmitDeltaForCompilation produces IL/metadata deltas`` () =

@@ -34,6 +34,16 @@ module HotReloadSession =
 
     let private sampleSourceDirectory = __SOURCE_DIRECTORY__
 
+    let private shouldDumpDeltas () =
+        Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_DUMP_DELTA") = "1"
+
+    let private shouldTraceRuntimeApply () =
+        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_RUNTIME_APPLY") with
+        | null -> false
+        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+        | _ -> false
+
     let private ensureDirectory (path: string) =
         Directory.CreateDirectory(path) |> ignore
 
@@ -219,21 +229,28 @@ module HotReloadSession =
                 | Error FSharpHotReloadError.MissingOutputPath ->
                     return HotReloadError "Project options are missing an output path."
                 | Ok delta ->
-                    if Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_DUMP_DELTA") = "1" then
+                    if shouldDumpDeltas () then
                         try
                             let dumpDir = Path.Combine(session.WorkingDirectory, "delta-dump")
                             Directory.CreateDirectory(dumpDir) |> ignore
                             let write (name: string) (bytes: byte[]) =
-                                File.WriteAllBytes(Path.Combine(dumpDir, name), bytes)
-                            write "metadata.bin" delta.Metadata
-                            write "il.bin" delta.IL
-                            delta.Pdb |> Option.iter (write "pdb.bin")
+                                let path = Path.Combine(dumpDir, name)
+                                File.WriteAllBytes(path, bytes)
+                                path
+                            let metadataPath = write "metadata.bin" delta.Metadata
+                            let ilPath = write "il.bin" delta.IL
+                            delta.Pdb |> Option.iter (fun bytes -> write "pdb.bin" bytes |> ignore)
                             File.WriteAllLines(
                                 Path.Combine(dumpDir, "tokens.txt"),
                                 [| sprintf "Updated methods: %A" delta.UpdatedMethods
                                    sprintf "Updated types: %A" delta.UpdatedTypes
                                    sprintf "Generation: %O" delta.GenerationId
                                    sprintf "Base generation: %O" delta.BaseGenerationId |])
+                            printfn
+                                "[hotreload-delta] mdv \"%s\" \"/g:%s;%s\""
+                                session.BaselineDllPath
+                                metadataPath
+                                ilPath
                         with dumpEx ->
                             printfn "Failed to dump delta artifacts: %s" dumpEx.Message
 
@@ -241,27 +258,40 @@ module HotReloadSession =
                         session.Generation <- session.Generation + 1
                         return Applied delta
                     else
-                        let pdbBytes =
-                            match delta.Pdb with
-                            | Some bytes -> bytes
-                            | None -> Array.empty<byte>
+                        if not System.Reflection.Metadata.MetadataUpdater.IsSupported then
+                            return HotReloadError "MetadataUpdater reports that runtime apply is not supported in this process."
+                        else
+                            let pdbBytes =
+                                match delta.Pdb with
+                                | Some bytes -> bytes
+                                | None -> Array.empty<byte>
 
-                        try
-                            System.Reflection.Metadata.MetadataUpdater.ApplyUpdate(
-                                session.RuntimeAssembly,
-                                delta.Metadata,
-                                delta.IL,
-                                pdbBytes
-                            )
+                            if shouldTraceRuntimeApply () then
+                                printfn
+                                    "[hotreload-runtime] applying delta gen=%d metadata=%dB il=%dB pdb=%dB"
+                                    session.Generation
+                                    delta.Metadata.Length
+                                    delta.IL.Length
+                                    pdbBytes.Length
 
-                            session.Generation <- session.Generation + 1
-                            return Applied delta
-                        with ex ->
-                            let errorMessage =
-                                match ex.InnerException with
-                                | null -> ex.Message
-                                | inner -> $"{ex.Message} (inner: {inner.GetType().FullName}: {inner.Message})"
-                            return HotReloadError $"MetadataUpdater.ApplyUpdate failed: {errorMessage}"
+                            try
+                                System.Reflection.Metadata.MetadataUpdater.ApplyUpdate(
+                                    session.RuntimeAssembly,
+                                    delta.Metadata,
+                                    delta.IL,
+                                    pdbBytes
+                                )
+
+                                session.Generation <- session.Generation + 1
+                                return Applied delta
+                            with ex ->
+                                if shouldTraceRuntimeApply () then
+                                    printfn "[hotreload-runtime] ApplyUpdate exception: %s" (ex.ToString())
+                                let errorMessage =
+                                    match ex.InnerException with
+                                    | null -> ex.Message
+                                    | inner -> $"{ex.Message} (inner: {inner.GetType().FullName}: {inner.Message})"
+                                return HotReloadError $"MetadataUpdater.ApplyUpdate failed: {errorMessage}"
         }
 
     let dispose (session: DemoSession) =

@@ -32,6 +32,8 @@ type MethodDefinitionKey =
         ReturnType: ILType
     }
 
+/// Baseline metadata handles reused to keep heap offsets stable across deltas.
+
 /// <summary>Stable identifier for a method parameter (sequence number within a method).</summary>
 type ParameterDefinitionKey =
     {
@@ -63,6 +65,31 @@ type EventDefinitionKey =
         Name: string
         EventType: ILType option
     }
+
+type MethodDefinitionMetadataHandles =
+    { NameHandle: StringHandle option
+      SignatureHandle: BlobHandle option
+      FirstParameterRowId: int option }
+
+type ParameterDefinitionMetadataHandles = { NameHandle: StringHandle option }
+
+type PropertyDefinitionMetadataHandles =
+    { NameHandle: StringHandle option
+      SignatureHandle: BlobHandle option }
+
+type EventDefinitionMetadataHandles = { NameHandle: StringHandle option }
+
+type BaselineHandleCache =
+    { MethodHandles: Map<MethodDefinitionKey, MethodDefinitionMetadataHandles>
+      ParameterHandles: Map<ParameterDefinitionKey, ParameterDefinitionMetadataHandles>
+      PropertyHandles: Map<PropertyDefinitionKey, PropertyDefinitionMetadataHandles>
+      EventHandles: Map<EventDefinitionKey, EventDefinitionMetadataHandles> }
+
+    static member Empty =
+        { MethodHandles = Map.empty
+          ParameterHandles = Map.empty
+          PropertyHandles = Map.empty
+          EventHandles = Map.empty }
 
 type MethodSemanticsAssociation =
     | PropertyAssociation of PropertyDefinitionKey * rowId:int
@@ -106,6 +133,7 @@ type FSharpEmitBaseline =
         IlxGenEnvironment: IlxGenEnvSnapshot option
         PortablePdb: PortablePdbSnapshot option
         SynthesizedNameSnapshot: Map<string, string[]>
+        MetadataHandles: BaselineHandleCache
         TableEntriesAdded: int[]
         StringStreamLengthAdded: int
         UserStringStreamLengthAdded: int
@@ -416,6 +444,7 @@ let private createCore
         IlxGenEnvironment = ilxGenEnvironment
         PortablePdb = portablePdbSnapshot
         SynthesizedNameSnapshot = synthesizedNames
+        MetadataHandles = BaselineHandleCache.Empty
         TableEntriesAdded = Array.zeroCreate tableCount
         StringStreamLengthAdded = 0
         UserStringStreamLengthAdded = 0
@@ -516,3 +545,98 @@ let metadataSnapshotFromReader (reader: MetadataReader) =
     { HeapSizes = heapSizes
       TableRowCounts = tableCounts
       GuidHeapStart = heapSizes.GuidHeapSize }
+
+let private stringHandleOption (handle: StringHandle) = if handle.IsNil then None else Some handle
+
+let private blobHandleOption (handle: BlobHandle) = if handle.IsNil then None else Some handle
+
+let private buildMethodHandles (reader: MetadataReader) (methodTokens: Map<MethodDefinitionKey, int>) : Map<MethodDefinitionKey, MethodDefinitionMetadataHandles> =
+    methodTokens
+    |> Seq.choose (fun kvp ->
+        let key = kvp.Key
+        let token = kvp.Value
+        let handle = MetadataTokens.MethodDefinitionHandle token
+        if handle.IsNil then
+            None
+        else
+            let methodDef = reader.GetMethodDefinition handle
+            let parameters = methodDef.GetParameters()
+            let mutable firstParamRowId = None
+            for parameterHandle in parameters do
+                if firstParamRowId.IsNone then
+                    let rowId = MetadataTokens.GetRowNumber parameterHandle
+                    if rowId > 0 then
+                        firstParamRowId <- Some rowId
+            Some(
+                key,
+                { NameHandle = stringHandleOption methodDef.Name
+                  SignatureHandle = blobHandleOption methodDef.Signature
+                  FirstParameterRowId = firstParamRowId })
+    )
+    |> Map.ofSeq
+
+let private buildParameterHandles
+    (reader: MetadataReader)
+    (methodTokens: Map<MethodDefinitionKey, int>)
+    : Map<ParameterDefinitionKey, ParameterDefinitionMetadataHandles>
+    =
+    methodTokens
+    |> Seq.collect (fun kvp ->
+        let methodKey = kvp.Key
+        let token = kvp.Value
+        let methodHandle = MetadataTokens.MethodDefinitionHandle token
+        if methodHandle.IsNil then
+            Seq.empty
+        else
+            let methodDef = reader.GetMethodDefinition methodHandle
+            methodDef.GetParameters()
+            |> Seq.map (fun parameterHandle ->
+                let parameter = reader.GetParameter parameterHandle
+                let key =
+                    { ParameterDefinitionKey.Method = methodKey
+                      SequenceNumber = int parameter.SequenceNumber }
+                key,
+                ({ NameHandle = stringHandleOption parameter.Name } : ParameterDefinitionMetadataHandles))
+    )
+    |> Map.ofSeq
+
+let private buildPropertyHandles (reader: MetadataReader) (propertyTokens: Map<PropertyDefinitionKey, int>) : Map<PropertyDefinitionKey, PropertyDefinitionMetadataHandles> =
+    propertyTokens
+    |> Seq.choose (fun kvp ->
+        let key = kvp.Key
+        let token = kvp.Value
+        let handle = MetadataTokens.PropertyDefinitionHandle token
+        if handle.IsNil then
+            None
+        else
+            let propertyDef = reader.GetPropertyDefinition handle
+            Some(
+                key,
+                { NameHandle = stringHandleOption propertyDef.Name
+                  SignatureHandle = blobHandleOption propertyDef.Signature }) )
+    |> Map.ofSeq
+
+let private buildEventHandles (reader: MetadataReader) (eventTokens: Map<EventDefinitionKey, int>) : Map<EventDefinitionKey, EventDefinitionMetadataHandles> =
+    eventTokens
+    |> Seq.choose (fun kvp ->
+        let key = kvp.Key
+        let token = kvp.Value
+        let handle = MetadataTokens.EventDefinitionHandle token
+        if handle.IsNil then
+            None
+        else
+            let eventDef = reader.GetEventDefinition handle
+            Some(key, ({ NameHandle = stringHandleOption eventDef.Name } : EventDefinitionMetadataHandles)) )
+    |> Map.ofSeq
+
+let attachMetadataHandles (metadataReader: MetadataReader) (baseline: FSharpEmitBaseline) =
+    let methodHandles = buildMethodHandles metadataReader baseline.MethodTokens
+    let parameterHandles = buildParameterHandles metadataReader baseline.MethodTokens
+    let propertyHandles = buildPropertyHandles metadataReader baseline.PropertyTokens
+    let eventHandles = buildEventHandles metadataReader baseline.EventTokens
+    let cache =
+        { MethodHandles = methodHandles
+          ParameterHandles = parameterHandles
+          PropertyHandles = propertyHandles
+          EventHandles = eventHandles }
+    { baseline with MetadataHandles = cache }
