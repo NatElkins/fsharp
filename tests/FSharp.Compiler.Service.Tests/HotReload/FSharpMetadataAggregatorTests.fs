@@ -81,8 +81,10 @@ module FSharpMetadataAggregatorTests =
 
     [<Fact>]
     let ``aggregator translates event method handles across generations`` () =
-        let baselineBytes, deltaGen1 = emitEventDelta (Some "event-one") ()
-        let _, deltaGen2 = emitEventDelta (Some "event-two") ()
+        let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
+        let baselineBytes = artifacts.BaselineBytes
+        let deltaGen1 = artifacts.Generation1
+        let deltaGen2 = artifacts.Generation2
 
         use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
         let baselineReader = peReader.GetMetadataReader()
@@ -111,8 +113,10 @@ module FSharpMetadataAggregatorTests =
 
     [<Fact>]
     let ``aggregator translates string handles across multiple generations`` () =
-        let baselineBytes, deltaGen1 = emitPropertyDelta (Some "generation-one") ()
-        let _, deltaGen2 = emitPropertyDelta (Some "generation-two") ()
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
+        let baselineBytes = artifacts.BaselineBytes
+        let deltaGen1 = artifacts.Generation1
+        let deltaGen2 = artifacts.Generation2
 
         use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
         let baselineReader = peReader.GetMetadataReader()
