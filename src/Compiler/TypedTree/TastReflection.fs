@@ -1507,6 +1507,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         (propertyVal: ValRef option)
         (addVal: ValRef)
         (removeVal: ValRef)
+        (handlerTypeOverride: Type option)
         =
         let asm: ReflectAssembly = asmArg
         let g = asm.TcGlobals
@@ -1515,11 +1516,14 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         let removeMethod = TxMethodDef asm declTy removeVal
 
         let handlerType =
-            let parameters = addMethod.GetParameters()
-            if parameters.Length = 0 then
-                asm.TxTType g.system_MulticastDelegate_ty
-            else
-                parameters.[parameters.Length - 1].ParameterType
+            match handlerTypeOverride with
+            | Some overrideTy -> overrideTy
+            | None ->
+                let parameters = addMethod.GetParameters()
+                if parameters.Length = 0 then
+                    asm.TxTType g.system_MulticastDelegate_ty
+                else
+                    parameters.[parameters.Length - 1].ParameterType
 
         let eventAttribs =
             match propertyVal with
@@ -1927,16 +1931,26 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                 let _, _, removeRef = ensureEventParts eventName
                 removeRef := Some vref
 
-        eventMap
-        |> Seq.choose (fun kvp ->
-            let eventName = kvp.Key
-            let propertyRef, addRef, removeRef = kvp.Value
-            match !addRef, !removeRef with
-            | Some addVal, Some removeVal ->
-                let eventInfo =
-                    TxEventDefinition asm this eventName !propertyRef addVal removeVal
-                Some eventInfo
-            | _ -> None)
+        let declaredEvents =
+            eventMap
+            |> Seq.choose (fun kvp ->
+                let eventName = kvp.Key
+                let propertyRef, addRef, removeRef = kvp.Value
+                match !addRef, !removeRef with
+                | Some addVal, Some removeVal ->
+                    let eventInfo =
+                        TxEventDefinition asm this eventName !propertyRef addVal removeVal None
+                    Some eventInfo
+                | _ -> None)
+
+        let providedEvents =
+            tcref.Deref.entity_tycon_tcaug.tcaug_provided_events
+            |> List.toSeq
+            |> Seq.map (fun info ->
+                let handlerTy = asm.TxTType info.HandlerType
+                TxEventDefinition asm this info.EventName None info.AddMethod info.RemoveMethod (Some handlerTy))
+
+        Seq.append declaredEvents providedEvents
         |> Seq.filter (fun ev ->
             let addMethod = ev.GetAddMethod(true)
             let handlerIsStatic = if isNull addMethod then false else addMethod.IsStatic
