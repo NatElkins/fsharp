@@ -554,3 +554,59 @@ module PdbTests =
             match artifacts.PdbPath with
             | Some path when File.Exists(path) -> File.Delete(path)
             | _ -> ()
+
+    [<Fact>]
+    let ``emitDelta emits portable PDB deltas across closure helper generations`` () =
+        let typeName = "Sample.ClosureDemo"
+        let methodKey = TestHelpers.methodKey typeName "Invoke" [] PrimaryAssemblyILGlobals.typ_String
+        let artifacts = TestHelpers.createBaselineFromModule (TestHelpers.createClosureModule "Closure helper baseline message")
+        let methodToken = artifacts.Baseline.MethodTokens[methodKey]
+
+        let emitAndAssert request expectedMarker =
+            let delta = emitDelta request
+            let pdbBytes =
+                match delta.Pdb with
+                | Some bytes -> bytes
+                | None -> failwith "Expected portable PDB delta for closure helper edit."
+            assertPdbContainsMethodToken pdbBytes methodToken
+            assertPdbContainsLiteral pdbBytes expectedMarker
+            delta
+
+        let request1 : IlxDeltaRequest =
+            { Baseline = artifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = TestHelpers.createClosureModule "Closure helper generation 1"
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta1 = emitAndAssert request1 "Closure helper generation 1"
+
+        let baseline2 =
+            match delta1.UpdatedBaseline with
+            | Some b -> b
+            | None -> failwith "Generation 1 delta did not expose an updated baseline."
+
+        let request2 : IlxDeltaRequest =
+            { Baseline = baseline2
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = TestHelpers.createClosureModule "Closure helper generation 2"
+              SymbolChanges = None
+              CurrentGeneration = 2
+              PreviousGenerationId = Some delta1.GenerationId
+              SynthesizedNames = None }
+
+        let delta2 = emitAndAssert request2 "Closure helper generation 2"
+        Assert.NotEqual(System.Guid.Empty, delta2.BaseGenerationId)
+        Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
+
+        if not (keepArtifacts ()) then
+            if File.Exists(artifacts.AssemblyPath) then File.Delete(artifacts.AssemblyPath)
+            match artifacts.PdbPath with
+            | Some path when File.Exists(path) -> File.Delete(path)
+            | _ -> ()
