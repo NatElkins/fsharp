@@ -103,28 +103,8 @@ let emitWithUserStrings
                 row.IsAdded
                 offset
     if List.isEmpty updates then
-        let emptyHeapSizes =
-            { StringHeapSize = 0
-              UserStringHeapSize = 0
-              BlobHeapSize = 0
-              GuidHeapSize = 0 }
-
-        let emptyTableRows : TableRows =
-            { Module = Array.empty
-              MethodDef = Array.empty
-              Param = Array.empty
-              Property = Array.empty
-              Event = Array.empty
-              PropertyMap = Array.empty
-              EventMap = Array.empty
-              MethodSemantics = Array.empty
-              EncLog = Array.empty
-              EncMap = Array.empty }
-
-        let emptyCounts = Array.zeroCreate MetadataTokens.TableCount
-        let emptyBitMasks = DeltaTableLayout.computeBitMasks emptyCounts
-        let emptyIndexSizes =
-            DeltaIndexSizing.compute emptyCounts emptyHeapSizes
+        let emptyMirror = DeltaMetadataTables(heapOffsets)
+        let emptySizes = DeltaMetadataSerializer.computeMetadataSizes emptyMirror
 
         { Metadata = Array.empty
           StringHeap = Array.empty
@@ -132,11 +112,11 @@ let emitWithUserStrings
           GuidHeap = Array.empty
           EncLog = Array.empty
           EncMap = Array.empty
-          TableRowCounts = emptyCounts
-          HeapSizes = emptyHeapSizes
-          Tables = emptyTableRows
-          TableBitMasks = emptyBitMasks
-          IndexSizes = emptyIndexSizes
+          TableRowCounts = emptySizes.RowCounts
+          HeapSizes = emptySizes.HeapSizes
+          Tables = emptyMirror.TableRows
+          TableBitMasks = emptySizes.BitMasks
+          IndexSizes = emptySizes.IndexSizes
           TableStream =
             { Bytes = Array.empty
               UnpaddedSize = 0
