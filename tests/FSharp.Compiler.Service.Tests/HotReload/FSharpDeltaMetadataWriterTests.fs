@@ -815,6 +815,36 @@ module FSharpDeltaMetadataWriterTests =
         assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap
 
     [<Fact>]
+    let ``closure multi-generation deltas preserve EncLog ordering`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitClosureMultiGenerationArtifacts ()
+
+        let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
+            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
+               (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
+               (TableIndex.MethodDef, 2, EditAndContinueOperation.AddMethod)
+               (TableIndex.Param, 1, EditAndContinueOperation.AddParameter)
+               (TableIndex.Param, 2, EditAndContinueOperation.AddParameter) |]
+
+        let expectedEncMap: (TableIndex * int)[] =
+            [| (TableIndex.Module, 1)
+               (TableIndex.MethodDef, 1)
+               (TableIndex.MethodDef, 2)
+               (TableIndex.Param, 1)
+               (TableIndex.Param, 2) |]
+
+        let assertDelta (delta: DeltaWriter.MetadataDelta) =
+            Assert.Equal(expectedEncLog, delta.EncLog)
+            Assert.Equal(expectedEncMap, delta.EncMap)
+            assertTableStreamMatches delta
+            assertTableCountsMatch delta.Metadata delta.TableRowCounts
+            assertBitMasksMatch delta.Metadata delta.TableBitMasks
+            assertEncLogMatches delta.Metadata delta.EncLog
+            assertEncMapMatches delta.Metadata delta.EncMap
+
+        assertDelta artifacts.Generation1
+        assertDelta artifacts.Generation2
+
+    [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for async methods`` () =
         let moduleDef = createAsyncModule None ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef

@@ -1010,6 +1010,77 @@ module internal MetadataDeltaTestHelpers =
           Generation1 = generation1.Delta
           Generation2 = generation2 }
 
+    let private emitClosureDeltaCore
+        (metadataReader: MetadataReader)
+        (builder: IlDeltaStreamBuilder)
+        (heapOffsets: MetadataHeapOffsets)
+        : DeltaWriter.MetadataDelta =
+        let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
+        let stringType = ilGlobals.typ_String
+
+        let nextMethodRowId = ref 1
+        let nextParamRowId = ref 1
+
+        let artifacts : AddedMethodArtifacts list =
+            [ buildAddedMethod metadataReader nextMethodRowId nextParamRowId "Sample.ClosureHost" "InvokeOuter" [ stringType ] stringType
+              buildAddedMethod metadataReader nextMethodRowId nextParamRowId "Sample.ClosureHost" "Invoke@40-1" [ stringType ] stringType ]
+
+        let methodRows = artifacts |> List.map (fun a -> a.MethodRow)
+        let parameterRows = artifacts |> List.collect (fun a -> a.ParameterRows)
+        let updates = artifacts |> List.map (fun a -> a.Update)
+
+        DeltaWriter.emit
+            builder.MetadataBuilder
+            moduleName
+            (Guid.NewGuid())
+            (Guid.NewGuid())
+            (Guid.NewGuid())
+            methodRows
+            parameterRows
+            []
+            []
+            []
+            []
+            []
+            updates
+            heapOffsets
+            (getRowCounts metadataReader)
+
+    let emitClosureDeltaArtifacts () : MetadataDeltaArtifacts =
+        let moduleDef = createClosureModule ()
+        let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
+        use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+        let builder = IlDeltaStreamBuilder None
+        let heapOffsets = computeHeapOffsets metadataReader
+        let delta = emitClosureDeltaCore metadataReader builder heapOffsets
+
+        assertTableStreamMatches delta
+
+        { BaselineBytes = assemblyBytes
+          Delta = delta }
+
+    let private emitClosureDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) =
+        use peReader = new PEReader(new MemoryStream(baselineBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+        let builder = IlDeltaStreamBuilder None
+        emitClosureDeltaCore metadataReader builder heapOffsets
+
+    let emitClosureMultiGenerationArtifacts () : MultiGenerationMetadataArtifacts =
+        let generation1 = emitClosureDeltaArtifacts ()
+
+        let nextOffsets =
+            use peReader = new PEReader(new MemoryStream(generation1.BaselineBytes, false))
+            let metadataReader = peReader.GetMetadataReader()
+            let baseOffsets = computeHeapOffsets metadataReader
+            advanceHeapOffsets baseOffsets generation1.Delta
+
+        let generation2 = emitClosureDeltaFromBaseline generation1.BaselineBytes nextOffsets
+
+        { BaselineBytes = generation1.BaselineBytes
+          Generation1 = generation1.Delta
+          Generation2 = generation2 }
+
     let buildAddedMethod
         (metadataReader: MetadataReader)
         (nextMethodRowId: int ref)
