@@ -35,25 +35,31 @@ module RoslynBaselineComparisons =
         Assert.Equal(1, delta2.['Module'])
         Assert.Equal(2, delta2.['MethodDef'])
 
+    let private assertMatches (expected: Map<string,int>) (deltaBytes: byte[]) =
+        let encLog = MetadataHelpers.countRows deltaBytes TableIndex.EncLog
+        let encMap = MetadataHelpers.countRows deltaBytes TableIndex.EncMap
+        let methodDef = MetadataHelpers.countRows deltaBytes TableIndex.MethodDef
+        Assert.Equal(expected.['EncLog'], encLog)
+        Assert.Equal(expected.['EncMap'], encMap)
+        Assert.Equal(expected.['MethodDef'], methodDef)
+
     [<Fact>]
     let ``property delta row counts do not exceed Roslyn baseline`` () =
         let baselines = loadRoslynTables ()
         let roslyn = baselines |> List.tryHead |> Option.defaultWith (fun () -> failwith "Roslyn property baseline missing")
 
-        let roslynEncLog = roslyn.rows.['EncLog']
-        let roslynEncMap = roslyn.rows.['EncMap']
-        let roslynMethodDef = roslyn.rows.['MethodDef']
-
         let propertyDelta = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
-        let deltaBytes = propertyDelta.Delta.Metadata
+        assertMatches roslyn.rows propertyDelta.Delta.Metadata
 
-        let encLog = MetadataHelpers.countRows deltaBytes TableIndex.EncLog
-        let encMap = MetadataHelpers.countRows deltaBytes TableIndex.EncMap
-        let methodDef = MetadataHelpers.countRows deltaBytes TableIndex.MethodDef
+    [<Fact>]
+    let ``property multi-generation delta rows match Roslyn baseline`` () =
+        let baselines = loadRoslynTables ()
+        let roslyn = baselines |> List.tryHead |> Option.defaultWith (fun () -> failwith "Roslyn property baseline missing")
+        let roslynRows = roslyn.rows
 
-        Assert.Equal(roslynEncLog, encLog)
-        Assert.Equal(roslynEncMap, encMap)
-        Assert.Equal(roslynMethodDef, methodDef)
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
+        assertMatches roslynRows artifacts.Generation1.Metadata
+        assertMatches roslynRows artifacts.Generation2.Metadata
 
     [<Fact>]
     let ``event delta row counts match Roslyn baseline`` () =
