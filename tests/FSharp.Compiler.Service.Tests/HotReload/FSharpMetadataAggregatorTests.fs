@@ -140,3 +140,93 @@ module FSharpMetadataAggregatorTests =
         Assert.Equal(
             deltaReader2.GetString delta2MethodDef.Name,
             baselineReader.GetString translatedHandle)
+
+    [<Fact>]
+    let ``aggregator translates parameter handles to baseline generation`` () =
+        let baselineBytes, delta = emitEventDelta None ()
+
+        use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
+        let baselineReader = peReader.GetMetadataReader()
+
+        use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(delta.Metadata))
+        let deltaReader = deltaProvider.GetMetadataReader()
+
+        let aggregator =
+            FSharpMetadataAggregator.Create(
+                [ baselineReader
+                  deltaReader ])
+
+        let findMethod (reader: MetadataReader) name =
+            reader.MethodDefinitions
+            |> Seq.find (fun handle -> reader.GetString(reader.GetMethodDefinition(handle).Name) = name)
+
+        let firstParameter (reader: MetadataReader) (methodHandle: MethodDefinitionHandle) =
+            let methodDef = reader.GetMethodDefinition methodHandle
+            methodDef.GetParameters()
+            |> Seq.tryFind (fun parameterHandle ->
+                if parameterHandle.IsNil then
+                    false
+                else
+                    let parameter = reader.GetParameter parameterHandle
+                    int parameter.SequenceNumber > 0)
+            |> Option.defaultWith (fun () ->
+                let name = reader.GetString(methodDef.Name)
+                failwithf "Method %s has no value parameters" name)
+
+        let baselineAdd = findMethod baselineReader "add_OnChanged"
+        let deltaAdd = findMethod deltaReader "add_OnChanged"
+
+        let deltaParamHandle = firstParameter deltaReader deltaAdd
+        let struct (generation, translatedHandle) = aggregator.TranslateParameterHandle deltaParamHandle
+
+        Assert.Equal(0, generation)
+        let baselineParamHandle = firstParameter baselineReader baselineAdd
+        Assert.Equal(baselineParamHandle, translatedHandle)
+
+    [<Fact>]
+    let ``aggregator translates parameter name string handles`` () =
+        let baselineBytes, delta = emitEventDelta None ()
+
+        use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
+        let baselineReader = peReader.GetMetadataReader()
+
+        use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(delta.Metadata))
+        let deltaReader = deltaProvider.GetMetadataReader()
+
+        let aggregator =
+            FSharpMetadataAggregator.Create(
+                [ baselineReader
+                  deltaReader ])
+
+        let findMethod (reader: MetadataReader) name =
+            reader.MethodDefinitions
+            |> Seq.find (fun handle -> reader.GetString(reader.GetMethodDefinition(handle).Name) = name)
+
+        let firstParameter (reader: MetadataReader) (methodHandle: MethodDefinitionHandle) =
+            let methodDef = reader.GetMethodDefinition methodHandle
+            methodDef.GetParameters()
+            |> Seq.tryFind (fun parameterHandle ->
+                if parameterHandle.IsNil then
+                    false
+                else
+                    let parameter = reader.GetParameter parameterHandle
+                    int parameter.SequenceNumber > 0)
+            |> Option.defaultWith (fun () ->
+                let name = reader.GetString(methodDef.Name)
+                failwithf "Method %s has no value parameters" name)
+
+        let baselineAdd = findMethod baselineReader "add_OnChanged"
+        let deltaAdd = findMethod deltaReader "add_OnChanged"
+
+        let baselineParamHandle = firstParameter baselineReader baselineAdd
+        let deltaParamHandle = firstParameter deltaReader deltaAdd
+
+        let baselineParam = baselineReader.GetParameter baselineParamHandle
+        let deltaParam = deltaReader.GetParameter deltaParamHandle
+
+        let struct (stringGeneration, translatedHandle) = aggregator.TranslateStringHandle deltaParam.Name
+
+        Assert.Equal(0, stringGeneration)
+        Assert.Equal(
+            baselineReader.GetString baselineParam.Name,
+            baselineReader.GetString translatedHandle)

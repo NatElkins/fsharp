@@ -40,6 +40,10 @@ type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
         collect baseline.MethodDefinitions (fun r h -> r.GetMethodDefinition(h).Name) baseline
         collect baseline.PropertyDefinitions (fun r h -> r.GetPropertyDefinition(h).Name) baseline
         collect baseline.EventDefinitions (fun r h -> r.GetEventDefinition(h).Name) baseline
+        for methodHandle in baseline.MethodDefinitions do
+            let methodDef = baseline.GetMethodDefinition methodHandle
+            for parameterHandle in methodDef.GetParameters() do
+                addHandle (baseline.GetParameter(parameterHandle).Name) baseline
         dict
     let metadataAggregator =
         if deltas.Length = 0 then
@@ -63,6 +67,10 @@ type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
     member this.TranslateMethodDefinitionHandle(handle: MethodDefinitionHandle) =
         let struct (generation, translated) = this.TranslateHandle(MethodDefinitionHandle.op_Implicit handle)
         struct (generation, MethodDefinitionHandle.op_Explicit translated)
+
+    member this.TranslateParameterHandle(handle: ParameterHandle) =
+        let struct (generation, translated) = this.TranslateHandle(ParameterHandle.op_Implicit handle)
+        struct (generation, ParameterHandle.op_Explicit translated)
 
     member this.TranslateStringHandle(handle: StringHandle) =
         let struct (generation, translated) = this.TranslateHandle(StringHandle.op_Implicit handle)

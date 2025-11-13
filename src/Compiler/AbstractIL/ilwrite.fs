@@ -162,59 +162,59 @@ module RowElementTags =
     let [<Literal>] Blob = 5
     let [<Literal>] String = 6
     let [<Literal>] SimpleIndexMin = 7
-    let SimpleIndex (t : TableName) = assert (t.Index <= 112); SimpleIndexMin + t.Index
+    let SimpleIndex (table: TableName) = assert (table.Index <= 112); SimpleIndexMin + table.Index
     let [<Literal>] SimpleIndexMax = 119
 
     let [<Literal>] TypeDefOrRefOrSpecMin = 120
-    let TypeDefOrRefOrSpec (t: TypeDefOrRefTag) = assert (t.Tag <= 2); TypeDefOrRefOrSpecMin + t.Tag (* + 111 + 1 = 0x70 + 1 = max TableName.Tndex + 1 *)
+    let TypeDefOrRefOrSpec (tag: TypeDefOrRefTag) = assert (tag.Tag <= 2); TypeDefOrRefOrSpecMin + tag.Tag (* + 111 + 1 = 0x70 + 1 = max TableName.Tndex + 1 *)
     let [<Literal>] TypeDefOrRefOrSpecMax = 122
 
     let [<Literal>] TypeOrMethodDefMin = 123
-    let TypeOrMethodDef (t: TypeOrMethodDefTag) = assert (t.Tag <= 1); TypeOrMethodDefMin + t.Tag (* + 2 + 1 = max TypeDefOrRefOrSpec.Tag + 1 *)
+    let TypeOrMethodDef (tag: TypeOrMethodDefTag) = assert (tag.Tag <= 1); TypeOrMethodDefMin + tag.Tag (* + 2 + 1 = max TypeDefOrRefOrSpec.Tag + 1 *)
     let [<Literal>] TypeOrMethodDefMax = 124
 
     let [<Literal>] HasConstantMin = 125
-    let HasConstant (t: HasConstantTag) = assert (t.Tag <= 2); HasConstantMin + t.Tag (* + 1 + 1 = max TypeOrMethodDef.Tag + 1 *)
+    let HasConstant (tag: HasConstantTag) = assert (tag.Tag <= 2); HasConstantMin + tag.Tag (* + 1 + 1 = max TypeOrMethodDef.Tag + 1 *)
     let [<Literal>] HasConstantMax = 127
 
     let [<Literal>] HasCustomAttributeMin = 128
-    let HasCustomAttribute (t: HasCustomAttributeTag) = assert (t.Tag <= 21); HasCustomAttributeMin + t.Tag (* + 2 + 1 = max HasConstant.Tag + 1 *)
+    let HasCustomAttribute (tag: HasCustomAttributeTag) = assert (tag.Tag <= 21); HasCustomAttributeMin + tag.Tag (* + 2 + 1 = max HasConstant.Tag + 1 *)
     let [<Literal>] HasCustomAttributeMax = 149
 
     let [<Literal>] HasFieldMarshalMin = 150
-    let HasFieldMarshal (t: HasFieldMarshalTag) = assert (t.Tag <= 1); HasFieldMarshalMin + t.Tag (* + 21 + 1 = max HasCustomAttribute.Tag + 1 *)
+    let HasFieldMarshal (tag: HasFieldMarshalTag) = assert (tag.Tag <= 1); HasFieldMarshalMin + tag.Tag (* + 21 + 1 = max HasCustomAttribute.Tag + 1 *)
     let [<Literal>] HasFieldMarshalMax = 151
 
     let [<Literal>] HasDeclSecurityMin = 152
-    let HasDeclSecurity (t: HasDeclSecurityTag) = assert (t.Tag <= 2); HasDeclSecurityMin + t.Tag (* + 1 + 1 = max HasFieldMarshal.Tag + 1 *)
+    let HasDeclSecurity (tag: HasDeclSecurityTag) = assert (tag.Tag <= 2); HasDeclSecurityMin + tag.Tag (* + 1 + 1 = max HasFieldMarshal.Tag + 1 *)
     let [<Literal>] HasDeclSecurityMax = 154
 
     let [<Literal>] MemberRefParentMin = 155
-    let MemberRefParent (t: MemberRefParentTag) = assert (t.Tag <= 4); MemberRefParentMin + t.Tag (* + 2 + 1 = max HasDeclSecurity.Tag + 1 *)
+    let MemberRefParent (tag: MemberRefParentTag) = assert (tag.Tag <= 4); MemberRefParentMin + tag.Tag (* + 2 + 1 = max HasDeclSecurity.Tag + 1 *)
     let [<Literal>] MemberRefParentMax = 159
 
     let [<Literal>] HasSemanticsMin = 160
-    let HasSemantics (t: HasSemanticsTag) = assert (t.Tag <= 1); HasSemanticsMin + t.Tag (* + 4 + 1 = max MemberRefParent.Tag + 1 *)
+    let HasSemantics (tag: HasSemanticsTag) = assert (tag.Tag <= 1); HasSemanticsMin + tag.Tag (* + 4 + 1 = max MemberRefParent.Tag + 1 *)
     let [<Literal>] HasSemanticsMax = 161
 
     let [<Literal>] MethodDefOrRefMin = 162
-    let MethodDefOrRef (t: MethodDefOrRefTag) = assert (t.Tag <= 2); MethodDefOrRefMin + t.Tag (* + 1 + 1 = max HasSemantics.Tag + 1 *)
+    let MethodDefOrRef (tag: MethodDefOrRefTag) = assert (tag.Tag <= 2); MethodDefOrRefMin + tag.Tag (* + 1 + 1 = max HasSemantics.Tag + 1 *)
     let [<Literal>] MethodDefOrRefMax = 164
 
     let [<Literal>] MemberForwardedMin = 165
-    let MemberForwarded (t: MemberForwardedTag) = assert (t.Tag <= 1); MemberForwardedMin + t.Tag (* + 2 + 1 = max MethodDefOrRef.Tag + 1 *)
+    let MemberForwarded (tag: MemberForwardedTag) = assert (tag.Tag <= 1); MemberForwardedMin + tag.Tag (* + 2 + 1 = max MethodDefOrRef.Tag + 1 *)
     let [<Literal>] MemberForwardedMax = 166
 
     let [<Literal>] ImplementationMin = 167
-    let Implementation (t: ImplementationTag) = assert (t.Tag <= 2); ImplementationMin + t.Tag (* + 1 + 1 = max MemberForwarded.Tag + 1 *)
+    let Implementation (tag: ImplementationTag) = assert (tag.Tag <= 2); ImplementationMin + tag.Tag (* + 1 + 1 = max MemberForwarded.Tag + 1 *)
     let [<Literal>] ImplementationMax = 169
 
     let [<Literal>] CustomAttributeTypeMin = 170
-    let CustomAttributeType (t: CustomAttributeTypeTag) = assert (t.Tag <= 3); CustomAttributeTypeMin + t.Tag (* + 2 + 1 = max Implementation.Tag + 1 *)
+    let CustomAttributeType (tag: CustomAttributeTypeTag) = assert (tag.Tag <= 3); CustomAttributeTypeMin + tag.Tag (* + 2 + 1 = max Implementation.Tag + 1 *)
     let [<Literal>] CustomAttributeTypeMax = 173
 
     let [<Literal>] ResolutionScopeMin = 174
-    let ResolutionScope (t: ResolutionScopeTag) = assert (t.Tag <= 4); ResolutionScopeMin + t.Tag (* + 3 + 1 = max CustomAttributeType.Tag + 1 *)
+    let ResolutionScope (tag: ResolutionScopeTag) = assert (tag.Tag <= 4); ResolutionScopeMin + tag.Tag (* + 3 + 1 = max CustomAttributeType.Tag + 1 *)
     let [<Literal>] ResolutionScopeMax = 178
 
 [<Struct>]
@@ -242,33 +242,33 @@ let Blob (x: int) = RowElement(RowElementTags.Blob, x)
 let StringE (x: int) = RowElement(RowElementTags.String, x)
 
 /// pos. in some table
-let SimpleIndex (t, x: int) = RowElement(RowElementTags.SimpleIndex t, x)
+let SimpleIndex (table, index: int) = RowElement(RowElementTags.SimpleIndex table, index)
 
-let TypeDefOrRefOrSpec (t, x: int) = RowElement(RowElementTags.TypeDefOrRefOrSpec t, x)
+let TypeDefOrRefOrSpec (tag, index: int) = RowElement(RowElementTags.TypeDefOrRefOrSpec tag, index)
 
-let TypeOrMethodDef (t, x: int) = RowElement(RowElementTags.TypeOrMethodDef t, x)
+let TypeOrMethodDef (tag, index: int) = RowElement(RowElementTags.TypeOrMethodDef tag, index)
 
-let HasConstant (t, x: int) = RowElement(RowElementTags.HasConstant t, x)
+let HasConstant (tag, index: int) = RowElement(RowElementTags.HasConstant tag, index)
 
-let HasCustomAttribute (t, x: int) = RowElement(RowElementTags.HasCustomAttribute t, x)
+let HasCustomAttribute (tag, index: int) = RowElement(RowElementTags.HasCustomAttribute tag, index)
 
-let HasFieldMarshal (t, x: int) = RowElement(RowElementTags.HasFieldMarshal t, x)
+let HasFieldMarshal (tag, index: int) = RowElement(RowElementTags.HasFieldMarshal tag, index)
 
-let HasDeclSecurity (t, x: int) = RowElement(RowElementTags.HasDeclSecurity t, x)
+let HasDeclSecurity (tag, index: int) = RowElement(RowElementTags.HasDeclSecurity tag, index)
 
-let MemberRefParent (t, x: int) = RowElement(RowElementTags.MemberRefParent t, x)
+let MemberRefParent (tag, index: int) = RowElement(RowElementTags.MemberRefParent tag, index)
 
-let HasSemantics (t, x: int) = RowElement(RowElementTags.HasSemantics t, x)
+let HasSemantics (tag, index: int) = RowElement(RowElementTags.HasSemantics tag, index)
 
-let MethodDefOrRef (t, x: int) = RowElement(RowElementTags.MethodDefOrRef t, x)
+let MethodDefOrRef (tag, index: int) = RowElement(RowElementTags.MethodDefOrRef tag, index)
 
-let MemberForwarded (t, x: int) = RowElement(RowElementTags.MemberForwarded t, x)
+let MemberForwarded (tag, index: int) = RowElement(RowElementTags.MemberForwarded tag, index)
 
-let Implementation (t, x: int) = RowElement(RowElementTags.Implementation t, x)
+let Implementation (tag, index: int) = RowElement(RowElementTags.Implementation tag, index)
 
-let CustomAttributeType (t, x: int) = RowElement(RowElementTags.CustomAttributeType t, x)
+let CustomAttributeType (tag, index: int) = RowElement(RowElementTags.CustomAttributeType tag, index)
 
-let ResolutionScope (t, x: int) = RowElement(RowElementTags.ResolutionScope t, x)
+let ResolutionScope (tag, index: int) = RowElement(RowElementTags.ResolutionScope tag, index)
 
 type BlobIndex = int
 

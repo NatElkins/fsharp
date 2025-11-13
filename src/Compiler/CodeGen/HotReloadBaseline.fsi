@@ -46,7 +46,9 @@ type MethodDefinitionMetadataHandles =
       SignatureHandle: BlobHandle option
       FirstParameterRowId: int option }
 
-type ParameterDefinitionMetadataHandles = { NameHandle: StringHandle option }
+type ParameterDefinitionMetadataHandles =
+    { NameHandle: StringHandle option
+      RowId: int option }
 
 type PropertyDefinitionMetadataHandles =
     { NameHandle: StringHandle option

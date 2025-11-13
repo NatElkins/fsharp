@@ -838,6 +838,11 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             | true, data -> Some data
             | _ -> None)
 
+    let baselineMethodHandles = request.Baseline.MetadataHandles.MethodHandles
+    let baselineParameterHandles = request.Baseline.MetadataHandles.ParameterHandles
+    let baselinePropertyHandles = request.Baseline.MetadataHandles.PropertyHandles
+    let baselineEventHandles = request.Baseline.MetadataHandles.EventHandles
+
     let enqueueParameters key methodHandle =
         let methodDef = metadataReader.GetMethodDefinition methodHandle
         let parameters = methodDef.GetParameters()
@@ -853,7 +858,10 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     parameterHandleLookup[paramKey] <- parameterHandle
             else
                 if not (parameterRowLookup.ContainsKey paramKey) then
-                    let rowId = MetadataTokens.GetRowNumber parameterHandle
+                    let rowId =
+                        match baselineParameterHandles |> Map.tryFind paramKey |> Option.bind (fun info -> info.RowId) with
+                        | Some baselineRow when baselineRow > 0 -> baselineRow
+                        | _ -> MetadataTokens.GetRowNumber parameterHandle
                     parameterRowLookup[paramKey] <- rowId
                     parameterHandleLookup[paramKey] <- parameterHandle
                     parameterDefinitionIndex.AddExisting paramKey
@@ -967,11 +975,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                    MethodToken = methodToken
                    MethodHandle = methodHandle
                    Body = bodyUpdate }, methodDef))
-
-        let baselineMethodHandles = request.Baseline.MetadataHandles.MethodHandles
-        let baselineParameterHandles = request.Baseline.MetadataHandles.ParameterHandles
-        let baselinePropertyHandles = request.Baseline.MetadataHandles.PropertyHandles
-        let baselineEventHandles = request.Baseline.MetadataHandles.EventHandles
 
         let methodMetadataLookup =
             let dict : Dictionary<MethodDefinitionKey, struct (MethodAttributes * MethodImplAttributes * string * byte[] * StringHandle option * BlobHandle option)> =

@@ -592,6 +592,13 @@ module internal MetadataDeltaTestHelpers =
         let metadataReader = peReader.GetMetadataReader()
         let builder = IlDeltaStreamBuilder None
         let stringType = ilGlobals.typ_String
+        let heapOffsets =
+            let heapSizes =
+                { StringHeapSize = metadataReader.GetHeapSize HeapIndex.String
+                  UserStringHeapSize = metadataReader.GetHeapSize HeapIndex.UserString
+                  BlobHeapSize = metadataReader.GetHeapSize HeapIndex.Blob
+                  GuidHeapSize = metadataReader.GetHeapSize HeapIndex.Guid }
+            MetadataHeapOffsets.OfHeapSizes heapSizes
 
         let typeHandle =
             metadataReader.TypeDefinitions
@@ -669,7 +676,7 @@ module internal MetadataDeltaTestHelpers =
                 []
                 []
                 updates
-                MetadataHeapOffsets.Zero
+                heapOffsets
 
         inspectDeltaMetadata "delta" metadataDelta.Metadata
 
@@ -725,6 +732,36 @@ module internal MetadataDeltaTestHelpers =
         let addHandle = findMethodHandle metadataReader "Sample.EventHost" "add_OnChanged"
         let methodKey = methodKey "Sample.EventHost" "add_OnChanged" ILType.Void
         let addDef = metadataReader.GetMethodDefinition addHandle
+        let heapOffsets =
+            let heapSizes =
+                { StringHeapSize = metadataReader.GetHeapSize HeapIndex.String
+                  UserStringHeapSize = metadataReader.GetHeapSize HeapIndex.UserString
+                  BlobHeapSize = metadataReader.GetHeapSize HeapIndex.Blob
+                  GuidHeapSize = metadataReader.GetHeapSize HeapIndex.Guid }
+            MetadataHeapOffsets.OfHeapSizes heapSizes
+
+        let parameterRows: DeltaWriter.ParameterDefinitionRowInfo list =
+            addDef.GetParameters()
+            |> Seq.choose (fun parameterHandle ->
+                if parameterHandle.IsNil then
+                    None
+                else
+                    let parameter = metadataReader.GetParameter parameterHandle
+                    let key: ParameterDefinitionKey =
+                        { ParameterDefinitionKey.Method = methodKey
+                          SequenceNumber = int parameter.SequenceNumber }
+                    let row: DeltaWriter.ParameterDefinitionRowInfo =
+                        { Key = key
+                          RowId = MetadataTokens.GetRowNumber parameterHandle
+                          IsAdded = false
+                          Attributes = parameter.Attributes
+                          SequenceNumber = int parameter.SequenceNumber
+                          Name = if parameter.Name.IsNil then None else Some(metadataReader.GetString parameter.Name)
+                          NameHandle = if parameter.Name.IsNil then None else Some parameter.Name }
+                    Some row)
+            |> Seq.toList
+
+        let firstParamRowId = parameterRows |> List.tryHead |> Option.map (fun row -> row.RowId)
 
         let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
             [ { Key = methodKey
@@ -736,7 +773,7 @@ module internal MetadataDeltaTestHelpers =
                 NameHandle = if addDef.Name.IsNil then None else Some addDef.Name
                 Signature = metadataReader.GetBlobBytes addDef.Signature
                 SignatureHandle = if addDef.Signature.IsNil then None else Some addDef.Signature
-                FirstParameterRowId = None } ]
+                FirstParameterRowId = firstParamRowId } ]
 
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
@@ -758,14 +795,14 @@ module internal MetadataDeltaTestHelpers =
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
                 methodDefinitionRows
-                []
+                parameterRows
                 []
                 []
                 []
                 []
                 []
                 updates
-                MetadataHeapOffsets.Zero
+                heapOffsets
 
         { BaselineBytes = assemblyBytes
           Delta = metadataDelta }

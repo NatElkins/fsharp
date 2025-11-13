@@ -71,7 +71,9 @@ type MethodDefinitionMetadataHandles =
       SignatureHandle: BlobHandle option
       FirstParameterRowId: int option }
 
-type ParameterDefinitionMetadataHandles = { NameHandle: StringHandle option }
+type ParameterDefinitionMetadataHandles =
+    { NameHandle: StringHandle option
+      RowId: int option }
 
 type PropertyDefinitionMetadataHandles =
     { NameHandle: StringHandle option
@@ -596,7 +598,8 @@ let private buildParameterHandles
                     { ParameterDefinitionKey.Method = methodKey
                       SequenceNumber = int parameter.SequenceNumber }
                 key,
-                ({ NameHandle = stringHandleOption parameter.Name } : ParameterDefinitionMetadataHandles))
+                ({ NameHandle = stringHandleOption parameter.Name
+                   RowId = Some(MetadataTokens.GetRowNumber parameterHandle) } : ParameterDefinitionMetadataHandles))
     )
     |> Map.ofSeq
 
