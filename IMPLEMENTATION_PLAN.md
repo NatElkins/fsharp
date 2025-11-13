@@ -353,15 +353,15 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
 
 1. **Feature flag & preview builds**
    - Gate compiler changes behind `--langversion:preview` and an internal MSBuild property until validation completes.
-   - Publish preview SDK packages to an internal feed and circulate instructions to partner providers.
+   - Publish preview TPSDK + compiler packages to the internal `fs1023-preview` feed and circulate install instructions.
 
 2. **Dogfood with partner providers**
-   - Pair with two early adopters (e.g., `SqlClient` provider, `FSharp.Data`) to migrate sample code and collect compatibility feedback.
-   - Capture blocking issues in a shared tracker and feed fixes back into Phases 1–7.
+   - Line up at least two early adopters (target: `FSharp.Data` + the SQLClient provider) and give them preview bits plus the migration checklist from `docs/upcoming/fs-1023.md`.
+   - Track feedback in the shared FS-1023 spreadsheet (state, repro steps, owner) and feed actionable items back into Phases 1–5.
 
 3. **Observability & telemetry**
-   - Emit structured log events when type projections occur (counts, cache hits) guarded by compiler `--times` to aid perf investigations.
-   - Add optional TPSDK counters (EventSource) that downstream hosts can enable to monitor provider invalidation churn.
+   - Wire the existing `FS1023_TRACE` hooks into a structured EventSource that host IDEs can toggle; document the knobs in `docs/upcoming/fs-1023.md`.
+   - Add a short “how to collect traces” appendix so partner teams can capture dumps/binlogs if they hit issues.
 
 4. **Release sign-off**
    - Produce release notes outlining new diagnostics, supported scenarios, and known limitations.
