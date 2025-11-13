@@ -51,6 +51,6 @@ module RoslynBaselineComparisons =
         let encMap = MetadataHelpers.countRows deltaBytes TableIndex.EncMap
         let methodDef = MetadataHelpers.countRows deltaBytes TableIndex.MethodDef
 
-        Assert.True(encLog <= roslynEncLog, sprintf "EncLog rows (%d) exceed Roslyn baseline (%d)" encLog roslynEncLog)
-        Assert.True(encMap <= roslynEncMap, sprintf "EncMap rows (%d) exceed Roslyn baseline (%d)" encMap roslynEncMap)
-        Assert.True(methodDef <= roslynMethodDef, sprintf "MethodDef rows (%d) exceed Roslyn baseline (%d)" methodDef roslynMethodDef)
+        Assert.Equal(roslynEncLog, encLog)
+        Assert.Equal(roslynEncMap, encMap)
+        Assert.Equal(roslynMethodDef, methodDef)
