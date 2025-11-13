@@ -253,14 +253,22 @@ module FSharpDeltaMetadataWriterTests =
 
         Assert.Equal(1, tableCount TableIndex.Property)
         Assert.Equal(1, tableCount TableIndex.PropertyMap)
-        let tryOperation table =
-            metadataDelta.EncLog
-            |> Array.tryFind (fun (index, _, _) -> index = table)
-            |> Option.map (fun (_, _, op) -> op)
 
-        Assert.Equal(Some EditAndContinueOperation.AddProperty, tryOperation TableIndex.Property)
-        // Roslyn logs the containing map row as AddProperty (not AddPropertyMap).
-        Assert.Equal(Some EditAndContinueOperation.AddProperty, tryOperation TableIndex.PropertyMap)
+        let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
+            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
+               (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
+               (TableIndex.Property, 1, EditAndContinueOperation.AddProperty)
+               // Roslyn also tags the containing PropertyMap row as AddProperty.
+               (TableIndex.PropertyMap, 1, EditAndContinueOperation.AddProperty) |]
+
+        let expectedEncMap: (TableIndex * int)[] =
+            [| (TableIndex.Module, 1)
+               (TableIndex.MethodDef, 1)
+               (TableIndex.Property, 1)
+               (TableIndex.PropertyMap, 1) |]
+
+        Assert.Equal(expectedEncLog, metadataDelta.EncLog)
+        Assert.Equal(expectedEncMap, metadataDelta.EncMap)
         Assert.True(metadataDelta.Metadata.Length > 0)
         Assert.Contains("Message", Encoding.UTF8.GetString(metadataDelta.StringHeap))
         assertTableStreamMatches metadataDelta
@@ -397,6 +405,23 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(1, tableCount TableIndex.Event)
         Assert.Equal(1, tableCount TableIndex.EventMap)
         Assert.Equal(1, tableCount TableIndex.MethodSemantics)
+
+        let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
+            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
+               (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
+               (TableIndex.Event, 1, EditAndContinueOperation.AddEvent)
+               (TableIndex.EventMap, 1, EditAndContinueOperation.AddEvent)
+               (TableIndex.MethodSemantics, 1, EditAndContinueOperation.AddMethod) |]
+
+        let expectedEncMap: (TableIndex * int)[] =
+            [| (TableIndex.Module, 1)
+               (TableIndex.MethodDef, 1)
+               (TableIndex.Event, 1)
+               (TableIndex.EventMap, 1)
+               (TableIndex.MethodSemantics, 1) |]
+
+        Assert.Equal(expectedEncLog, metadataDelta.EncLog)
+        Assert.Equal(expectedEncMap, metadataDelta.EncMap)
         Assert.Contains("OnChanged", Encoding.UTF8.GetString(metadataDelta.StringHeap))
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
