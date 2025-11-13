@@ -3209,8 +3209,9 @@ module EstablishTypeDefinitionCores =
 
             let methodInfos = providedType.PApplyArray((fun st -> st.GetMethods()), "GetMethods", m)
             let propertyInfos = providedType.PApplyArray((fun st -> st.GetProperties()), "GetProperties", m)
+            let constructorInfos = providedType.PApplyArray((fun st -> st.GetConstructors()), "GetConstructors", m)
 
-            fs1023Trace "[tp-generated-type] %s publish-members methods=%d properties=%d" tycon.CompiledName methodInfos.Length propertyInfos.Length
+            fs1023Trace "[tp-generated-type] %s publish-members methods=%d properties=%d constructors=%d" tycon.CompiledName methodInfos.Length propertyInfos.Length constructorInfos.Length
 
             safeIter "method" methodInfos (fun (methodInfo: Tainted<ProvidedMethodInfo>) ->
                 if not (methodInfo.PUntaint((fun mi -> mi.IsConstructor), m)) then
@@ -3240,31 +3241,49 @@ module EstablishTypeDefinitionCores =
                         addMemberVal methodName SynMemberKind.Member isStatic args returnTy binding)
 
             safeIter "property" propertyInfos (fun (propertyInfo: Tainted<ProvidedPropertyInfo>) ->
+                let propertyName = propertyInfo.PUntaint((fun pi -> pi.Name), m)
+                let propertyTy = importProvidedType (propertyInfo.PApply((fun pi -> pi.PropertyType), m))
+
+                let indexParamTys =
+                    propertyInfo
+                        .PApplyArray((fun pi -> pi.GetIndexParameters()), "GetIndexParameters", m)
+                    |> Array.map (fun p -> importProvidedType (p.PApply((fun info -> info.ParameterType), m)))
+                    |> Array.toList
+
+                let publishAccessor accessorName memberKind accessorMethod computeArgsAndReturnTy =
+                    match accessorMethod with
+                    | Tainted.Null ->
+                        if fs1023Enabled () then
+                            fs1023Trace "[tp-generated-type] %s %s missing for property %s" tycon.CompiledName accessorName propertyName
+                    | Tainted.NonNull methodInfo ->
+                        let binding = ProvidedMemberBindingHelpers.createForMethod m methodInfo
+                        let isStatic = methodInfo.PUntaint((fun mi -> mi.IsStatic), m)
+                        let args, returnTy = computeArgsAndReturnTy isStatic
+                        addMemberVal accessorName memberKind isStatic args returnTy binding
+
                 if propertyInfo.PUntaint((fun pi -> pi.CanRead), m) then
                     let getterMethod = propertyInfo.PApply((fun pi -> pi.GetGetMethod()), m)
-                    match getterMethod with
-                    | Tainted.Null ->
-                        fs1023Trace "[tp-generated-type] %s getter for property %s missing" tycon.CompiledName (propertyInfo.PUntaint((fun pi -> pi.Name), m))
-                    | Tainted.NonNull getter ->
-                        let binding = ProvidedMemberBindingHelpers.createForMethod m getter
-                        let propertyName = propertyInfo.PUntaint((fun pi -> pi.Name), m)
-                        let isStatic = getter.PUntaint((fun mi -> mi.IsStatic), m)
+                    publishAccessor ("get_" + propertyName) SynMemberKind.PropertyGet getterMethod (fun isStatic ->
+                        let thisArgs = if isStatic then [] else [ thisTy ]
+                        thisArgs @ indexParamTys, propertyTy)
 
-                        let indexParamTys =
-                            propertyInfo
-                                .PApplyArray((fun pi -> pi.GetIndexParameters()), "GetIndexParameters", m)
-                            |> Array.map (fun p -> importProvidedType (p.PApply((fun info -> info.ParameterType), m)))
-                            |> Array.toList
+                if propertyInfo.PUntaint((fun pi -> pi.CanWrite), m) then
+                    let setterMethod = propertyInfo.PApply((fun pi -> pi.GetSetMethod()), m)
+                    publishAccessor ("set_" + propertyName) SynMemberKind.PropertySet setterMethod (fun isStatic ->
+                        let thisArgs = if isStatic then [] else [ thisTy ]
+                        let setterArgs = thisArgs @ indexParamTys @ [ propertyTy ]
+                        setterArgs, g.unit_ty))
 
-                        let args =
-                            let thisArgs = if isStatic then [] else [ thisTy ]
-                            thisArgs @ indexParamTys
+            safeIter "constructor" constructorInfos (fun (ctorInfo: Tainted<ProvidedConstructorInfo>) ->
+                let binding = ProvidedMemberBindingHelpers.createForConstructor m ctorInfo
+                let parameterTypes =
+                    ctorInfo
+                        .PApplyArray((fun ci -> ci.GetParameters()), "GetParameters", m)
+                    |> Array.map (fun p -> importProvidedType (p.PApply((fun info -> info.ParameterType), m)))
+                    |> Array.toList
 
-                        let returnTy =
-                            importProvidedType (propertyInfo.PApply((fun pi -> pi.PropertyType), m))
-
-                        let logicalName = "get_" + propertyName
-                        addMemberVal logicalName SynMemberKind.PropertyGet isStatic args returnTy binding)
+                let logicalName = ctorInfo.PUntaint((fun ci -> ci.Name), m)
+                addMemberVal logicalName SynMemberKind.Constructor true parameterTypes thisTy binding)
 
         let registerGeneratedTycon (providedType: Tainted<ProvidedType>) (entity: Tycon) =
 #if !NO_TYPEPROVIDERS

@@ -350,6 +350,105 @@ module UseProvided =
     let valueName = Provided.Value
 """
 
+    let private mutableProviderSource = """
+namespace MutableFs1023
+
+open System
+open System.Reflection
+open Microsoft.FSharp.Core.CompilerServices
+open Microsoft.FSharp.Quotations
+open ProviderImplementation.ProvidedTypes
+
+type MutableSummaryRuntime() =
+    static let mutable summary = "unconfigured"
+    static member Summary
+        with get () = summary
+        and set (value: string) =
+            summary <- value
+
+[<TypeProvider>]
+type MutableProvider(config: TypeProviderConfig) as this =
+    inherit TypeProviderForNamespaces(config)
+
+    let assembly = Assembly.GetExecutingAssembly()
+    let namespaceName = "MutableFs1023"
+    let generator =
+        ProvidedTypeDefinition(
+            assembly,
+            namespaceName,
+            "MutableGenerator",
+            baseType = Some typeof<obj>,
+            isErased = false,
+            hideObjectMethods = true)
+
+    let summaryProperty =
+        typeof<MutableSummaryRuntime>.GetProperty("Summary", BindingFlags.Public ||| BindingFlags.Static)
+
+    do
+        let parameters = [ ProvidedStaticParameter("Source", typeof<Type>) ]
+
+        generator.DefineStaticParameters(parameters, fun typeName _ ->
+            let provided =
+                ProvidedTypeDefinition(
+                    assembly,
+                    namespaceName,
+                    typeName,
+                    baseType = Some typeof<obj>,
+                    isErased = false,
+                    hideObjectMethods = true)
+
+            let getter (_: Expr list) =
+                Expr.Call(summaryProperty.GetMethod, [])
+
+            let setter (args: Expr list) =
+                match args with
+                | [ valueExpr ] ->
+                    let coerced = Expr.Coerce(valueExpr, typeof<string>)
+                    Expr.Call(summaryProperty.SetMethod, [ coerced ])
+                | _ ->
+                    failwithf "MutableSummary setter expected a single argument, got %d" args.Length
+
+            let property =
+                ProvidedProperty(
+                    "MutableSummary",
+                    propertyType = typeof<string>,
+                    isStatic = true,
+                    getterCode = getter,
+                    setterCode = setter)
+
+            provided.AddMember property
+
+            let ctor =
+                ProvidedConstructor([], invokeCode = fun _ -> <@@ () @@>)
+
+            provided.AddMember ctor
+            provided)
+
+        this.AddNamespace(namespaceName, [ generator ])
+
+[<assembly: TypeProviderAssembly>]
+do ()
+"""
+
+    let private mutableModelSource = """
+namespace MutableFs1023Model
+
+type MutableModel =
+    { MutableSummary: string }
+    member this.InitialSummary = this.MutableSummary
+"""
+
+    let private mutableConsumerSource = """
+namespace MutableFs1023Consumer
+
+type Provided = MutableFs1023.MutableGenerator<Source = MutableFs1023Model.MutableModel>
+
+module UseProvided =
+    let configure summary =
+        Provided.MutableSummary <- summary
+        Provided.MutableSummary
+"""
+
     let private jsonSerializerProviderSource = """
 namespace Fs1023Json
 
@@ -912,6 +1011,104 @@ module UseProvided =
                 try Directory.Delete(tempDir, true) with _ -> ()
 
     [<Fact>]
+    let ``mutable provided type exposes setter and constructor`` () =
+        let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(tempDir) |> ignore
+
+        try
+            let providerPath = Path.Combine(tempDir, "MutableProvider.fs")
+            let providerDll = Path.Combine(tempDir, "MutableProvider.dll")
+
+            writeFile providerPath mutableProviderSource
+
+            let providerArgs =
+                [| yield! mkProjectCommandLineArgs(providerDll, [ providerPath ])
+                   yield "-r:" + providedTypesAssembly |]
+                |> Array.filter (fun arg -> not (arg.StartsWith("--langversion") || arg.StartsWith("-langversion")))
+                |> Array.append [| "--mlcompatibility"; "--langversion:5.0" |]
+
+            compile providerArgs
+
+            let modelPath = Path.Combine(tempDir, "MutableModel.fs")
+            let consumerPath = Path.Combine(tempDir, "MutableConsumer.fs")
+
+            writeFile modelPath mutableModelSource
+            writeFile consumerPath mutableConsumerSource
+
+            let outputDll = Path.Combine(tempDir, "MutableConsumer.dll")
+            let projectFile = Path.Combine(tempDir, "MutableConsumer.fsproj")
+
+            let projectArgs =
+                Array.append
+                    (mkProjectCommandLineArgs(outputDll, [ modelPath; consumerPath ]))
+                    [| "-r:" + providerDll |]
+
+            let projectOptions =
+                { checker.GetProjectOptionsFromCommandLineArgs(projectFile, projectArgs) with
+                    SourceFiles = [| modelPath; consumerPath |] }
+
+            let checkerWithContents =
+                FSharpChecker.Create(
+                    keepAssemblyContents = true,
+                    useTransparentCompiler = FSharp.Test.CompilerAssertHelpers.UseTransparentCompiler)
+
+            let projectResults = checkerWithContents.ParseAndCheckProject(projectOptions) |> Async.RunImmediate
+
+            ensureSuccess projectResults.Diagnostics
+
+            let rec collectEntities declarations =
+                seq {
+                    for decl in declarations do
+                        match decl with
+                        | FSharpImplementationFileDeclaration.Entity(entity, nested) ->
+                            yield entity
+                            yield! collectEntities nested
+                        | _ -> ()
+                }
+
+            let providedEntity =
+                projectResults.AssemblyContents.ImplementationFiles
+                |> Seq.collect (fun impl -> collectEntities impl.Declarations)
+                |> Seq.tryFind (fun entity -> entity.FullName = "MutableFs1023Consumer.Provided")
+
+            Assert.True(providedEntity.IsSome, "Expected MutableFs1023Consumer.Provided to appear in the typed tree.")
+
+            let memberNames =
+                providedEntity.Value.MembersFunctionsAndValues
+                |> Seq.map (fun mfv -> mfv.CompiledName)
+                |> Seq.toArray
+
+            Assert.Contains("set_MutableSummary", memberNames)
+            Assert.Contains(".ctor", memberNames)
+
+            let assertMutable assemblyPath =
+                let consumerAssemblyBytes = File.ReadAllBytes(assemblyPath)
+                let consumerAssembly = Assembly.Load(consumerAssemblyBytes)
+                let providedType = consumerAssembly.GetType("MutableFs1023Consumer.Provided", throwOnError = true, ignoreCase = false)
+
+                let summaryProperty =
+                    providedType.GetProperty("MutableSummary", BindingFlags.Public ||| BindingFlags.Static)
+
+                Assert.NotNull(summaryProperty)
+                summaryProperty.SetValue(null, "configured")
+                Assert.Equal("configured", summaryProperty.GetValue(null) :?> string)
+
+                Assert.NotNull(Activator.CreateInstance(providedType))
+
+            compile projectArgs
+            assertMutable outputDll
+
+            let standaloneDll = Path.Combine(tempDir, "MutableConsumer.standalone.dll")
+            let standaloneArgs = Array.append projectArgs [| "--standalone"; "--out:" + standaloneDll |]
+            compile standaloneArgs
+            assertMutable standaloneDll
+        finally
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()
+
+    [<Fact>]
     let ``anonymous record static argument is rejected`` () =
         let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(tempDir) |> ignore
@@ -1412,7 +1609,7 @@ module UseProvided =
 
                 Assert.Equal("Value", getStaticStringProperty "Value")
                 Assert.Equal("value:required:normal;rest:required:paramarray", getStaticStringProperty "MapParameters")
-                Assert.Equal("value:false:false:none", getStaticStringProperty "OptionalParameter")
+                Assert.Equal("value:true:true:OptionalArgumentAttribute", getStaticStringProperty "OptionalParameter")
                 Assert.Equal("value:true:true:42", getStaticStringProperty "OptionalLiteralParameter")
                 Assert.Equal("index:Int32", getStaticStringProperty "IndexerParameters")
 
@@ -1725,7 +1922,7 @@ module UseShapeProvided =
 
             let assertions assemblyPath =
                 let getter = assertProvidedTypeProperties assemblyPath "Fs1023Consumer.Provided"
-                Assert.Equal("value:false:false:none", getter "OptionalParameter")
+                Assert.Equal("value:true:true:OptionalArgumentAttribute", getter "OptionalParameter")
                 Assert.Equal("value:true:true:42", getter "OptionalLiteralParameter")
                 Assert.Equal("index:Int32", getter "IndexerParameters")
 
