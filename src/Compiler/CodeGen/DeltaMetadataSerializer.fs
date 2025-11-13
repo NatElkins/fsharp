@@ -294,14 +294,19 @@ let private streamHeaderSize (name: string) =
     let nameLength = Text.Encoding.UTF8.GetByteCount(name) + 1
     8 + align4 nameLength
 
-let serializeMetadataRoot (_: DeltaTableSerializerInput) (heaps: DeltaHeapStreams) (tableStream: DeltaTableStream) : byte[] =
-    let streams =
+let serializeMetadataRoot (input: DeltaTableSerializerInput) (heaps: DeltaHeapStreams) (tableStream: DeltaTableStream) : byte[] =
+    let includeJtd = input.MetadataSizes.IsEncDelta
+    let baseStreams =
         [ "#-", tableStream.UnpaddedSize, tableStream.Bytes
           "#Strings", heaps.StringsLength, heaps.Strings
           "#US", heaps.UserStringsLength, heaps.UserStrings
           "#GUID", heaps.GuidsLength, heaps.Guids
-          "#Blob", heaps.BlobsLength, heaps.Blobs
-          "#JTD", 0, Array.empty ]
+          "#Blob", heaps.BlobsLength, heaps.Blobs ]
+    let streams =
+        if includeJtd then
+            baseStreams @ [ "#JTD", 0, Array.empty ]
+        else
+            baseStreams
 
     let versionBytes = Text.Encoding.UTF8.GetBytes(versionString)
     let versionStringLength = versionBytes.Length + 1
