@@ -17,12 +17,50 @@ open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.CodeGen
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
+open FSharp.Compiler.CodeGen.DeltaMetadataSerializer
 open FSharp.Compiler.CodeGen.DeltaTableLayout
 open FSharp.Compiler.Service.Tests.HotReload.MetadataDeltaTestHelpers
 
 module DeltaWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
 module FSharpDeltaMetadataWriterTests =
+
+    let private metadataStreamNames (metadata: byte[]) =
+        use stream = new MemoryStream(metadata, false)
+        use reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen = true)
+
+        let readUInt32 () = reader.ReadUInt32()
+        let readUInt16 () = reader.ReadUInt16()
+
+        let _signature = readUInt32 ()
+        let _major = readUInt16 ()
+        let _minor = readUInt16 ()
+        let _reserved = readUInt32 ()
+        let versionLength = int (readUInt32 ())
+        reader.ReadBytes(versionLength) |> ignore
+        while stream.Position % 4L <> 0L do
+            reader.ReadByte() |> ignore
+
+        let _flags = readUInt16 ()
+        let streamCount = int (readUInt16 ())
+
+        let readStreamName () =
+            let buffer = ResizeArray()
+            let mutable finished = false
+            while not finished do
+                let b = reader.ReadByte()
+                if b = 0uy then
+                    finished <- true
+                else
+                    buffer.Add b
+            while stream.Position % 4L <> 0L do
+                reader.ReadByte() |> ignore
+            Encoding.UTF8.GetString(buffer.ToArray())
+
+        [ for _ in 1 .. streamCount do
+              let _offset = readUInt32 ()
+              let _size = readUInt32 ()
+              yield readStreamName () ]
 
     let private isTablePresent (bitmask: TableBitMasks) (table: TableIndex) =
         let index = int table
@@ -136,6 +174,31 @@ module FSharpDeltaMetadataWriterTests =
         Assert.True(metadataDelta.Metadata.Length > 0)
         Assert.Contains("Message", Encoding.UTF8.GetString(metadataDelta.StringHeap))
         assertTableStreamMatches metadataDelta
+
+    [<Fact>]
+    let ``metadata root omits #JTD when no ENC tables are present`` () =
+        let mirror = DeltaMetadataTables MetadataHeapOffsets.Zero
+        mirror.AddModuleRow("Empty.dll", System.Guid.NewGuid(), System.Guid.NewGuid(), System.Guid.NewGuid())
+        let sizes = DeltaMetadataSerializer.computeMetadataSizes mirror
+        let heaps = DeltaMetadataSerializer.buildHeapStreams mirror
+        let tableInput : DeltaMetadataSerializer.DeltaTableSerializerInput =
+            { Tables = mirror.TableRows
+              MetadataSizes = sizes
+              StringHeap = mirror.StringHeapBytes
+              StringHeapOffsets = mirror.StringHeapOffsets
+              BlobHeap = mirror.BlobHeapBytes
+              BlobHeapOffsets = mirror.BlobHeapOffsets
+              GuidHeap = mirror.GuidHeapBytes }
+        let tableStream = DeltaMetadataSerializer.buildTableStream tableInput
+        let metadata = DeltaMetadataSerializer.serializeMetadataRoot tableInput heaps tableStream
+        let names = metadataStreamNames metadata
+        Assert.DoesNotContain("#JTD", names)
+
+    [<Fact>]
+    let ``metadata root includes #JTD when ENC tables are present`` () =
+        let artifacts = emitPropertyDeltaArtifacts None ()
+        let names = metadataStreamNames artifacts.Delta.Metadata
+        Assert.Contains("#JTD", names)
 
     [<Fact>]
     let ``metadata writer emits event and method semantics rows`` () =
