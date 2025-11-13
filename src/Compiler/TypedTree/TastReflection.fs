@@ -2395,12 +2395,16 @@ and TypeReflectionBuilder(g: TcGlobals) as this =
             Interlocked.Increment(&assemblyCount.contents) |> ignore
             ReflectAssembly(this, g, ccu, location)
 
-        let fs1023TraceEnabled () =
-            match Environment.GetEnvironmentVariable("FS1023_TRACE") with
+        let isEnabled envVar =
+            match Environment.GetEnvironmentVariable(envVar) with
             | null -> false
             | value when String.IsNullOrWhiteSpace value -> false
             | value when String.Equals(value.Trim(), "0", StringComparison.Ordinal) -> false
             | _ -> true
+
+        let fs1023TraceEnabled () =
+            isEnabled "FS1023_TRACE"
+            && isEnabled "FS1023_TRACE_TAST"
 
         let fs1023Trace format =
             Printf.ksprintf
