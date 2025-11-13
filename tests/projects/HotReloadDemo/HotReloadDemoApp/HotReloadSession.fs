@@ -3,6 +3,7 @@
 namespace HotReloadDemoApp
 
 open System
+open System.Diagnostics
 open System.IO
 open System.Reflection
 open System.Runtime.Loader
@@ -36,6 +37,19 @@ module HotReloadSession =
 
     let private shouldDumpDeltas () =
         Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_DUMP_DELTA") = "1"
+
+    let private shouldRunMdv () =
+        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_RUN_MDV") with
+        | null -> false
+        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+        | _ -> false
+
+    let private getMdvToolPath () =
+        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_MDV_PATH") with
+        | null
+        | "" -> "mdv"
+        | path -> path
 
     let private shouldTraceRuntimeApply () =
         match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_RUNTIME_APPLY") with
@@ -229,7 +243,9 @@ module HotReloadSession =
                 | Error FSharpHotReloadError.MissingOutputPath ->
                     return HotReloadError "Project options are missing an output path."
                 | Ok delta ->
-                    if shouldDumpDeltas () then
+                    let dumpDirRequired = shouldDumpDeltas () || shouldRunMdv ()
+
+                    if dumpDirRequired then
                         try
                             let dumpDir = Path.Combine(session.WorkingDirectory, "delta-dump")
                             Directory.CreateDirectory(dumpDir) |> ignore
@@ -246,11 +262,46 @@ module HotReloadSession =
                                    sprintf "Updated types: %A" delta.UpdatedTypes
                                    sprintf "Generation: %O" delta.GenerationId
                                    sprintf "Base generation: %O" delta.BaseGenerationId |])
-                            printfn
-                                "[hotreload-delta] mdv \"%s\" \"/g:%s;%s\""
-                                session.BaselineDllPath
-                                metadataPath
-                                ilPath
+                            let mdvCommand =
+                                sprintf
+                                    "mdv \"%s\" \"/g:%s;%s\""
+                                    session.BaselineDllPath
+                                    metadataPath
+                                    ilPath
+
+                            printfn "[hotreload-delta] %s" mdvCommand
+
+                            if shouldRunMdv () then
+                                let psi = ProcessStartInfo()
+                                psi.FileName <- getMdvToolPath ()
+                                psi.UseShellExecute <- false
+                                psi.RedirectStandardOutput <- true
+                                psi.RedirectStandardError <- true
+                                psi.WorkingDirectory <- dumpDir
+                                psi.ArgumentList.Add(session.BaselineDllPath)
+                                psi.ArgumentList.Add($"/g:{metadataPath};{ilPath}")
+
+                                try
+                                    let procInstance = Process.Start(psi)
+                                    if isNull procInstance then
+                                        printfn "[hotreload-mdv] failed to start mdv (Process.Start returned null)"
+                                    else
+                                        use proc = procInstance
+                                        let stdOutTask = proc.StandardOutput.ReadToEndAsync()
+                                        let stdErrTask = proc.StandardError.ReadToEndAsync()
+                                        proc.WaitForExit()
+                                        stdOutTask.Wait()
+                                        stdErrTask.Wait()
+                                        let stdOut = stdOutTask.Result.TrimEnd()
+                                        let stdErr = stdErrTask.Result.TrimEnd()
+                                        if stdOut.Length > 0 then
+                                            printfn "[hotreload-mdv] %s" stdOut
+                                        if stdErr.Length > 0 then
+                                            printfn "[hotreload-mdv][stderr] %s" stdErr
+                                        if proc.ExitCode <> 0 then
+                                            printfn "[hotreload-mdv] mdv exited with code %d" proc.ExitCode
+                                with mdvEx ->
+                                    printfn "[hotreload-mdv] failed to run mdv: %s" mdvEx.Message
                         with dumpEx ->
                             printfn "Failed to dump delta artifacts: %s" dumpEx.Message
 
