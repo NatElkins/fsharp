@@ -1662,14 +1662,6 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
 
             override _.ToString() = sprintf "ctxt record property %s(...) in type %s" field.LogicalName declTy.FullName }
 
-    ///// Bind a reference to a constructor
-    and TxConstructor (asm: ReflectAssembly) (mref: ValRef) = 
-        let argTypes = [||]//Array.map (TxILType ([| |], [| |])) mref.  
-        let declTy = asm.TxTType mref.Type
-        let cons = declTy.GetConstructor(BindingFlags.Public ||| BindingFlags.NonPublic, null, argTypes, null)
-        if cons = null then failwith (sprintf "constructor reference '%+A' not resolved" mref)
-        cons
-
     /// Convert an ILGenericParameterDef read from a binary to a System.Type.
     and TxGenericParam asm _ (* gpsf *) pos (inp: Typar) =
         { new Type() with 
@@ -1770,6 +1762,37 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
 
     let isNested = declTyOpt.IsSome
 
+    let normalizeBindingFlags (bindingAttr: BindingFlags) (defaultFlags: BindingFlags) =
+        if bindingAttr = BindingFlags.Default then defaultFlags else bindingAttr
+
+    let createVisibilityScopePredicate bindingAttr defaultFlags =
+        let flags = normalizeBindingFlags bindingAttr defaultFlags
+        let hasVisibilityFlags = (flags &&& (BindingFlags.Public ||| BindingFlags.NonPublic)) <> enum<BindingFlags> 0
+        let includePublic =
+            if hasVisibilityFlags then (flags &&& BindingFlags.Public) <> enum 0 else true
+        let includeNonPublic =
+            if hasVisibilityFlags then (flags &&& BindingFlags.NonPublic) <> enum 0 else false
+        let hasScopeFlags = (flags &&& (BindingFlags.Instance ||| BindingFlags.Static)) <> enum 0
+        let includeInstance =
+            if hasScopeFlags then (flags &&& BindingFlags.Instance) <> enum 0 else true
+        let includeStatic =
+            if hasScopeFlags then (flags &&& BindingFlags.Static) <> enum 0 else true
+
+        fun (isPublic: bool) (isStatic: bool) ->
+            let visibilityOk =
+                if includePublic && includeNonPublic then true
+                elif includePublic then isPublic
+                elif includeNonPublic then not isPublic
+                else isPublic
+
+            let scopeOk =
+                if includeInstance && includeStatic then true
+                elif includeInstance then not isStatic
+                elif includeStatic then isStatic
+                else true
+
+            visibilityOk && scopeOk
+
     member internal _.TyconRef = tcref
 
     override __.Name = tcref.CompiledName 
@@ -1794,12 +1817,13 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
     override __.BaseType = null//inp. |> Option.map (TxILType (gps, [| |])) |> optionToNull
     override __.GetInterfaces() = tcref.ImmediateInterfaceTypesOfFSharpTycon |> List.map asm.TxTType |> List.toArray
 
-    override this.GetConstructors(_bindingFlags) = 
+    override this.GetConstructors(bindingFlags) = 
         use _ = pushTyparScope ()
-        let members: ValRef list = tcref.MembersOfFSharpTyconSorted
-        members
+        let visibilityFilter = createVisibilityScopePredicate bindingFlags (BindingFlags.Public ||| BindingFlags.Instance)
+        tcref.MembersOfFSharpTyconSorted
         |> List.filter (fun (vref: ValRef) -> vref.IsConstructor)
-        |> List.map (fun vref -> TxConstructor asm vref)
+        |> List.map (fun vref -> TxConstructorDef (this :> Type) vref)
+        |> List.filter (fun ctor -> visibilityFilter ctor.IsPublic ctor.IsStatic)
         |> List.toArray
 
     override this.GetMethods(bindingFlags) =
@@ -1814,9 +1838,21 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                     this.FullName
                     (bindingFlags.ToString()))
 
-        let methods =
+        let providedMethods =
             tcref.Deref.entity_tycon_tcaug.tcaug_adhoc_list
-            |> Seq.map (fun (_, vref: ValRef) -> TxMethodDef asm this vref)
+            |> Seq.map (fun (_, vref: ValRef) -> vref)
+
+        let declaredMethods =
+            tcref.MembersOfFSharpTyconSorted
+            |> Seq.filter (fun vref ->
+                vref.IsMember
+                && not vref.IsConstructor
+                && not vref.IsExtensionMember)
+
+        let methods =
+            Seq.append declaredMethods providedMethods
+            |> Seq.distinctBy (fun vref -> vref.Stamp)
+            |> Seq.map (fun vref -> TxMethodDef asm this vref)
             |> Seq.toArray
         //inp.Methods.Elements |> Array.map (TxILMethodDef this)
 
@@ -1836,7 +1872,8 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                     methods.Length
                     elapsed)
 
-        methods
+        let visibilityFilter = createVisibilityScopePredicate bindingFlags (BindingFlags.Public ||| BindingFlags.Instance)
+        methods |> Array.filter (fun m -> visibilityFilter m.IsPublic m.IsStatic)
 
     override this.GetField(name, _bindingFlags) = 
         use _ = pushTyparScope ()
@@ -1932,10 +1969,11 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         Array.append (propertyInfos |> List.toArray) (recordFieldProperties |> List.toArray)
 
     override this.GetMembers(_bindingFlags) = 
-        [| for x in this.GetMethods() do yield (x :> MemberInfo)
-           for x in this.GetFields() do yield (x :> MemberInfo)
-           for x in this.GetProperties() do yield (x :> MemberInfo)
-           for x in this.GetEvents() do yield (x :> MemberInfo)
+        let allFlags = BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Instance ||| BindingFlags.Static
+        [| for x in this.GetMethods(allFlags) do yield (x :> MemberInfo)
+           for x in this.GetFields(allFlags) do yield (x :> MemberInfo)
+           for x in this.GetProperties(allFlags) do yield (x :> MemberInfo)
+           for x in this.GetEvents(allFlags) do yield (x :> MemberInfo)
            for x in this.GetNestedTypes() do yield (x :> MemberInfo) |]
  
 #if !NO_TYPEPROVIDERS

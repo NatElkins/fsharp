@@ -232,6 +232,16 @@ type Fs1023Provider(config: TypeProviderConfig) as this =
                     | [||] -> "none"
                     | names -> String.concat ";" names
 
+            let hiddenMethodVisibility =
+                let publicLookup =
+                    sourceType.GetMethod("HiddenSummary", BindingFlags.Public ||| BindingFlags.Instance)
+                let nonPublicLookup =
+                    sourceType.GetMethod("HiddenSummary", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                match isNull publicLookup, isNull nonPublicLookup with
+                | true, false -> "nonpublic-only"
+                | false, _ -> "public-visible"
+                | true, true -> "missing"
+
             printfn "[fs1023][%s][summary] Map=%s Optional=%s OptionalLiteral=%s Indexer=%s" typeName mapSummary optionalSummary optionalLiteralSummary indexerSummary
 
             let addSummaryProperty name value =
@@ -247,6 +257,7 @@ type Fs1023Provider(config: TypeProviderConfig) as this =
             addSummaryProperty "IndexerParameters" indexerSummary
             addSummaryProperty "EventSummary" eventSummary
             addSummaryProperty "ModuleTypeSummary" moduleTypeSummary
+            addSummaryProperty "HiddenMethodVisibility" hiddenMethodVisibility
 
             logProvider "define-end"
             provided)
@@ -307,6 +318,7 @@ type Model =
             with get(index: int) = index
         member _.OptionalLiteral([<System.Runtime.InteropServices.Optional; System.Runtime.InteropServices.DefaultParameterValue(42)>] value: int) =
             value
+        member private this.HiddenSummary() = this.Value
 """
 
     let private modelSignatureSource = """
@@ -338,6 +350,7 @@ type Model =
             with get(index: int) = index
         member _.OptionalLiteral([<System.Runtime.InteropServices.Optional; System.Runtime.InteropServices.DefaultParameterValue(42)>] value: int) =
             value
+        member private this.HiddenSummary() = this.Renamed
 """
 
     let private signatureModelSignatureSource = """
@@ -1577,6 +1590,7 @@ module UseProvided =
                 let indexerSummary = readStaticProperty "IndexerParameters"
                 let eventSummary = readStaticProperty "EventSummary"
                 let moduleSummary = readStaticProperty "ModuleTypeSummary"
+                let hiddenVisibility = readStaticProperty "HiddenMethodVisibility"
 
                 printfn "[fs1023][assert] MapParameters=%s" mapSummary
                 printfn "[fs1023][assert] OptionalParameter=%s" optionalSummary
@@ -1589,6 +1603,7 @@ module UseProvided =
                 Assert.Equal("index:Int32", indexerSummary)
                 Assert.Equal("ValueChanged", eventSummary)
                 Assert.Equal("Model;Provided;UseProvided", moduleSummary)
+                Assert.Equal("nonpublic-only", hiddenVisibility)
             finally
                 context.Unload()
         finally
@@ -1666,6 +1681,7 @@ module UseProvided =
                 assertStaticStringProperty "IndexerParameters" "index:Int32"
                 assertStaticStringProperty "EventSummary" "ValueChanged"
                 assertStaticStringProperty "ModuleTypeSummary" "Model;Provided;UseProvided"
+                assertStaticStringProperty "HiddenMethodVisibility" "nonpublic-only"
 
                 Assert.Equal("Value", getStaticStringProperty "Value")
 
@@ -1834,6 +1850,7 @@ module UseProvided =
                 Assert.Equal("index:Int32", getStaticStringProperty "IndexerParameters")
                 Assert.Equal("ValueChanged", getStaticStringProperty "EventSummary")
                 Assert.Equal("Model;Provided;UseProvided", getStaticStringProperty "ModuleTypeSummary")
+                Assert.Equal("nonpublic-only", getStaticStringProperty "HiddenMethodVisibility")
 
             compile projectArgs
             assertProperties outputDll
