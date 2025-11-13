@@ -54,3 +54,23 @@ module RoslynBaselineComparisons =
         Assert.Equal(roslynEncLog, encLog)
         Assert.Equal(roslynEncMap, encMap)
         Assert.Equal(roslynMethodDef, methodDef)
+
+    [<Fact>]
+    let ``event delta row counts match Roslyn baseline`` () =
+        let baselines = loadRoslynTables ()
+        let roslynEvent = baselines |> List.tryItem 1 |> Option.defaultWith (fun () -> failwith "Roslyn event baseline missing")
+
+        let roslynEncLog = roslynEvent.rows.['EncLog']
+        let roslynEncMap = roslynEvent.rows.['EncMap']
+        let roslynMethodDef = roslynEvent.rows.['MethodDef']
+
+        let eventDelta = MetadataDeltaTestHelpers.emitEventDeltaArtifacts None ()
+        let deltaBytes = eventDelta.Delta.Metadata
+
+        let encLog = MetadataHelpers.countRows deltaBytes TableIndex.EncLog
+        let encMap = MetadataHelpers.countRows deltaBytes TableIndex.EncMap
+        let methodDef = MetadataHelpers.countRows deltaBytes TableIndex.MethodDef
+
+        Assert.Equal(roslynEncLog, encLog)
+        Assert.Equal(roslynEncMap, encMap)
+        Assert.Equal(roslynMethodDef, methodDef)
