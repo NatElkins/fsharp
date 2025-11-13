@@ -86,6 +86,7 @@
     <Compile Include="HotReload/MetadataDeltaTestHelpers.fs" />
     <Compile Include="HotReload/FSharpDeltaMetadataWriterTests.fs" />
     <Compile Include="HotReload/FSharpMetadataAggregatorTests.fs" />
+    <Compile Include="HotReload/RoslynBaselineComparisons.fs" />
     <Compile Include="HotReload/NameMapTests.fs" />
     <Compile Include="HotReload/RudeEditDiagnosticsTests.fs" />
   </ItemGroup>
