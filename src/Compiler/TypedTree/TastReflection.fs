@@ -1755,6 +1755,8 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
 
     let isNested = declTyOpt.IsSome
 
+    member internal _.TyconRef = tcref
+
     override __.Name = tcref.CompiledName 
     override __.Assembly = (asm :> Assembly) 
     override __.DeclaringType = declTyOpt |> optionToNull
@@ -1762,7 +1764,17 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
 
     override __.FullName = tcref.CompiledRepresentationForNamedType.FullName
                     
-    override __.Namespace = tcref.CompiledRepresentationForNamedType.Enclosing.[0]
+    override __.Namespace =
+        let nsParts =
+            tcref.CompilationPath.AccessPath
+            |> List.choose (fun (name, kind) ->
+                match kind with
+                | ModuleOrNamespaceKind.Namespace _ -> Some(CompilationPath.DemangleEntityName name kind)
+                | _ -> None)
+
+        match nsParts with
+        | [] -> null
+        | _ -> String.concat "." nsParts
     override __.BaseType = null//inp. |> Option.map (TxILType (gps, [| |])) |> optionToNull
     override __.GetInterfaces() = tcref.ImmediateInterfaceTypesOfFSharpTycon |> List.map asm.TxTType |> List.toArray
 

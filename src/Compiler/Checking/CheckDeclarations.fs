@@ -3205,7 +3205,7 @@ module EstablishTypeDefinitionCores =
                     try
                         action taintedItem
                     with ex ->
-                        fs1023Trace "[tp-generated-type] failed to publish %s on %s due to %s" label tycon.CompiledName ex.Message
+                        fs1023Trace "[tp-generated-type] failed to publish %s on %s due to %s" label tycon.CompiledName (ex.ToString())
 
             let methodInfos = providedType.PApplyArray((fun st -> st.GetMethods()), "GetMethods", m)
             let propertyInfos = providedType.PApplyArray((fun st -> st.GetProperties()), "GetProperties", m)

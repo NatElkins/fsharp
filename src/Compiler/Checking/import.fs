@@ -58,6 +58,11 @@ let private fs1023Trace format =
                 with _ -> ())
         format
 
+let private tryGetReflectTypeDefinition (pt: ProvidedType) =
+    match pt.RawSystemType with
+    | :? ReflectTypeDefinition as reflTy -> Some reflTy
+    | _ -> None
+
 /// Represents an interface to some of the functionality of TcImports, for loading assemblies
 /// and accessing information about generated provided assemblies.
 type AssemblyLoader =
@@ -485,8 +490,21 @@ let ImportProvidedNamedType (env: ImportMap) (m: range) (st: Tainted<ProvidedTyp
     match st.PUntaint((fun st -> st.TryGetTyconRef()), m) with
     | Some x -> (x :?> TyconRef)
     | None ->
-        let tref = GetILTypeRefOfProvidedType (st, m)
-        ImportILTypeRef env m tref
+        let tyOpt = st.PUntaint(tryGetReflectTypeDefinition, m)
+        match tyOpt with
+        | Some reflTy ->
+            if fs1023TraceEnabled () then
+                fs1023Trace
+                    "[reflect-import] mapped %s to tycon %s"
+                    (reflTy.FullName)
+                    (reflTy.TyconRef.CompiledName)
+            reflTy.TyconRef
+        | None ->
+            if fs1023TraceEnabled () then
+                let rawTy = st.PUntaint((fun st -> st.RawSystemType), m)
+                fs1023Trace "[reflect-import] miss for %s raw=%s" (st.PUntaint((fun st -> string st.FullName), m)) (if isNull rawTy then "<null>" else rawTy.GetType().FullName)
+            let tref = GetILTypeRefOfProvidedType (st, m)
+            ImportILTypeRef env m tref
 
 /// Import a provided type as an AbstractIL type
 let rec ImportProvidedTypeAsILType (env: ImportMap) (m: range) (st: Tainted<ProvidedType>) =
@@ -510,7 +528,13 @@ let rec ImportProvidedTypeAsILType (env: ImportMap) (m: range) (st: Tainted<Prov
                 gst, args
             else
                 st, []
-        let tref = GetILTypeRefOfProvidedType (gst, m)
+        let tref =
+            match gst.PUntaint(tryGetReflectTypeDefinition, m) with
+            | Some reflTy -> reflTy.TyconRef.CompiledRepresentationForNamedType
+            | None ->
+                if fs1023TraceEnabled () then
+                    fs1023Trace "[reflect-import] il-lookup %s" (gst.PUntaint((fun st -> string st.FullName), m))
+                GetILTypeRefOfProvidedType (gst, m)
         let tcref = ImportProvidedNamedType env m gst
         let tps = tcref.Typars m
         if tps.Length <> genericArgs.Length then

@@ -3,6 +3,8 @@
 /// Logic associated with resolving method calls.
 module internal FSharp.Compiler.MethodCalls
 
+open System
+open System.Collections.Generic
 open Internal.Utilities
 
 open Internal.Utilities.Library 
@@ -1811,35 +1813,38 @@ module ProvidedMethodCalls =
 
     let private convertConstExpr g amap m (constant : Tainted<objnull * ProvidedType>) =
         let obj, objTy = constant.PApply2(id, m)
-        let ty = Import.ImportProvidedType amap m objTy
-        let normTy = normalizeEnumTy g ty
-        obj.PUntaint((fun v ->
-            let fail() = raise (TypeProviderError(FSComp.SR.etUnsupportedConstantType(v.GetType().ToString()), constant.TypeProviderDesignation, m))
+        let value = obj.PUntaint(id, m)
+        match value with
+        | :? FSharp.Compiler.TastReflect.ReflectTypeDefinition as reflTy ->
+            mkCallTypeOf g m (generalizedTyconRef g reflTy.TyconRef)
+        | _ ->
+            let ty = Import.ImportProvidedType amap m objTy
+            let normTy = normalizeEnumTy g ty
+            let fail() = raise (TypeProviderError(FSComp.SR.etUnsupportedConstantType(value.GetType().ToString()), constant.TypeProviderDesignation, m))
             try 
-                if isNull v then mkNull m ty else
+                if isNull value then mkNull m ty else
                 let c = 
-                    match v with
-                    | _ when typeEquiv g normTy g.bool_ty -> Const.Bool(v :?> bool)
-                    | _ when typeEquiv g normTy g.sbyte_ty -> Const.SByte(v :?> sbyte)
-                    | _ when typeEquiv g normTy g.byte_ty -> Const.Byte(v :?> byte)
-                    | _ when typeEquiv g normTy g.int16_ty -> Const.Int16(v :?> int16)
-                    | _ when typeEquiv g normTy g.uint16_ty -> Const.UInt16(v :?> uint16)
-                    | _ when typeEquiv g normTy g.int32_ty -> Const.Int32(v :?> int32)
-                    | _ when typeEquiv g normTy g.uint32_ty -> Const.UInt32(v :?> uint32)
-                    | _ when typeEquiv g normTy g.int64_ty -> Const.Int64(v :?> int64)
-                    | _ when typeEquiv g normTy g.uint64_ty -> Const.UInt64(v :?> uint64)
-                    | _ when typeEquiv g normTy g.nativeint_ty -> Const.IntPtr(v :?> int64)
-                    | _ when typeEquiv g normTy g.unativeint_ty -> Const.UIntPtr(v :?> uint64)
-                    | _ when typeEquiv g normTy g.float32_ty -> Const.Single(v :?> float32)
-                    | _ when typeEquiv g normTy g.float_ty -> Const.Double(v :?> float)
-                    | _ when typeEquiv g normTy g.char_ty -> Const.Char(v :?> char)
-                    | _ when typeEquiv g normTy g.string_ty -> Const.String(!!v :?> string)
-                    | _ when typeEquiv g normTy g.decimal_ty -> Const.Decimal(v :?> decimal)
+                    match value with
+                    | _ when typeEquiv g normTy g.bool_ty -> Const.Bool(value :?> bool)
+                    | _ when typeEquiv g normTy g.sbyte_ty -> Const.SByte(value :?> sbyte)
+                    | _ when typeEquiv g normTy g.byte_ty -> Const.Byte(value :?> byte)
+                    | _ when typeEquiv g normTy g.int16_ty -> Const.Int16(value :?> int16)
+                    | _ when typeEquiv g normTy g.uint16_ty -> Const.UInt16(value :?> uint16)
+                    | _ when typeEquiv g normTy g.int32_ty -> Const.Int32(value :?> int32)
+                    | _ when typeEquiv g normTy g.uint32_ty -> Const.UInt32(value :?> uint32)
+                    | _ when typeEquiv g normTy g.int64_ty -> Const.Int64(value :?> int64)
+                    | _ when typeEquiv g normTy g.uint64_ty -> Const.UInt64(value :?> uint64)
+                    | _ when typeEquiv g normTy g.nativeint_ty -> Const.IntPtr(value :?> int64)
+                    | _ when typeEquiv g normTy g.unativeint_ty -> Const.UIntPtr(value :?> uint64)
+                    | _ when typeEquiv g normTy g.float32_ty -> Const.Single(value :?> float32)
+                    | _ when typeEquiv g normTy g.float_ty -> Const.Double(value :?> float)
+                    | _ when typeEquiv g normTy g.char_ty -> Const.Char(value :?> char)
+                    | _ when typeEquiv g normTy g.string_ty -> Const.String(!!value :?> string)
+                    | _ when typeEquiv g normTy g.decimal_ty -> Const.Decimal(value :?> decimal)
                     | _ when typeEquiv g normTy g.unit_ty -> Const.Unit
                     | _ -> fail()
                 Expr.Const (c, m, ty)
-             with _ -> fail()
-            ), range=m)
+            with _ -> fail()
 
     /// Erasure over System.Type.
     ///
@@ -1905,13 +1910,17 @@ module ProvidedMethodCalls =
              g, amap, mut, isProp, isSuperInit, m,
              expr: Tainted<ProvidedExpr MaybeNull>) = 
 
-        let varConv =
+        let varConv, varConvByName =
             // note: Assuming the size based on paramVars
             // Doubling to decrease chance of collisions
             let dict = Dictionary.newWithSize (paramVars.Length*2)
+            let dictByName = System.Collections.Generic.Dictionary<string, (Val option * Expr)>(StringComparer.Ordinal)
+            let emptyVal: Val option = None
             for v, e in Seq.zip (paramVars |> Seq.map (fun x -> x.PUntaint(id, m))) (Option.toList thisArg @ allArgs) do
-                dict.Add(v, (None, e))
-            dict
+                dict.Add(v, (emptyVal, e))
+                if not (isNull v.Name) then
+                    dictByName[v.Name] <- (emptyVal, e)
+            dict, dictByName
 
         let rec exprToExprAndWitness top (ea: Tainted<ProvidedExpr MaybeNull>) =
             let fail() = error(Error(FSComp.SR.etUnsupportedProvidedExpression(ea.PUntaint((fun etree -> etree.UnderlyingExpressionString), m)), m))
@@ -2150,8 +2159,14 @@ module ProvidedMethodCalls =
             match varConv.TryGetValue vRaw with
             | true, v -> v
             | _ ->
-                let typeProviderDesignation = DisplayNameOfTypeProvider (pe.TypeProvider, m)
-                error(Error(FSComp.SR.etIncorrectParameterExpression(typeProviderDesignation, vRaw.Name), m))
+                match if isNull vRaw.Name then None else
+                        match varConvByName.TryGetValue vRaw.Name with
+                        | true, value -> Some value
+                        | _ -> None with
+                | Some v -> v
+                | None ->
+                    let typeProviderDesignation = DisplayNameOfTypeProvider (pe.TypeProvider, m)
+                    error(Error(FSComp.SR.etIncorrectParameterExpression(typeProviderDesignation, vRaw.Name), m))
                 
         and exprToExpr expr =
             let _, (resExpr, _) = exprToExprAndWitness false expr

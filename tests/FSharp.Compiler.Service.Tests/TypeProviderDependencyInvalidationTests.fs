@@ -6,6 +6,7 @@ open System
 open System.IO
 open System.Reflection
 open System.Diagnostics
+open System.Text.Json
 open System.Runtime.Loader
 open Xunit
 open FSharp.Compiler.CodeAnalysis
@@ -301,6 +302,136 @@ type Provided = Fs1023.ProvidedGenerator<Source = Fs1023Consumer.Model>
 
 module UseProvided =
     let valueName = Provided.Value
+"""
+
+    let private jsonSerializerProviderSource = """
+namespace Fs1023Json
+
+open System
+open System.Text.Json
+
+namespace Fs1023Json.ProviderImplementation
+
+open System
+open System.Reflection
+open System.Text.Json
+open Microsoft.FSharp.Core.CompilerServices
+open Microsoft.FSharp.Quotations
+open ProviderImplementation.ProvidedTypes
+open Fs1023Json
+
+[<TypeProvider>]
+type JsonSerializerProvider(config: TypeProviderConfig) as this =
+    inherit TypeProviderForNamespaces(config)
+
+    let assembly = System.Reflection.Assembly.GetExecutingAssembly()
+    let namespaceName = "Fs1023Json"
+    let parameters = [ ProvidedStaticParameter("Source", typeof<Type>) ]
+    let log message =
+        printfn "[fs1023][json-provider] %s" message
+
+    let buildType typeName (args: obj[]) =
+        try
+            let sourceType = args.[0] :?> Type
+            log (sprintf "buildType typeName=%s source=%s" typeName sourceType.FullName)
+            let provided =
+                ProvidedTypeDefinition(assembly, namespaceName, typeName, Some typeof<obj>, isErased = false, hideObjectMethods = true)
+
+            let typeGetMethod =
+                typeof<Type>.GetMethod("GetType", BindingFlags.Public ||| BindingFlags.Static, null, [| typeof<string>; typeof<bool> |], null)
+            let sourceTypeName = sourceType.AssemblyQualifiedName
+            let resolveSourceTypeExpr () =
+                Expr.Call(typeGetMethod, [ Expr.Value(sourceTypeName); Expr.Value(true) ])
+
+            let serializeMethod =
+                typeof<JsonSerializer>.GetMethod(
+                    "Serialize",
+                    BindingFlags.Public ||| BindingFlags.Static,
+                    null,
+                    [| typeof<obj>; typeof<Type>; typeof<JsonSerializerOptions> |],
+                    null)
+
+            let deserializeMethod =
+                typeof<JsonSerializer>.GetMethod(
+                    "Deserialize",
+                    BindingFlags.Public ||| BindingFlags.Static,
+                    null,
+                    [| typeof<string>; typeof<Type>; typeof<JsonSerializerOptions> |],
+                    null)
+
+            let toJson =
+                ProvidedMethod(
+                    "ToJson",
+                    parameters = [ ProvidedParameter("value", sourceType) ],
+                    returnType = typeof<string>,
+                    isStatic = true,
+                    invokeCode = fun args ->
+                        let valueExpr = Expr.Coerce(args.[0], typeof<obj>)
+                        Expr.Call(serializeMethod, [ valueExpr; resolveSourceTypeExpr(); Expr.Value(null, typeof<JsonSerializerOptions>) ]))
+
+            try
+                provided.AddMember toJson
+            with ex ->
+                log (sprintf "addMember ToJson failed ex=%s" (ex.ToString()))
+                reraise()
+
+            let fromJson =
+                ProvidedMethod(
+                    "FromJson",
+                    parameters = [ ProvidedParameter("json", typeof<string>) ],
+                    returnType = sourceType,
+                    isStatic = true,
+                    invokeCode = fun args ->
+                        let jsonArg = Expr.Coerce(args.[0], typeof<string>)
+                        let deserialized =
+                            Expr.Call(deserializeMethod, [ jsonArg; resolveSourceTypeExpr(); Expr.Value(null, typeof<JsonSerializerOptions>) ])
+                        Expr.Coerce(deserialized, sourceType))
+
+            try
+                provided.AddMember fromJson
+            with ex ->
+                log (sprintf "addMember FromJson failed ex=%s" (ex.ToString()))
+                reraise()
+            provided
+        with ex ->
+            log (sprintf "buildType fail typeName=%s ex=%s" typeName (ex.ToString()))
+            reraise()
+
+    let root = ProvidedTypeDefinition(assembly, namespaceName, "JsonSerializerProvider", Some typeof<obj>, isErased = false)
+
+    do
+        log "registering root"
+        root.DefineStaticParameters(parameters, buildType)
+        this.AddNamespace(namespaceName, [ root ])
+
+[<assembly:TypeProviderAssembly>]
+do ()
+"""
+
+    let private jsonSerializerModelSource = """
+namespace SampleJson
+
+type Order =
+    { Id: int
+      Customer: string
+      Items: string list }
+"""
+
+    let private jsonSerializerConsumerSource = """
+namespace SampleJson
+
+type OrderJson = Fs1023Json.JsonSerializerProvider<Source = SampleJson.Order>
+
+module Tests =
+    let roundTrip () =
+        let original =
+            { Order.Id = 42
+              Customer = "Alice"
+              Items = [ "Apples"; "Bananas" ] }
+
+        let json = OrderJson.ToJson original
+        let clone = OrderJson.FromJson json
+        clone = original
 """
 
     let private genericModelSource = """
@@ -1102,6 +1233,53 @@ module UseProvided =
             let standaloneArgs = Array.append projectArgs [| "--standalone"; "--out:" + standaloneDll |]
             compile standaloneArgs
             assertProperties standaloneDll
+        finally
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``json serializer provider roundtrip works`` () =
+        let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(tempDir) |> ignore
+
+        try
+            let providerPath = Path.Combine(tempDir, "JsonSerializerProvider.fs")
+            let providerDll = Path.Combine(tempDir, "Fs1023JsonProvider.dll")
+
+            writeFile providerPath jsonSerializerProviderSource
+
+            let jsonAssemblyPath = typeof<JsonSerializer>.Assembly.Location
+
+            let providerArgs =
+                [| yield! mkProjectCommandLineArgs(providerDll, [ providerPath ])
+                   yield "-r:" + providedTypesAssembly
+                   yield "-r:" + jsonAssemblyPath |]
+
+            compile providerArgs
+
+            let modelPath = Path.Combine(tempDir, "Model.fs")
+            let consumerPath = Path.Combine(tempDir, "Consumer.fs")
+
+            writeFile modelPath jsonSerializerModelSource
+            writeFile consumerPath jsonSerializerConsumerSource
+
+            let outputDll = Path.Combine(tempDir, "SampleJson.dll")
+
+            let consumerArgs =
+                [| yield! mkProjectCommandLineArgs(outputDll, [ modelPath; consumerPath ])
+                   yield "-r:" + providerDll
+                   yield "-r:" + jsonAssemblyPath |]
+
+            compile consumerArgs
+
+            let consumerAssembly = Assembly.Load(File.ReadAllBytes(outputDll))
+            let testsType = consumerAssembly.GetType("SampleJson.Tests", throwOnError = true, ignoreCase = false)
+            let roundTripMethod = testsType.GetMethod("roundTrip", BindingFlags.Public ||| BindingFlags.Static)
+            Assert.NotNull(roundTripMethod)
+            let result = roundTripMethod.Invoke(null, [||]) :?> bool
+            Assert.True(result, "Expected JSON serializer provider round trip to succeed.")
         finally
             if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
                 printfn "[fs1023] preserving temp dir %s" tempDir
