@@ -342,7 +342,8 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
 >   All three passed on `net10.0`, giving us confidence that both the mutable setter/ctor path and the newer event/property regressions survived the reflection changes.
 > - Augmented `Fs1023Provider` to log both `EventSummary` (`ValueChanged`) and `ModuleTypeSummary` (`Model;Provided;UseProvided`) so we now assert the TastReflection proxies satisfy `Type.GetEvents` and `Type.Module.GetTypes` end-to-end, plus the `HiddenMethodVisibility`/`HiddenPropertyVisibility` probes that exercise `BindingFlags.NonPublic` on `Type.GetMethod`/`Type.GetProperty`.
 > - `ReflectTypeDefinition.GetConstructors`, `GetMethods`, `GetFields`, `GetProperties`, and `GetEvents` now rely on `TxConstructorDef` + the shared visibility/scope filter, merge declared/provided members, deduplicate by `ValRef.Stamp`, and honor `BindingFlags`. The updated regression proves private instance members remain discoverable only when `BindingFlags.NonPublic` is specified.
-> - Next up for Phase 1: finish the `ReflectModule` debugger ergonomics (`ToString`/`DebuggerDisplay`) and resume the event/indexer parity work listed above, then re-run the broader Fs1023 regression filters before queuing the PR.
+> - `ReflectModule` picked up a `DebuggerDisplay`/`ToString` implementation that reports both the module name and parent assembly, so the debugger view now points back to the projected assembly identity.
+> - Next up for Phase 1: resume the remaining parity work (event/indexer edge cases called out earlier in the plan) and re-run the broader Fs1023 regression filters before queuing the PR.
 
 ---
 

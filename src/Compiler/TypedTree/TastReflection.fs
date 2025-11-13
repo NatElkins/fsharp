@@ -2454,7 +2454,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectAssembly(builder: TypeReflectionBui
     member internal _.Fs1023TraceMessage(message: string) = builder.Fs1023TraceMessage(message)
     member internal _.PushTyparScope(pairs: seq<Typar * Type>) = pushTyparScope pairs
 
-and [<DebuggerDisplay("{Name}")>] ReflectModule(asm: ReflectAssembly) =
+and [<DebuggerDisplay("{DebuggerDisplay,nq}")>] ReflectModule(asm: ReflectAssembly) =
     inherit Module()
 
     let moduleVersionId = Guid.NewGuid()
@@ -2574,7 +2574,14 @@ and [<DebuggerDisplay("{Name}")>] ReflectModule(asm: ReflectAssembly) =
     override _.GetObjectData(_info: SerializationInfo, _context: StreamingContext) =
         raise (SerializationException(sprintf "Module '%s' cannot be serialized." moduleName))
 
-    override _.ToString() = moduleName
+    member private _.DebuggerDisplay =
+        let asmName =
+            match asm.GetName() with
+            | null -> "<unknown assembly>"
+            | info -> info.Name
+        sprintf "%s (%s)" moduleName asmName
+
+    override x.ToString() = x.DebuggerDisplay
 
 and TypeReflectionBuilderStats =
     { AssembliesCreated: int
