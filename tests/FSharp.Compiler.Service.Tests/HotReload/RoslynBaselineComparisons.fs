@@ -2,6 +2,7 @@ namespace FSharp.Compiler.Service.Tests.HotReload
 
 open System
 open System.IO
+open System.Collections.Generic
 open System.Collections.Immutable
 open System.Reflection.Metadata
 open System.Text.Json
@@ -15,23 +16,26 @@ module private MetadataHelpers =
 
 module RoslynBaselineComparisons =
 
-    type RoslynDeltaTables = { delta: int; rows: Map<string, int> }
+    type RoslynBaselines = Map<string, Map<string, int>>
 
-    let private loadRoslynTables () =
+    let private loadRoslynTables () : RoslynBaselines =
         let path = Path.Combine(__SOURCE_DIRECTORY__, "../../../../../tools/baselines/roslyn_tables.json") |> Path.GetFullPath
         if not (File.Exists path) then
             failwithf "Roslyn baseline table snapshot not found: %s" path
-        JsonSerializer.Deserialize<RoslynDeltaTables list>(File.ReadAllText path, JsonSerializerOptions(PropertyNameCaseInsensitive = true))
+        let options = JsonSerializerOptions(PropertyNameCaseInsensitive = true)
+        let dict = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, int>>>(File.ReadAllText path, options)
+        dict
+        |> Seq.map (fun kvp -> kvp.Key, kvp.Value |> Map.ofSeq)
+        |> Map.ofSeq
 
     [<Fact>]
     let ``roslyn delta tables include expected Module/Method/Param rows`` () =
         let baselines = loadRoslynTables ()
-        Assert.True(baselines.Length >= 2, "Expected at least two Roslyn deltas")
-        let delta1 = baselines[0].rows
+        let delta1 = baselines |> Map.tryFind "Property" |> Option.defaultWith (fun () -> failwith "Missing property baseline")
         Assert.Equal(1, delta1.['Module'])
         Assert.Equal(3, delta1.['MethodDef'])
         Assert.Equal(2, delta1.['Param'])
-        let delta2 = baselines[1].rows
+        let delta2 = baselines |> Map.tryFind "PropertyUpdate" |> Option.defaultWith (fun () -> failwith "Missing property update baseline")
         Assert.Equal(1, delta2.['Module'])
         Assert.Equal(2, delta2.['MethodDef'])
 
@@ -46,7 +50,7 @@ module RoslynBaselineComparisons =
     [<Fact>]
     let ``property delta row counts do not exceed Roslyn baseline`` () =
         let baselines = loadRoslynTables ()
-        let roslyn = baselines |> List.tryHead |> Option.defaultWith (fun () -> failwith "Roslyn property baseline missing")
+        let roslyn = baselines |> Map.tryFind "Property" |> Option.defaultWith (fun () -> failwith "Roslyn property baseline missing")
 
         let propertyDelta = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
         assertMatches roslyn.rows propertyDelta.Delta.Metadata
@@ -54,8 +58,7 @@ module RoslynBaselineComparisons =
     [<Fact>]
     let ``property multi-generation delta rows match Roslyn baseline`` () =
         let baselines = loadRoslynTables ()
-        let roslyn = baselines |> List.tryHead |> Option.defaultWith (fun () -> failwith "Roslyn property baseline missing")
-        let roslynRows = roslyn.rows
+        let roslynRows = baselines |> Map.tryFind "Property" |> Option.defaultWith (fun () -> failwith "Roslyn property baseline missing")
 
         let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
         assertMatches roslynRows artifacts.Generation1.Metadata
@@ -64,7 +67,7 @@ module RoslynBaselineComparisons =
     [<Fact>]
     let ``event delta row counts match Roslyn baseline`` () =
         let baselines = loadRoslynTables ()
-        let roslynEvent = baselines |> List.tryItem 1 |> Option.defaultWith (fun () -> failwith "Roslyn event baseline missing")
+        let roslynEvent = baselines |> Map.tryFind "Event" |> Option.defaultWith (fun () -> failwith "Roslyn event baseline missing")
 
         let roslynEncLog = roslynEvent.rows.['EncLog']
         let roslynEncMap = roslynEvent.rows.['EncMap']
@@ -84,7 +87,7 @@ module RoslynBaselineComparisons =
     [<Fact>]
     let ``async delta row counts match Roslyn baseline`` () =
         let baselines = loadRoslynTables ()
-        let roslynAsync = baselines |> List.tryItem 2 |> Option.defaultWith (fun () -> failwith "Roslyn async baseline missing")
+        let roslynAsync = baselines |> Map.tryFind "Async" |> Option.defaultWith (fun () -> failwith "Roslyn async baseline missing")
 
         let roslynEncLog = roslynAsync.rows.['EncLog']
         let roslynEncMap = roslynAsync.rows.['EncMap']
@@ -104,7 +107,7 @@ module RoslynBaselineComparisons =
     [<Fact>]
     let ``event multi-generation delta rows match Roslyn baseline`` () =
         let baselines = loadRoslynTables ()
-        let roslynEvent = baselines |> List.tryItem 1 |> Option.defaultWith (fun () -> failwith "Roslyn event baseline missing")
+        let roslynEvent = baselines |> Map.tryFind "Event" |> Option.defaultWith (fun () -> failwith "Roslyn event baseline missing")
         let roslynRows = roslynEvent.rows
 
         let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
@@ -114,7 +117,7 @@ module RoslynBaselineComparisons =
     [<Fact>]
     let ``async multi-generation delta rows match Roslyn baseline`` () =
         let baselines = loadRoslynTables ()
-        let roslynAsync = baselines |> List.tryItem 2 |> Option.defaultWith (fun () -> failwith "Roslyn async baseline missing")
+        let roslynAsync = baselines |> Map.tryFind "Async" |> Option.defaultWith (fun () -> failwith "Roslyn async baseline missing")
         let roslynRows = roslynAsync.rows
 
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
