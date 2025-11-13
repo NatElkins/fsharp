@@ -836,6 +836,14 @@ type CompiledTypeRepr =
     [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
     member DebugText: string
 
+[<NoEquality; NoComparison>]
+type TyconProvidedEventInfo =
+    { EventName: string
+      AddMethod: ValRef
+      RemoveMethod: ValRef
+      HandlerType: TType
+      Range: range }
+
 [<NoEquality; NoComparison; RequireQualifiedAccess; StructuredFormatDisplay("{DebugText}")>]
 type TyconAugmentation =
     {
@@ -883,6 +891,9 @@ type TyconAugmentation =
 
         /// Set to true if the type is determined to be abstract
         mutable tcaug_abstract: bool
+
+        /// Provided events published for this tycon.
+        mutable tcaug_provided_events: TyconProvidedEventInfo list
     }
 
     static member Create: unit -> TyconAugmentation
@@ -896,6 +907,10 @@ type TyconAugmentation =
     member SetHasObjectGetHashCode: b: bool -> unit
 
     member SetHashAndEqualsWith: x: (ValRef * ValRef * ValRef * ValRef option) -> unit
+
+    member AddProvidedEvent: info: TyconProvidedEventInfo -> unit
+
+    member ProvidedEvents: TyconProvidedEventInfo list
 
     override ToString: unit -> string
 

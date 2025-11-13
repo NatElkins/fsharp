@@ -97,10 +97,20 @@ type ProvidedIlxPropertyShape =
         FirstAccessorOrder: int
     }
 
+type ProvidedIlxEventShape =
+    {
+        Name: string
+        HandlerType: TType
+        AddMethod: ProvidedIlxMemberEntry option
+        RemoveMethod: ProvidedIlxMemberEntry option
+        FirstAccessorOrder: int
+    }
+
 type ProvidedIlxMemberCatalog =
     {
         OrderedEntries: ProvidedIlxMemberEntry list
         PropertiesByName: Map<string, ProvidedIlxPropertyShape>
+        EventsByName: Map<string, ProvidedIlxEventShape>
     }
 
 let private mkPropertyShape name order flags =
@@ -120,6 +130,20 @@ let private updatePropertyShape accessor entry shape =
     | SynMemberKind.PropertySet ->
         { shape with Setter = Some entry; Flags = flags; FirstAccessorOrder = firstAccessorOrder }
     | _ -> { shape with Flags = flags; FirstAccessorOrder = firstAccessorOrder }
+
+let private mkEventShape name order handlerTy =
+    { Name = name
+      HandlerType = handlerTy
+      AddMethod = None
+      RemoveMethod = None
+      FirstAccessorOrder = order }
+
+let private updateEventShape isAdd entry shape =
+    let firstOrder = min shape.FirstAccessorOrder entry.Order
+    if isAdd then
+        { shape with AddMethod = Some entry; FirstAccessorOrder = firstOrder }
+    else
+        { shape with RemoveMethod = Some entry; FirstAccessorOrder = firstOrder }
 
 let private collectProvidedMembersForTycon (tycon: Tycon) : ProvidedIlxMemberCatalog =
     let orderedEntries =
@@ -165,9 +189,41 @@ let private collectProvidedMembersForTycon (tycon: Tycon) : ProvidedIlxMemberCat
                 | _ -> acc)
             Map.empty
 
+    let entryByStamp =
+        orderedEntries
+        |> List.map (fun entry -> entry.ValRef.Stamp, entry)
+        |> Map.ofList
+
+    let eventsByName =
+        tycon.TypeContents.ProvidedEvents
+        |> List.fold
+            (fun acc eventInfo ->
+                let initialShape =
+                    match Map.tryFind eventInfo.EventName acc with
+                    | Some existing -> existing
+                    | None -> mkEventShape eventInfo.EventName Int32.MaxValue eventInfo.HandlerType
+
+                let shapeWithAdd =
+                    entryByStamp
+                    |> Map.tryFind eventInfo.AddMethod.Stamp
+                    |> function
+                        | Some entry -> updateEventShape true entry initialShape
+                        | None -> initialShape
+
+                let finalShape =
+                    entryByStamp
+                    |> Map.tryFind eventInfo.RemoveMethod.Stamp
+                    |> function
+                        | Some entry -> updateEventShape false entry shapeWithAdd
+                        | None -> shapeWithAdd
+
+                Map.add eventInfo.EventName finalShape acc)
+            Map.empty
+
     {
         OrderedEntries = orderedEntries
         PropertiesByName = propertiesByName
+        EventsByName = eventsByName
     }
 #endif
 
@@ -11251,6 +11307,35 @@ and private GenProvidedTypeDef cenv (mgbuf: AssemblyBuilder) eenv m (tycon: Tyco
                     )
 
                 mgbuf.AddOrMergePropertyDef(tref, propDef, vspec.Range))
+
+    providedCatalog.EventsByName
+    |> Map.iter (fun name shape ->
+        match shape.AddMethod, shape.RemoveMethod with
+        | Some addEntry, Some removeEntry ->
+            match addEntry.MemberInfo, removeEntry.MemberInfo with
+            | Some addMemberInfo, Some removeMemberInfo ->
+                let addSpec, _, _, _, _, _, _, _, _, _ = GetMethodSpecForMemberVal cenv addMemberInfo addEntry.ValRef
+                let removeSpec, _, _, _, _, _, _, _, _, _ = GetMethodSpecForMemberVal cenv removeMemberInfo removeEntry.ValRef
+                let ilEventTy = GenType cenv tycon.Range eenvinner.tyenv shape.HandlerType
+
+                let eventDef =
+                    ILEventDef(
+                        eventType = Some ilEventTy,
+                        name = name,
+                        attributes = EventAttributes.None,
+                        addMethod = addSpec.MethodRef,
+                        removeMethod = removeSpec.MethodRef,
+                        fireMethod = None,
+                        otherMethods = [],
+                        customAttrs = mkILCustomAttrs [])
+
+                mgbuf.AddEventDef(tref, eventDef)
+            | _ ->
+                if fs1023TraceEnabled () then
+                    fs1023Trace "[ilxgen][provided] event %s missing member info" name
+        | _ ->
+            if fs1023TraceEnabled () then
+                fs1023Trace "[ilxgen][provided] event %s missing add/remove entries" name)
 
     if fs1023TraceEnabled () then
         fs1023Trace

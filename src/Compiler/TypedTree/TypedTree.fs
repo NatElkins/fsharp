@@ -1421,6 +1421,14 @@ type CompiledTypeRepr =
 
     override x.ToString() = "CompiledTypeRepr(...)"
 
+[<NoEquality; NoComparison>]
+type TyconProvidedEventInfo =
+    { EventName: string
+      AddMethod: ValRef
+      RemoveMethod: ValRef
+      HandlerType: TType
+      Range: range }
+
 [<NoEquality; NoComparison; RequireQualifiedAccess; StructuredFormatDisplay("{DebugText}")>]
 type TyconAugmentation = 
     {
@@ -1464,9 +1472,12 @@ type TyconAugmentation =
       
       /// Set to true at the end of the scope where proper augmentations are allowed 
       mutable tcaug_closed: bool                       
-
+      
       /// Set to true if the type is determined to be abstract 
-      mutable tcaug_abstract: bool                       
+      mutable tcaug_abstract: bool
+
+      /// Provided events published for this tycon.
+      mutable tcaug_provided_events: TyconProvidedEventInfo list
     }
 
     member tcaug.SetCompare x = tcaug.tcaug_compare <- Some x
@@ -1490,12 +1501,18 @@ type TyconAugmentation =
           tcaug_super=None
           tcaug_interfaces=[] 
           tcaug_closed=false 
-          tcaug_abstract=false }
+          tcaug_abstract=false
+          tcaug_provided_events=[] }
 
     [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
     member x.DebugText = x.ToString()
 
     override x.ToString() = "SynTypeDefnKind.Augmentation(...)"
+
+    member tcaug.AddProvidedEvent info =
+        tcaug.tcaug_provided_events <- info :: tcaug.tcaug_provided_events
+
+    member tcaug.ProvidedEvents = tcaug.tcaug_provided_events
 
 /// The information for the contents of a type. Also used for a provided namespace.
 [<NoEquality; NoComparison (*; StructuredFormatDisplay("{DebugText}") *) >]

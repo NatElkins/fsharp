@@ -3203,6 +3203,7 @@ and u_tcaug st =
         // pickled type definitions are always closed (i.e. no more intrinsic members allowed)
         tcaug_closed = true
         tcaug_abstract = g
+        tcaug_provided_events = []
     }
 
 and u_entity_spec st =

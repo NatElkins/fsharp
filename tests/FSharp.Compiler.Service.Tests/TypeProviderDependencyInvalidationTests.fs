@@ -449,6 +449,119 @@ module UseProvided =
         Provided.MutableSummary
 """
 
+    let private eventProviderSource = """
+namespace Fs1023Event
+
+open System
+open System.Reflection
+open Microsoft.FSharp.Core.CompilerServices
+open Microsoft.FSharp.Quotations
+open ProviderImplementation.ProvidedTypes
+
+type EventRuntime() =
+    static let triggered = Event<EventHandler, EventArgs>()
+    static member AddHandler(handler: EventHandler) = triggered.Publish.AddHandler handler
+    static member RemoveHandler(handler: EventHandler) = triggered.Publish.RemoveHandler handler
+    static member Trigger(sender: obj) = triggered.Trigger(sender, EventArgs.Empty)
+
+[<TypeProvider>]
+type EventProvider(config: TypeProviderConfig) as this =
+    inherit TypeProviderForNamespaces(config)
+
+    let assembly = Assembly.GetExecutingAssembly()
+    let namespaceName = "Fs1023Event"
+    let generator =
+        ProvidedTypeDefinition(
+            assembly,
+            namespaceName,
+            "EventGenerator",
+            baseType = Some typeof<obj>,
+            isErased = false,
+            hideObjectMethods = true)
+
+    do
+        let parameters = [ ProvidedStaticParameter("Source", typeof<Type>) ]
+
+        let addHandlerMethod =
+            typeof<EventRuntime>.GetMethod("AddHandler", BindingFlags.Public ||| BindingFlags.Static)
+
+        let removeHandlerMethod =
+            typeof<EventRuntime>.GetMethod("RemoveHandler", BindingFlags.Public ||| BindingFlags.Static)
+
+        let triggerMethod =
+            typeof<EventRuntime>.GetMethod("Trigger", BindingFlags.Public ||| BindingFlags.Static)
+
+        generator.DefineStaticParameters(parameters, fun typeName _ ->
+            let provided =
+                ProvidedTypeDefinition(
+                    assembly,
+                    namespaceName,
+                    typeName,
+                    baseType = Some typeof<obj>,
+                    isErased = false,
+                    hideObjectMethods = true)
+
+            let adder (args: Expr list) =
+                match args with
+                | [ handler ] ->
+                    let coerced = Expr.Coerce(handler, typeof<EventHandler>)
+                    Expr.Call(addHandlerMethod, [ coerced ])
+                | other -> failwithf "Unexpected add args %d" other.Length
+
+            let remover (args: Expr list) =
+                match args with
+                | [ handler ] ->
+                    let coerced = Expr.Coerce(handler, typeof<EventHandler>)
+                    Expr.Call(removeHandlerMethod, [ coerced ])
+                | other -> failwithf "Unexpected remove args %d" other.Length
+
+            let eventDef =
+                ProvidedEvent(
+                    eventName = "Triggered",
+                    eventHandlerType = typeof<EventHandler>,
+                    adderCode = adder,
+                    removerCode = remover,
+                    isStatic = true)
+
+            provided.AddMember eventDef
+
+            let fireMethod =
+                ProvidedMethod(
+                    "Fire",
+                    parameters = [ ProvidedParameter("sender", typeof<obj>) ],
+                    returnType = typeof<Void>,
+                    isStatic = true,
+                    invokeCode = fun args ->
+                        match args with
+                        | [ sender ] -> Expr.Call(triggerMethod, [ sender ])
+                        | _ -> <@@ () @@>)
+
+            provided.AddMember fireMethod
+            provided)
+
+        this.AddNamespace(namespaceName, [ generator ])
+
+[<assembly: TypeProviderAssembly>]
+do ()
+"""
+
+    let private eventModelSource = """
+namespace Fs1023EventModel
+
+type EventModel = { Name: string }
+"""
+
+    let private eventConsumerSource = """
+namespace Fs1023EventConsumer
+
+type Provided = Fs1023Event.EventGenerator<Source = Fs1023EventModel.EventModel>
+
+module Sink =
+    let fire sender =
+        Provided.Triggered.AddHandler(System.EventHandler(fun _ _ -> ()))
+        Provided.Fire(sender)
+"""
+
     let private jsonSerializerProviderSource = """
 namespace Fs1023Json
 
@@ -1102,6 +1215,74 @@ module UseProvided =
             let standaloneArgs = Array.append projectArgs [| "--standalone"; "--out:" + standaloneDll |]
             compile standaloneArgs
             assertMutable standaloneDll
+        finally
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``provided event surfaces in emitted IL`` () =
+        let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(tempDir) |> ignore
+
+        try
+            let providerPath = Path.Combine(tempDir, "EventProvider.fs")
+            let providerDll = Path.Combine(tempDir, "EventProvider.dll")
+
+            writeFile providerPath eventProviderSource
+
+            let providerArgs =
+                Array.append
+                    (mkProjectCommandLineArgs(providerDll, [ providerPath ]))
+                    [| "-r:" + providedTypesAssembly |]
+
+            compile providerArgs
+
+            let modelPath = Path.Combine(tempDir, "EventModel.fs")
+            let consumerPath = Path.Combine(tempDir, "EventConsumer.fs")
+
+            writeFile modelPath eventModelSource
+            writeFile consumerPath eventConsumerSource
+
+            let outputDll = Path.Combine(tempDir, "EventConsumer.dll")
+            let projectFile = Path.Combine(tempDir, "EventConsumer.fsproj")
+
+            let projectArgs =
+                Array.append
+                    (mkProjectCommandLineArgs(outputDll, [ modelPath; consumerPath ]))
+                    [| "-r:" + providerDll |]
+
+            let assertEvent assemblyPath =
+                let consumerAssemblyBytes = File.ReadAllBytes(assemblyPath)
+                let consumerAssembly = Assembly.Load(consumerAssemblyBytes)
+                let providedType = consumerAssembly.GetType("Fs1023EventConsumer.Provided", throwOnError = true, ignoreCase = false)
+
+                let eventInfo =
+                    providedType.GetEvent("Triggered", BindingFlags.Public ||| BindingFlags.Static)
+
+                Assert.NotNull(eventInfo)
+                Assert.NotNull(eventInfo.GetAddMethod())
+                Assert.NotNull(eventInfo.GetRemoveMethod())
+
+                let invoked = ref false
+                let handler = EventHandler(fun _ _ -> invoked := true)
+                eventInfo.AddEventHandler(null, handler)
+
+                let fireMethod =
+                    providedType.GetMethod("Fire", BindingFlags.Public ||| BindingFlags.Static)
+
+                Assert.NotNull(fireMethod)
+                fireMethod.Invoke(null, [| box null |]) |> ignore
+                Assert.True(!invoked, "Expected handler state to be updated")
+
+            compile projectArgs
+            assertEvent outputDll
+
+            let standaloneDll = Path.Combine(tempDir, "EventConsumer.standalone.dll")
+            let standaloneArgs = Array.append projectArgs [| "--standalone"; "--out:" + standaloneDll |]
+            compile standaloneArgs
+            assertEvent standaloneDll
         finally
             if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
                 printfn "[fs1023] preserving temp dir %s" tempDir

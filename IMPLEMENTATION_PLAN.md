@@ -324,12 +324,12 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
    - ✅ `docs/upcoming/fs-1023-pr-draft.md` captures the PR outline (feature summary, architecture highlights, experimental API callouts, and the commands we ran). Update it as final polish gets scheduled, then paste into the PR when ready.
 4. **Coordinate with SDK release plan** if updates are required in `FSharp.TypeProviders.SDK` NuGet package.
 
-> **2025-11-13 status note for Phase 4.4:** The Fs1023 regression `mutable provided type exposes setter and constructor` now passes across both normal and `/standalone` consumer builds.
+> **2025-11-13 status note for Phase 4.4:** Fs1023 provided members now cover setters, constructors, and CLI events, and we have a regression that inspects the emitted IL.
 >
 > - Restored the `MutableProvider` fixtures (provider/model/consumer source snippets) so the regression compiles under `--mlcompatibility --langversion:5.0`, then tightened the provider setter to use untyped `Expr.Coerce`/`Expr.Call` so we no longer trip the `Expr<string>` vs `Expr` mismatch during provider compilation.
 > - Updated `publishProvidedMembers` to emit property setters (when `CanWrite` is true) and constructors (via `ProvidedType.GetConstructors()`), wiring each accessor through `ProvidedMemberBindingHelpers.createFor{Method,Constructor}` so IlxGen can lean on the stored invoker expressions when generating IL.
-> - Verified the typed tree publishes `set_MutableSummary` and `.ctor` for `MutableFs1023Consumer.Provided`, and exercised the regression end-to-end with `dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release --filter "DisplayName~mutable provided type exposes setter and constructor"`.
-> - Next follow-up for Phase 4.4: extend the same cataloguing path to provided events (CLI event metadata) and add regression coverage that inspects the emitted IL so relocation bugs can be caught automatically.
+> - Added per-tycon event metadata (`TyconProvidedEventInfo`), taught `publishProvidedMembers` to project `ProvidedEventInfo` (adder/remover bindings plus handler types), and extended `collectProvidedMembersForTycon`/`GenProvidedTypeDef` so IlxGen emits `ILEventDef`s from the compiler-generated catalog instead of depending on provider IL.
+> - `dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release --filter "DisplayName~mutable provided type exposes setter and constructor"` stays green, and the new `"provided event surfaces in emitted IL"` regression reflects over both the normal and `/standalone` consumers to assert that `GetEvent("Triggered")` plus `Get{Add,Remove}Method()` survive relocation.
 
 ---
 

@@ -2580,8 +2580,13 @@ module TcExceptionDeclarations =
 /// refer to the types being defined. However a functional version of this
 /// would need to re-implement certain type relations to work over a 
 /// partial representation of types.
-module EstablishTypeDefinitionCores = 
- 
+module EstablishTypeDefinitionCores =
+
+    type ProvidedEventBuilder =
+        { HandlerType: TType
+          AddVal: ValRef option
+          RemoveVal: ValRef option }
+
     type TypeRealizationPass = 
         | FirstPass 
         | SecondPass 
@@ -3199,6 +3204,7 @@ module EstablishTypeDefinitionCores =
                             fs1023Trace "[tp-generated-type] failed to attach provided body for %s" logicalName
 
                 tryAttachProvidedBody()
+                vref
 
             let safeIter label (items: _[]) action =
                 for taintedItem in items do
@@ -3209,7 +3215,26 @@ module EstablishTypeDefinitionCores =
 
             let methodInfos = providedType.PApplyArray((fun st -> st.GetMethods()), "GetMethods", m)
             let propertyInfos = providedType.PApplyArray((fun st -> st.GetProperties()), "GetProperties", m)
+            let eventInfos = providedType.PApplyArray((fun st -> st.GetEvents()), "GetEvents", m)
             let constructorInfos = providedType.PApplyArray((fun st -> st.GetConstructors()), "GetConstructors", m)
+
+            let eventBuilders = System.Collections.Generic.Dictionary<string, ProvidedEventBuilder>()
+            let eventAccessorMap = System.Collections.Generic.Dictionary<obj, struct (string * bool)>()
+
+            let registerAccessor methodInfo label eventName =
+                match methodInfo with
+                | Tainted.NonNull mi ->
+                    eventAccessorMap[mi.PUntaint(id, m) :> obj] <- label(eventName)
+                | _ -> ()
+
+            eventInfos
+            |> Array.iter (fun (eventInfo: Tainted<ProvidedEventInfo>) ->
+                let eventName = eventInfo.PUntaint((fun ei -> ei.Name), m)
+                let handlerTy = importProvidedType (eventInfo.PApply((fun ei -> ei.EventHandlerType), m))
+                eventBuilders[eventName] <- { HandlerType = handlerTy; AddVal = None; RemoveVal = None }
+
+                registerAccessor (eventInfo.PApply((fun ei -> ei.GetAddMethod()), m)) (fun name -> struct (name, true)) eventName
+                registerAccessor (eventInfo.PApply((fun ei -> ei.GetRemoveMethod()), m)) (fun name -> struct (name, false)) eventName)
 
             fs1023Trace "[tp-generated-type] %s publish-members methods=%d properties=%d constructors=%d" tycon.CompiledName methodInfos.Length propertyInfos.Length constructorInfos.Length
 
@@ -3238,7 +3263,22 @@ module EstablishTypeDefinitionCores =
                         let returnTy =
                             importProvidedType (methodInfo.PApply((fun mi -> mi.ReturnType), m))
 
-                        addMemberVal methodName SynMemberKind.Member isStatic args returnTy binding)
+                        let vref = addMemberVal methodName SynMemberKind.Member isStatic args returnTy binding
+                        let key = methodInfo.PUntaint(id, m) :> obj
+
+                        match eventAccessorMap.TryGetValue key with
+                        | true, struct (eventName, isAdd) ->
+                            match eventBuilders.TryGetValue eventName with
+                            | true, builder ->
+                                let updated =
+                                    if isAdd then
+                                        { builder with AddVal = Some vref }
+                                    else
+                                        { builder with RemoveVal = Some vref }
+
+                                eventBuilders[eventName] <- updated
+                            | _ -> ()
+                        | _ -> ())
 
             safeIter "property" propertyInfos (fun (propertyInfo: Tainted<ProvidedPropertyInfo>) ->
                 let propertyName = propertyInfo.PUntaint((fun pi -> pi.Name), m)
@@ -3259,7 +3299,7 @@ module EstablishTypeDefinitionCores =
                         let binding = ProvidedMemberBindingHelpers.createForMethod m methodInfo
                         let isStatic = methodInfo.PUntaint((fun mi -> mi.IsStatic), m)
                         let args, returnTy = computeArgsAndReturnTy isStatic
-                        addMemberVal accessorName memberKind isStatic args returnTy binding
+                        addMemberVal accessorName memberKind isStatic args returnTy binding |> ignore
 
                 if propertyInfo.PUntaint((fun pi -> pi.CanRead), m) then
                     let getterMethod = propertyInfo.PApply((fun pi -> pi.GetGetMethod()), m)
@@ -3274,6 +3314,19 @@ module EstablishTypeDefinitionCores =
                         let setterArgs = thisArgs @ indexParamTys @ [ propertyTy ]
                         setterArgs, g.unit_ty))
 
+            for KeyValue(eventName, builder) in eventBuilders do
+                match builder.AddVal, builder.RemoveVal with
+                | Some addVref, Some removeVref ->
+                    tycon.TypeContents.AddProvidedEvent(
+                        { EventName = eventName
+                          AddMethod = addVref
+                          RemoveMethod = removeVref
+                          HandlerType = builder.HandlerType
+                          Range = tycon.Range })
+                | _ ->
+                    if fs1023Enabled () then
+                        fs1023Trace "[tp-generated-type] %s event %s missing add/remove methods" tycon.CompiledName eventName
+
             safeIter "constructor" constructorInfos (fun (ctorInfo: Tainted<ProvidedConstructorInfo>) ->
                 let binding = ProvidedMemberBindingHelpers.createForConstructor m ctorInfo
                 let parameterTypes =
@@ -3283,7 +3336,7 @@ module EstablishTypeDefinitionCores =
                     |> Array.toList
 
                 let logicalName = ctorInfo.PUntaint((fun ci -> ci.Name), m)
-                addMemberVal logicalName SynMemberKind.Constructor true parameterTypes thisTy binding)
+                addMemberVal logicalName SynMemberKind.Constructor true parameterTypes thisTy binding |> ignore)
 
         let registerGeneratedTycon (providedType: Tainted<ProvidedType>) (entity: Tycon) =
 #if !NO_TYPEPROVIDERS
