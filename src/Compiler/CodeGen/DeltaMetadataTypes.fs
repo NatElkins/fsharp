@@ -9,7 +9,8 @@ open FSharp.Compiler.IlxDeltaStreams
 /// Minimal shared types for hot-reload metadata tables.
 type RowElementData =
     { Tag: int
-      Value: int }
+      Value: int
+      IsAbsolute: bool }
 
 type MethodDefinitionRowInfo =
     { Key: MethodDefinitionKey

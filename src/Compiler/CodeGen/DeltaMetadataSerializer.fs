@@ -161,10 +161,16 @@ let private writeRowElement (writer: BinaryWriter) (indexSizes: CodedIndexSizes)
     elif tag = RowElementTags.ULong then
         writeUInt32 writer value
     elif tag = RowElementTags.String then
-        let offset = if value = 0 then 0 else input.StringHeapOffsets.[value]
+        let offset =
+            if element.IsAbsolute then value
+            elif value = 0 then 0
+            else input.StringHeapOffsets.[value]
         writeHeapIndex writer indexSizes.StringsBig offset
     elif tag = RowElementTags.Blob then
-        let offset = if value = 0 then 0 else input.BlobHeapOffsets.[value]
+        let offset =
+            if element.IsAbsolute then value
+            elif value = 0 then 0
+            else input.BlobHeapOffsets.[value]
         writeHeapIndex writer indexSizes.BlobsBig offset
     elif tag = RowElementTags.Guid then
         writeHeapIndex writer indexSizes.GuidsBig value
