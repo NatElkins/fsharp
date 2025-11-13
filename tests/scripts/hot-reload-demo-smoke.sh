@@ -13,14 +13,41 @@ if [[ ! -d "${APP_DIR}" ]]; then
 fi
 
 export DOTNET_MODIFIABLE_ASSEMBLIES=debug
-export FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY=1
+unset FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY
+export FSHARP_HOTRELOAD_DUMP_DELTA=1
+
+mdv_available=1
+MDV_PATH="${FSHARP_HOTRELOAD_MDV_PATH:-}"
+if [[ -z "${MDV_PATH}" ]]; then
+  if command -v mdv >/dev/null 2>&1; then
+    MDV_PATH="$(command -v mdv)"
+  else
+    mdv_available=0
+  fi
+fi
+
+if [[ ${mdv_available} -eq 1 ]]; then
+  if [[ ! -x "${MDV_PATH}" ]]; then
+    echo "error: mdv executable at ${MDV_PATH} is not runnable" >&2
+    exit 3
+  fi
+
+  export FSHARP_HOTRELOAD_MDV_PATH="${MDV_PATH}"
+  export FSHARP_HOTRELOAD_RUN_MDV=1
+else
+  echo "warning: mdv executable not found; skipping automatic mdv validation" >&2
+  unset FSHARP_HOTRELOAD_MDV_PATH
+  export FSHARP_HOTRELOAD_RUN_MDV=0
+fi
 
 pushd "${APP_DIR}" >/dev/null
 
 echo "Running HotReloadDemoApp in scripted mode..." >&2
 
-output="$(../../../../.dotnet/dotnet run -- --scripted --multi-delta --runtime-apply)"
+set +e
+output="$(../../../../.dotnet/dotnet run -- --scripted --multi-delta)"
 exit_code=$?
+set -e
 
 popd >/dev/null
 
@@ -34,6 +61,13 @@ fi
 if ! grep -q "Scripted run succeeded: emitted" <<<"${output}"; then
   echo "error: scripted run did not report success" >&2
   exit 10
+fi
+
+if [[ ${mdv_available} -eq 1 ]]; then
+  if ! grep -Fq "[hotreload-delta] mdv" <<<"${output}"; then
+    echo "error: mdv command was not recorded in the demo output" >&2
+    exit 11
+  fi
 fi
 
 echo "Hot reload demo smoke test completed successfully." >&2
