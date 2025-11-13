@@ -298,6 +298,90 @@ module internal TestHelpers =
             (mkILExportedTypes [])
             "v4.0.30319"
 
+    let createAsyncModule (message: string) : ILModuleDef =
+        let ilg = PrimaryAssemblyILGlobals
+        let stringType = ilg.typ_String
+        let boolType = ilg.typ_Bool
+        let hostTypeName = "Sample.AsyncDemo"
+        let stateMachineTypeName = "Sample.AsyncDemoStateMachine"
+        let document = ILSourceDocument.Create(None, None, None, "AsyncDemo.fs")
+        let debugPoint = ILDebugPoint.Create(document, 1, 1, 1, 50)
+
+        let runBody =
+            mkMethodBody(
+                false,
+                [],
+                2,
+                nonBranchingInstrsToCode [ I_seqpoint debugPoint; I_ldstr message; I_ret ],
+                Some debugPoint,
+                None)
+
+        let runMethod =
+            mkILNonGenericStaticMethod(
+                "RunAsync",
+                ILMemberAccess.Public,
+                [ mkILParamNamed("token", ilg.typ_Int32) ],
+                mkILReturn stringType,
+                runBody)
+
+        let moveNextBody =
+            mkMethodBody(
+                false,
+                [],
+                2,
+                nonBranchingInstrsToCode [ AI_ldc(DT_I4, ILConst.I4 1); I_ret ],
+                None,
+                None)
+
+        let moveNextMethod =
+            mkILNonGenericInstanceMethod(
+                "MoveNext",
+                ILMemberAccess.Public,
+                [],
+                mkILReturn boolType,
+                moveNextBody)
+
+        let hostType =
+            mkILSimpleClass
+                ilg
+                (
+                    hostTypeName,
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ runMethod ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField )
+
+        let stateMachineType =
+            mkILSimpleClass
+                ilg
+                (
+                    stateMachineTypeName,
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ moveNextMethod ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField )
+
+        mkILSimpleModule
+            "SampleAsyncAssembly"
+            "SampleAsyncModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ hostType; stateMachineType ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
     let createPropertyHostBaselineModule () : ILModuleDef =
         let ilg = PrimaryAssemblyILGlobals
         let typeName = "Sample.PropertyDemo"

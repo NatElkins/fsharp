@@ -610,3 +610,59 @@ module PdbTests =
             match artifacts.PdbPath with
             | Some path when File.Exists(path) -> File.Delete(path)
             | _ -> ()
+
+    [<Fact>]
+    let ``emitDelta emits portable PDB deltas across async helper generations`` () =
+        let typeName = "Sample.AsyncDemo"
+        let methodKey = TestHelpers.methodKey typeName "RunAsync" [ PrimaryAssemblyILGlobals.typ_Int32 ] PrimaryAssemblyILGlobals.typ_String
+        let artifacts = TestHelpers.createBaselineFromModule (TestHelpers.createAsyncModule "Async helper baseline message")
+        let methodToken = artifacts.Baseline.MethodTokens[methodKey]
+
+        let emitAndAssert request expectedMarker =
+            let delta = emitDelta request
+            let pdbBytes =
+                match delta.Pdb with
+                | Some bytes -> bytes
+                | None -> failwith "Expected portable PDB delta for async helper edit."
+            assertPdbContainsMethodToken pdbBytes methodToken
+            assertPdbContainsLiteral pdbBytes expectedMarker
+            delta
+
+        let request1 : IlxDeltaRequest =
+            { Baseline = artifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = TestHelpers.createAsyncModule "Async helper generation 1"
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta1 = emitAndAssert request1 "Async helper generation 1"
+
+        let baseline2 =
+            match delta1.UpdatedBaseline with
+            | Some b -> b
+            | None -> failwith "Generation 1 delta did not expose an updated baseline."
+
+        let request2 : IlxDeltaRequest =
+            { Baseline = baseline2
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = TestHelpers.createAsyncModule "Async helper generation 2"
+              SymbolChanges = None
+              CurrentGeneration = 2
+              PreviousGenerationId = Some delta1.GenerationId
+              SynthesizedNames = None }
+
+        let delta2 = emitAndAssert request2 "Async helper generation 2"
+        Assert.NotEqual(System.Guid.Empty, delta2.BaseGenerationId)
+        Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
+
+        if not (keepArtifacts ()) then
+            if File.Exists(artifacts.AssemblyPath) then File.Delete(artifacts.AssemblyPath)
+            match artifacts.PdbPath with
+            | Some path when File.Exists(path) -> File.Delete(path)
+            | _ -> ()
