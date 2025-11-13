@@ -279,6 +279,18 @@ type Model =
             value
 """
 
+    let private modelSignatureSource = """
+namespace Fs1023Consumer
+
+type Model =
+    { Value: int }
+    with
+        member Map : value:int * rest:string[] -> int
+        member Optional : ?value:int -> int
+        member Item : index:int -> int
+        member OptionalLiteral : value:int -> int
+"""
+
     let private modelSourceRenamed = """
 namespace Fs1023Consumer
 
@@ -294,6 +306,40 @@ type Model =
         member _.OptionalLiteral([<System.Runtime.InteropServices.Optional; System.Runtime.InteropServices.DefaultParameterValue(42)>] value: int) =
             value
 """
+
+    let private signatureModelSignatureSource = """
+namespace Fs1023Signature
+
+type SignatureModel =
+    { Value: int }
+"""
+
+    let private signatureModelImplementationSource = """
+namespace Fs1023Signature
+
+type SignatureModel =
+    { Value: int }
+    with
+        member this.ValueString() = this.Value.ToString()
+"""
+
+    let private signatureConsumerSource = """
+namespace Fs1023Signature
+
+type Provided = Fs1023.ProvidedGenerator<Source = Fs1023Signature.SignatureModel>
+
+module UseProvided =
+    let valueName = Provided.Value
+"""
+
+    let private appendSignatureComment baseText comment =
+        baseText + sprintf "\n// %s\n" comment
+
+    let private modelSignatureSourceWithComment comment =
+        appendSignatureComment modelSignatureSource comment
+
+    let private signatureModelSignatureSourceWithComment comment =
+        appendSignatureComment signatureModelSignatureSource comment
 
     let private consumerSource = """
 namespace Fs1023Consumer
@@ -515,6 +561,25 @@ module UseProvided =
 
         File.WriteAllText(path, contents)
 
+    let private configureProviderLog tempDir =
+        let logPath = Path.Combine(tempDir, "provider.log")
+        let previous = Environment.GetEnvironmentVariable("FS1023_PROVIDER_LOG")
+        Environment.SetEnvironmentVariable("FS1023_PROVIDER_LOG", logPath)
+        if File.Exists(logPath) then
+            File.Delete(logPath)
+
+        logPath,
+        { new IDisposable with
+            member _.Dispose() = Environment.SetEnvironmentVariable("FS1023_PROVIDER_LOG", previous) }
+
+    let private countProviderRuns logPath =
+        if File.Exists(logPath) then
+            File.ReadLines(logPath)
+            |> Seq.filter (fun line -> line.Contains("[fs1023][provider] define-start"))
+            |> Seq.length
+        else
+            0
+
     let private tyconRefProperty =
         lazy (
             typeof<FSharpEntity>.GetProperty(
@@ -703,17 +768,11 @@ module UseProvided =
         let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(tempDir) |> ignore
 
-        let providerLogPath = Path.Combine(tempDir, "provider.log")
-        let previousProviderLogSetting = Environment.GetEnvironmentVariable("FS1023_PROVIDER_LOG")
-        Environment.SetEnvironmentVariable("FS1023_PROVIDER_LOG", providerLogPath)
-
-        let restoreProviderLogEnv () =
-            Environment.SetEnvironmentVariable("FS1023_PROVIDER_LOG", previousProviderLogSetting)
+        let providerLogPath, restoreProviderLogEnv = configureProviderLog tempDir
+        use _restoreProviderLog = restoreProviderLogEnv
 
         try
-            if File.Exists(providerLogPath) then
-                File.Delete(providerLogPath)
-
+            
             let providerPath = Path.Combine(tempDir, "Fs1023Provider.fs")
             let providerDll = Path.Combine(tempDir, "Fs1023Provider.dll")
 
@@ -744,21 +803,13 @@ module UseProvided =
                 { checker.GetProjectOptionsFromCommandLineArgs(projectFile, projectArgs) with
                     SourceFiles = [| modelPath; consumerPath |] }
 
-            let providerRunCount () =
-                if File.Exists(providerLogPath) then
-                    File.ReadLines(providerLogPath)
-                    |> Seq.filter (fun line -> line.Contains("[fs1023][provider] define-start"))
-                    |> Seq.length
-                else
-                    0
-
             let checkProject () = checker.ParseAndCheckProject(projectOptions) |> Async.RunImmediate
 
             let initialResults = checkProject()
 
             ensureSuccess initialResults.Diagnostics
 
-            let initialProviderRuns = providerRunCount()
+            let initialProviderRuns = countProviderRuns providerLogPath
             Assert.True(initialProviderRuns > 0, "Expected provider to run at least once during the initial compile.")
 
             let dependencyFiles =
@@ -782,12 +833,79 @@ module UseProvided =
             Assert.True(errors.Length > 0, "Expected type provider to invalidate generated members after source change.")
             Assert.True(errors |> Array.exists (fun e -> e.Message.Contains "Value"), "Expected missing member error referencing 'Value'.")
 
-            let rerunCount = providerRunCount()
+            let rerunCount = countProviderRuns providerLogPath
             Assert.True(
                 rerunCount > initialProviderRuns,
                 sprintf "Expected provider to re-run after source change (initial=%d, updated=%d)." initialProviderRuns rerunCount)
         finally
-            restoreProviderLogEnv()
+            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+                printfn "[fs1023] preserving temp dir %s" tempDir
+            else
+                try Directory.Delete(tempDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``type provider re-runs when signature file changes`` () =
+        let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(tempDir) |> ignore
+
+        let providerLogPath, restoreProviderLogEnv = configureProviderLog tempDir
+        use _restoreProviderLog = restoreProviderLogEnv
+
+        try
+            let providerPath = Path.Combine(tempDir, "Fs1023Provider.fs")
+            let providerDll = Path.Combine(tempDir, "Fs1023Provider.dll")
+
+            writeFile providerPath providerSource
+
+            let providerArgs =
+                Array.append
+                    (mkProjectCommandLineArgs(providerDll, [ providerPath ]))
+                    [| "-r:" + providedTypesAssembly |]
+
+            compile providerArgs
+
+            let modelSignaturePath = Path.Combine(tempDir, "SignatureModel.fsi")
+            let modelPath = Path.Combine(tempDir, "SignatureModel.fs")
+            let consumerPath = Path.Combine(tempDir, "SignatureConsumer.fs")
+
+            writeFile modelSignaturePath signatureModelSignatureSource
+            writeFile modelPath signatureModelImplementationSource
+            writeFile consumerPath signatureConsumerSource
+
+            let outputDll = Path.Combine(tempDir, "Consumer.dll")
+            let projectFile = Path.Combine(tempDir, "Consumer.fsproj")
+
+            let projectArgs =
+                Array.append
+                    (mkProjectCommandLineArgs(outputDll, [ modelSignaturePath; modelPath; consumerPath ]))
+                    [| "-r:" + providerDll |]
+
+            let projectOptions =
+                { checker.GetProjectOptionsFromCommandLineArgs(projectFile, projectArgs) with
+                    SourceFiles = [| modelSignaturePath; modelPath; consumerPath |] }
+
+            let checkProject () = checker.ParseAndCheckProject(projectOptions) |> Async.RunImmediate
+
+            let initialResults = checkProject()
+            ensureSuccess initialResults.Diagnostics
+
+            let initialProviderRuns = countProviderRuns providerLogPath
+            Assert.True(initialProviderRuns > 0, "Expected provider to run at least once during the initial compile.")
+            Assert.Contains(modelSignaturePath |> getFullPath, initialResults.DependencyFiles |> Array.map getFullPath)
+
+            // Modify only the signature file (add a comment) to trigger invalidation.
+            let updatedSignature = signatureModelSignatureSourceWithComment("signature tweak")
+            writeFile modelSignaturePath updatedSignature
+            checker.NotifyFileChanged(modelSignaturePath, projectOptions) |> Async.RunImmediate
+
+            let updatedResults = checkProject()
+            ensureSuccess updatedResults.Diagnostics
+
+            let rerunCount = countProviderRuns providerLogPath
+            Assert.True(
+                rerunCount > initialProviderRuns,
+                sprintf "Expected provider to re-run after signature change (initial=%d, updated=%d)." initialProviderRuns rerunCount)
+        finally
             if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
                 printfn "[fs1023] preserving temp dir %s" tempDir
             else
@@ -1153,7 +1271,7 @@ module UseProvided =
                     let restParam = mapParameters.[1]
                     Assert.Equal(typeof<string[]>, restParam.ParameterType)
                     let hasParamArray =
-                        restParam.GetCustomAttributes(typeof<ParamArrayAttribute>, inherit = false)
+                        restParam.GetCustomAttributes(typeof<ParamArrayAttribute>, false)
                         |> Array.isEmpty
                         |> not
                     Assert.True(hasParamArray, "Expected rest parameter to carry ParamArrayAttribute.")
@@ -1173,7 +1291,7 @@ module UseProvided =
                     let literalParam = optionalLiteralMethod.GetParameters() |> Array.exactlyOne
                     Assert.True(literalParam.IsOptional, "Expected OptionalLiteral parameter to be optional.")
                     Assert.True(literalParam.HasDefaultValue, "Expected OptionalLiteral parameter to expose a default value.")
-                    Assert.Equal(42, literalParam.DefaultValue)
+                    Assert.Equal(42, literalParam.DefaultValue :?> int)
                     Assert.Equal(typeof<int>, literalParam.ParameterType)
 
                 [ typeof<int>; typeof<string> ] |> List.iter assertForType

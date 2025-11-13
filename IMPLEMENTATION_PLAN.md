@@ -172,6 +172,7 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 
 - ✅ `TypeReflectionBuilder` maintains per-projection dependency scopes; callers can capture the visited `TyconRef`s via `CaptureTypeDependencies`, and `TcStaticConstantParameter` forwards them to `RecordTypeDependency`.
 - ✅ **[Tests]** Added `type provider re-runs when source type changes` (and expanded it to count provider log entries) to prove that editing `Fs1023Consumer.Model` forces `Fs1023Provider` to re-run and that incremental builds observe the dependency via `TypeReflectionBuilder`. The test also confirms the dependency file list includes the model source.
+- ✅ **[Tests]** Added `type provider re-runs when signature file changes`, which introduces paired `.fsi`/`.fs` inputs under `Fs1023Signature` and asserts that mutating only the signature file triggers provider re-execution, increments the `[fs1023][provider] define-start` count, and records the `.fsi` path in `DependencyFiles`.
 
 ### 2.3 Diagnostics
 
