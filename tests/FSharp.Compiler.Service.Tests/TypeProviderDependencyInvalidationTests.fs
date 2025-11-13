@@ -703,7 +703,17 @@ module UseProvided =
         let tempDir = Path.Combine(Path.GetTempPath(), "fs1023-" + Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(tempDir) |> ignore
 
+        let providerLogPath = Path.Combine(tempDir, "provider.log")
+        let previousProviderLogSetting = Environment.GetEnvironmentVariable("FS1023_PROVIDER_LOG")
+        Environment.SetEnvironmentVariable("FS1023_PROVIDER_LOG", providerLogPath)
+
+        let restoreProviderLogEnv () =
+            Environment.SetEnvironmentVariable("FS1023_PROVIDER_LOG", previousProviderLogSetting)
+
         try
+            if File.Exists(providerLogPath) then
+                File.Delete(providerLogPath)
+
             let providerPath = Path.Combine(tempDir, "Fs1023Provider.fs")
             let providerDll = Path.Combine(tempDir, "Fs1023Provider.dll")
 
@@ -734,11 +744,22 @@ module UseProvided =
                 { checker.GetProjectOptionsFromCommandLineArgs(projectFile, projectArgs) with
                     SourceFiles = [| modelPath; consumerPath |] }
 
+            let providerRunCount () =
+                if File.Exists(providerLogPath) then
+                    File.ReadLines(providerLogPath)
+                    |> Seq.filter (fun line -> line.Contains("[fs1023][provider] define-start"))
+                    |> Seq.length
+                else
+                    0
+
             let checkProject () = checker.ParseAndCheckProject(projectOptions) |> Async.RunImmediate
 
             let initialResults = checkProject()
 
             ensureSuccess initialResults.Diagnostics
+
+            let initialProviderRuns = providerRunCount()
+            Assert.True(initialProviderRuns > 0, "Expected provider to run at least once during the initial compile.")
 
             let dependencyFiles =
                 initialResults.DependencyFiles
@@ -760,7 +781,13 @@ module UseProvided =
 
             Assert.True(errors.Length > 0, "Expected type provider to invalidate generated members after source change.")
             Assert.True(errors |> Array.exists (fun e -> e.Message.Contains "Value"), "Expected missing member error referencing 'Value'.")
+
+            let rerunCount = providerRunCount()
+            Assert.True(
+                rerunCount > initialProviderRuns,
+                sprintf "Expected provider to re-run after source change (initial=%d, updated=%d)." initialProviderRuns rerunCount)
         finally
+            restoreProviderLogEnv()
             if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
                 printfn "[fs1023] preserving temp dir %s" tempDir
             else

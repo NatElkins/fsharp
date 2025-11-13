@@ -171,7 +171,7 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 ### 2.2 Record dependency stamps
 
 - ✅ `TypeReflectionBuilder` maintains per-projection dependency scopes; callers can capture the visited `TyconRef`s via `CaptureTypeDependencies`, and `TcStaticConstantParameter` forwards them to `RecordTypeDependency`.
-- **[Tests]** Still to do: add a regression where mutating an input type triggers provider re-execution to guard the new plumbing.
+- ✅ **[Tests]** Added `type provider re-runs when source type changes` (and expanded it to count provider log entries) to prove that editing `Fs1023Consumer.Model` forces `Fs1023Provider` to re-run and that incremental builds observe the dependency via `TypeReflectionBuilder`. The test also confirms the dependency file list includes the model source.
 
 ### 2.3 Diagnostics
 
