@@ -6,6 +6,7 @@ open System.Reflection
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
+open System.Collections.Immutable
 open System.Text
 open Xunit
 open FSharp.Compiler.AbstractIL.IL
@@ -73,6 +74,31 @@ module FSharpDeltaMetadataWriterTests =
         Array.init MetadataTokens.TableCount (fun i ->
             let table = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte i)
             reader.GetTableRowCount table)
+
+    let private withMetadataReader (metadata: byte[]) (action: MetadataReader -> unit) =
+        use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange metadata)
+        let reader = provider.GetMetadataReader()
+        action reader
+
+    let private assertTableCountsMatch metadata (expected: int[]) =
+        withMetadataReader metadata (fun reader ->
+            for i = 0 to expected.Length - 1 do
+                let table = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte i)
+                let actual = reader.GetTableRowCount table
+                Assert.Equal(expected.[i], actual))
+
+    let private assertBitMasksMatch (bitMasks: TableBitMasks) (rowCounts: int[]) =
+        let mutable validLow = 0
+        let mutable validHigh = 0
+        for tableIndex = 0 to rowCounts.Length - 1 do
+            if rowCounts.[tableIndex] <> 0 then
+                if tableIndex < 32 then
+                    validLow <- validLow ||| (1 <<< tableIndex)
+                else
+                    validHigh <- validHigh ||| (1 <<< (tableIndex - 32))
+
+        Assert.Equal(validLow, bitMasks.ValidLow)
+        Assert.Equal(validHigh, bitMasks.ValidHigh)
 
     [<Fact>]
     let ``metadata writer emits property rows`` () =
@@ -180,6 +206,8 @@ module FSharpDeltaMetadataWriterTests =
         Assert.True(metadataDelta.Metadata.Length > 0)
         Assert.Contains("Message", Encoding.UTF8.GetString(metadataDelta.StringHeap))
         assertTableStreamMatches metadataDelta
+        assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
+        assertBitMasksMatch metadataDelta.TableBitMasks metadataDelta.TableRowCounts
 
     [<Fact>]
     let ``metadata root omits #JTD when no ENC tables are present`` () =
@@ -311,6 +339,8 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(1, tableCount TableIndex.MethodSemantics)
         Assert.Contains("OnChanged", Encoding.UTF8.GetString(metadataDelta.StringHeap))
         assertTableStreamMatches metadataDelta
+        assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
+        assertBitMasksMatch metadataDelta.TableBitMasks metadataDelta.TableRowCounts
 
     [<Fact>]
     let ``metadata writer emits async method rows`` () =
@@ -321,6 +351,10 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(0, metadataDelta.TableRowCounts.[int TableIndex.Param])
         Assert.True(metadataDelta.Metadata.Length > 0)
         assertTableStreamMatches metadataDelta
+        assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
+        assertBitMasksMatch metadataDelta.TableBitMasks metadataDelta.TableRowCounts
+        assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
+        assertBitMasksMatch metadataDelta.TableBitMasks metadataDelta.TableRowCounts
 
     [<Fact>]
     let ``metadata writer reports small index sizes for property delta`` () =
