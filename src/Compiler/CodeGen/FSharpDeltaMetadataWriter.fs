@@ -66,6 +66,7 @@ type MetadataDelta =
         EncMap: (TableIndex * int) array
         TableRowCounts: int[]
         HeapSizes: MetadataHeapSizes
+        HeapOffsets: MetadataHeapOffsets
         Tables: TableRows
         TableBitMasks: TableBitMasks
         IndexSizes: DeltaIndexSizing.CodedIndexSizes
@@ -120,6 +121,7 @@ let emitWithUserStrings
           EncMap = Array.empty
           TableRowCounts = emptySizes.RowCounts
           HeapSizes = emptySizes.HeapSizes
+          HeapOffsets = heapOffsets
           Tables = emptyMirror.TableRows
           TableBitMasks = emptySizes.BitMasks
           IndexSizes = emptySizes.IndexSizes
@@ -417,6 +419,7 @@ let emitWithUserStrings
           EncMap = encMap |> Seq.toArray |> Array.map (fun struct (a, b) -> (a, b))
           TableRowCounts = tableRowCounts
           HeapSizes = heapSizes
+          HeapOffsets = heapOffsets
           Tables = tableMirror.TableRows
           TableBitMasks = tableBitMasks
           IndexSizes = indexSizes
