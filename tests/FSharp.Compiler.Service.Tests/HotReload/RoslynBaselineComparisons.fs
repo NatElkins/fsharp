@@ -58,11 +58,12 @@ module RoslynBaselineComparisons =
     [<Fact>]
     let ``property multi-generation delta rows match Roslyn baseline`` () =
         let baselines = loadRoslynTables ()
-        let roslynRows = baselines |> Map.tryFind "Property" |> Option.defaultWith (fun () -> failwith "Roslyn property baseline missing")
+        let roslynAdd = baselines |> Map.tryFind "Property" |> Option.defaultWith (fun () -> failwith "Roslyn property baseline missing")
+        let roslynUpdate = baselines |> Map.tryFind "PropertyUpdate" |> Option.defaultWith (fun () -> failwith "Roslyn property update baseline missing")
 
         let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
-        assertMatches roslynRows artifacts.Generation1.Metadata
-        assertMatches roslynRows artifacts.Generation2.Metadata
+        assertMatches roslynAdd artifacts.Generation1.Metadata
+        assertMatches roslynUpdate artifacts.Generation2.Metadata
 
     [<Fact>]
     let ``event delta row counts match Roslyn baseline`` () =
