@@ -74,3 +74,23 @@ module RoslynBaselineComparisons =
         Assert.Equal(roslynEncLog, encLog)
         Assert.Equal(roslynEncMap, encMap)
         Assert.Equal(roslynMethodDef, methodDef)
+
+    [<Fact>]
+    let ``async delta row counts match Roslyn baseline`` () =
+        let baselines = loadRoslynTables ()
+        let roslynAsync = baselines |> List.tryItem 2 |> Option.defaultWith (fun () -> failwith "Roslyn async baseline missing")
+
+        let roslynEncLog = roslynAsync.rows.['EncLog']
+        let roslynEncMap = roslynAsync.rows.['EncMap']
+        let roslynMethodDef = roslynAsync.rows.['MethodDef']
+
+        let asyncDelta = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
+        let deltaBytes = asyncDelta.Delta.Metadata
+
+        let encLog = MetadataHelpers.countRows deltaBytes TableIndex.EncLog
+        let encMap = MetadataHelpers.countRows deltaBytes TableIndex.EncMap
+        let methodDef = MetadataHelpers.countRows deltaBytes TableIndex.MethodDef
+
+        Assert.Equal(roslynEncLog, encLog)
+        Assert.Equal(roslynEncMap, encMap)
+        Assert.Equal(roslynMethodDef, methodDef)
