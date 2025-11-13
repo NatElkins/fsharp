@@ -15,6 +15,27 @@ module private MetadataHelpers =
         use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange metadata)
         provider.GetMetadataReader().GetTableRowCount(table)
 
+    let tryFindTableIndex (name: string) : TableIndex option =
+        match name with
+        | "Module" -> Some TableIndex.Module
+        | "TypeRef" -> Some TableIndex.TypeRef
+        | "TypeDef" -> Some TableIndex.TypeDef
+        | "Field" -> Some TableIndex.Field
+        | "MethodDef" -> Some TableIndex.MethodDef
+        | "Param" -> Some TableIndex.Param
+        | "MemberRef" -> Some TableIndex.MemberRef
+        | "StandAloneSig" -> Some TableIndex.StandAloneSig
+        | "Property" -> Some TableIndex.Property
+        | "PropertyMap" -> Some TableIndex.PropertyMap
+        | "Event" -> Some TableIndex.Event
+        | "EventMap" -> Some TableIndex.EventMap
+        | "MethodSemantics" -> Some TableIndex.MethodSemantics
+        | "TypeSpec" -> Some TableIndex.TypeSpec
+        | "AssemblyRef" -> Some TableIndex.AssemblyRef
+        | "EncLog" -> Some TableIndex.EncLog
+        | "EncMap" -> Some TableIndex.EncMap
+        | _ -> None
+
 module RoslynBaselineComparisons =
 
     type RoslynBaselines = Map<string, Map<string, int>>
@@ -56,16 +77,14 @@ module RoslynBaselineComparisons =
         Assert.Equal(2, getRow delta2 "MethodDef")
 
     let private assertMatches (expected: Map<string,int>) (deltaBytes: byte[]) =
-        let assertTable key tableIndex =
-            let actual = MetadataHelpers.countRows deltaBytes tableIndex
-            let budget = getRow expected key
-            Assert.True(
-                actual <= budget,
-                sprintf "Table %A exceeded Roslyn baseline: actual=%d baseline=%d" tableIndex actual budget)
-
-        assertTable "EncLog" TableIndex.EncLog
-        assertTable "EncMap" TableIndex.EncMap
-        assertTable "MethodDef" TableIndex.MethodDef
+        for KeyValue(key, budget) in expected do
+            match MetadataHelpers.tryFindTableIndex key with
+            | Some tableIndex ->
+                let actual = MetadataHelpers.countRows deltaBytes tableIndex
+                Assert.True(
+                    actual <= budget,
+                    sprintf "Table %A exceeded Roslyn baseline: actual=%d baseline=%d" tableIndex actual budget)
+            | None -> ()
 
     [<Fact>]
     let ``property delta row counts do not exceed Roslyn baseline`` () =
