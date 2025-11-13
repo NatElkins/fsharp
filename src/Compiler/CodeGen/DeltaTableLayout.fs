@@ -9,34 +9,56 @@ type TableBitMasks =
       SortedLow: int
       SortedHigh: int }
 
-let private sortedMaskLowBase = 0x3301fa00
-let private sortedMaskHighBase = 0x00000200
+let private sortedTypeSystemTables =
+    [ TableIndex.InterfaceImpl
+      TableIndex.Constant
+      TableIndex.CustomAttribute
+      TableIndex.FieldMarshal
+      TableIndex.DeclSecurity
+      TableIndex.ClassLayout
+      TableIndex.FieldLayout
+      TableIndex.MethodSemantics
+      TableIndex.MethodImpl
+      TableIndex.ImplMap
+      TableIndex.FieldRva
+      TableIndex.NestedClass
+      TableIndex.GenericParam
+      TableIndex.GenericParamConstraint ]
 
-let private sortedMaskHighExtras (tableRowCounts: int[]) =
-    let hasGenericParam = tableRowCounts.[int TableIndex.GenericParam] <> 0
-    let hasGenericParamConstraint = tableRowCounts.[int TableIndex.GenericParamConstraint] <> 0
+let private sortedDebugTables =
+    [ TableIndex.LocalScope
+      TableIndex.StateMachineMethod
+      TableIndex.CustomDebugInformation ]
 
-    let mutable mask = sortedMaskHighBase
-    if hasGenericParam then
-        mask <- mask ||| 0x00000400
+let private maskForTables (tables: TableIndex list) =
+    tables
+    |> List.fold
+        (fun acc tableIndex ->
+            acc ||| (1UL <<< int tableIndex))
+        0UL
 
-    if hasGenericParamConstraint then
-        mask <- mask ||| 0x00001000
+let private sortedTypeSystemMask = maskForTables sortedTypeSystemTables
+let private sortedDebugMask = maskForTables sortedDebugTables
 
-    mask
+let private toLow (mask: uint64) = int (mask &&& 0xFFFFFFFFUL)
+let private toHigh (mask: uint64) = int ((mask >>> 32) &&& 0xFFFFFFFFUL)
 
-let computeBitMasks (tableRowCounts: int[]) : TableBitMasks =
-    let mutable validLow = 0
-    let mutable validHigh = 0
+let computeBitMasks (tableRowCounts: int[]) (isEncDelta: bool) : TableBitMasks =
+    let presentMask =
+        tableRowCounts
+        |> Array.mapi (fun index count -> if count <> 0 then 1UL <<< index else 0UL)
+        |> Array.fold (|||) 0UL
 
-    for tableIndex = 0 to tableRowCounts.Length - 1 do
-        if tableRowCounts.[tableIndex] <> 0 then
-            if tableIndex < 32 then
-                validLow <- validLow ||| (1 <<< tableIndex)
-            else
-                validHigh <- validHigh ||| (1 <<< (tableIndex - 32))
+    let typeSystemMask =
+        if isEncDelta then
+            // Roslyn clears CustomAttribute for EnC deltas to mirror MetadataSizes.
+            sortedTypeSystemMask &&& ~~~(1UL <<< int TableIndex.CustomAttribute)
+        else
+            sortedTypeSystemMask
 
-    { ValidLow = validLow
-      ValidHigh = validHigh
-      SortedLow = sortedMaskLowBase
-      SortedHigh = sortedMaskHighExtras tableRowCounts }
+    let sortedMask = typeSystemMask ||| (presentMask &&& sortedDebugMask)
+
+    { ValidLow = toLow presentMask
+      ValidHigh = toHigh presentMask
+      SortedLow = toLow sortedMask
+      SortedHigh = toHigh sortedMask }

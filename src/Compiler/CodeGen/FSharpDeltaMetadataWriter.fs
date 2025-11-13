@@ -88,6 +88,7 @@ let emitWithUserStrings
     (userStringUpdates: (int * int * string) list)
     (updates: MethodMetadataUpdate list)
     (heapOffsets: MetadataHeapOffsets)
+    (externalRowCounts: int[])
     : MetadataDelta =
     if shouldTraceMetadata () then
         printfn "[fsharp-hotreload][metadata-writer] emit invoked updates=%d" (List.length updates)
@@ -101,9 +102,15 @@ let emitWithUserStrings
                 row.Name
                 row.IsAdded
                 offset
+    let normalizedExternalRowCounts =
+        if externalRowCounts.Length = MetadataTokens.TableCount then
+            externalRowCounts
+        else
+            Array.zeroCreate MetadataTokens.TableCount
+
     if List.isEmpty updates then
         let emptyMirror = DeltaMetadataTables(heapOffsets)
-        let emptySizes = DeltaMetadataSerializer.computeMetadataSizes emptyMirror
+        let emptySizes = DeltaMetadataSerializer.computeMetadataSizes emptyMirror normalizedExternalRowCounts
 
         { Metadata = Array.empty
           StringHeap = Array.empty
@@ -368,7 +375,7 @@ let emitWithUserStrings
         for struct (tableIndex, rowId) in encMap do
             tableMirror.AddEncMapRow(tableIndex, rowId)
 
-        let metadataSizes = DeltaMetadataSerializer.computeMetadataSizes tableMirror
+        let metadataSizes = DeltaMetadataSerializer.computeMetadataSizes tableMirror normalizedExternalRowCounts
         let tableRowCounts = metadataSizes.RowCounts
         let tableBitMasks = metadataSizes.BitMasks
         let heapSizes = metadataSizes.HeapSizes
@@ -430,6 +437,7 @@ let emit
     (methodSemanticsRows: MethodSemanticsMetadataUpdate list)
     (updates: MethodMetadataUpdate list)
     (heapOffsets: MetadataHeapOffsets)
+    (externalRowCounts: int[])
     : MetadataDelta =
     emitWithUserStrings
         metadataBuilder
@@ -447,3 +455,4 @@ let emit
         ([] : (int * int * string) list)
         updates
         heapOffsets
+        externalRowCounts

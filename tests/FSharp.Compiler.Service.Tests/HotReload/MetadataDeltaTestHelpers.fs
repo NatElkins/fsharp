@@ -78,6 +78,11 @@ module internal MetadataDeltaTestHelpers =
             declaringName = expectedType
             && metadataReader.GetString(methodDef.Name) = methodName)
 
+    let private getRowCounts (metadataReader: MetadataReader) =
+        Array.init MetadataTokens.TableCount (fun i ->
+            let table = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte i)
+            metadataReader.GetTableRowCount table)
+
     let private inspectDeltaMetadata label (bytes: byte[]) =
         try
             use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(bytes))
@@ -677,6 +682,7 @@ module internal MetadataDeltaTestHelpers =
                 []
                 updates
                 heapOffsets
+                (getRowCounts metadataReader)
 
         inspectDeltaMetadata "delta" metadataDelta.Metadata
 
@@ -803,6 +809,7 @@ module internal MetadataDeltaTestHelpers =
                 []
                 updates
                 heapOffsets
+                (getRowCounts metadataReader)
 
         { BaselineBytes = assemblyBytes
           Delta = metadataDelta }

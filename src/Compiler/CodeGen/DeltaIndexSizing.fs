@@ -26,37 +26,96 @@ type CodedIndexSizes =
 let private tableSize (tableRowCounts: int[]) (table: TableIndex) =
     tableRowCounts.[int table]
 
-let private isSimpleIndexBig tableRowCounts table =
-    tableSize tableRowCounts table >= 0x10000
+let private totalRowCount
+    (tableRowCounts: int[])
+    (externalRowCounts: int[])
+    (table: TableIndex)
+    =
+    let index = int table
+    let external =
+        if externalRowCounts.Length = tableRowCounts.Length then
+            externalRowCounts.[index]
+        else
+            0
+    tableRowCounts.[index] + external
 
-let private codedBigness tagBits tableRowCounts tables =
+let private referenceExceedsLimit
+    (tableRowCounts: int[])
+    (externalRowCounts: int[])
+    (maxValueExclusive: int)
+    (tables: TableIndex[])
+    =
     tables
-    |> Array.exists (fun table -> tableSize tableRowCounts table >= (0x10000 >>> tagBits))
+    |> Array.exists (fun table ->
+        totalRowCount tableRowCounts externalRowCounts table >= maxValueExclusive)
 
-let compute (tableRowCounts: int[]) (heapSizes: MetadataHeapSizes) : CodedIndexSizes =
-    let simpleIndexBig = Array.zeroCreate<bool> MetadataTokens.TableCount
-    for index = 0 to tableRowCounts.Length - 1 do
-        simpleIndexBig.[index] <- tableRowCounts.[index] >= 0x10000
+let private codedBigness
+    (tagBits: int)
+    (tableRowCounts: int[])
+    (externalRowCounts: int[])
+    (isCompressed: bool)
+    (tables: TableIndex[])
+    =
+    if not isCompressed then
+        true
+    else
+        let limit = pown 2 (16 - tagBits)
+        referenceExceedsLimit tableRowCounts externalRowCounts limit tables
+
+let private isSimpleIndexBig
+    (tableRowCounts: int[])
+    (externalRowCounts: int[])
+    (isCompressed: bool)
+    (tableIndex: int)
+    =
+    if not isCompressed then
+        true
+    else
+        let local =
+            if tableIndex < tableRowCounts.Length then tableRowCounts.[tableIndex] else 0
+        let external =
+            if tableIndex < externalRowCounts.Length then externalRowCounts.[tableIndex] else 0
+        local + external >= 0x10000
+
+let compute
+    (tableRowCounts: int[])
+    (externalRowCounts: int[])
+    (heapSizes: MetadataHeapSizes)
+    (isEncDelta: bool)
+    : CodedIndexSizes =
+
+    let isCompressed = not isEncDelta
+
+    let stringsBig = (not isCompressed) || heapSizes.StringHeapSize >= 0x10000
+    let blobsBig = (not isCompressed) || heapSizes.BlobHeapSize >= 0x10000
+    let guidsBig = (not isCompressed) || heapSizes.GuidHeapSize >= 0x10000
+
+    let simpleIndexBig =
+        Array.init MetadataTokens.TableCount (fun i ->
+            isSimpleIndexBig tableRowCounts externalRowCounts isCompressed i)
+
+    let coded tag tables =
+        codedBigness tag tableRowCounts externalRowCounts isCompressed tables
 
     let typeDefOrRefBig =
-        codedBigness 2 tableRowCounts
+        coded 2
             [| TableIndex.TypeDef
                TableIndex.TypeRef
                TableIndex.TypeSpec |]
 
     let typeOrMethodDefBig =
-        codedBigness 1 tableRowCounts
+        coded 1
             [| TableIndex.TypeDef
                TableIndex.MethodDef |]
 
     let hasConstantBig =
-        codedBigness 2 tableRowCounts
+        coded 2
             [| TableIndex.Field
                TableIndex.Param
                TableIndex.Property |]
 
     let hasCustomAttributeBig =
-        codedBigness 5 tableRowCounts
+        coded 5
             [| TableIndex.MethodDef
                TableIndex.Field
                TableIndex.TypeRef
@@ -81,59 +140,59 @@ let compute (tableRowCounts: int[]) (heapSizes: MetadataHeapSizes) : CodedIndexS
                TableIndex.MethodSpec |]
 
     let hasFieldMarshalBig =
-        codedBigness 1 tableRowCounts
+        coded 1
             [| TableIndex.Field
                TableIndex.Param |]
 
     let hasDeclSecurityBig =
-        codedBigness 2 tableRowCounts
+        coded 2
             [| TableIndex.TypeDef
                TableIndex.MethodDef
                TableIndex.Assembly |]
 
     let memberRefParentBig =
-        codedBigness 3 tableRowCounts
+        coded 3
             [| TableIndex.TypeRef
                TableIndex.ModuleRef
                TableIndex.MethodDef
                TableIndex.TypeSpec |]
 
     let hasSemanticsBig =
-        codedBigness 1 tableRowCounts
+        coded 1
             [| TableIndex.Event
                TableIndex.Property |]
 
     let methodDefOrRefBig =
-        codedBigness 1 tableRowCounts
+        coded 1
             [| TableIndex.MethodDef
                TableIndex.MemberRef |]
 
     let memberForwardedBig =
-        codedBigness 1 tableRowCounts
+        coded 1
             [| TableIndex.Field
                TableIndex.MethodDef |]
 
     let implementationBig =
-        codedBigness 2 tableRowCounts
+        coded 2
             [| TableIndex.File
                TableIndex.AssemblyRef
                TableIndex.ExportedType |]
 
     let customAttributeTypeBig =
-        codedBigness 3 tableRowCounts
+        coded 3
             [| TableIndex.MethodDef
                TableIndex.MemberRef |]
 
     let resolutionScopeBig =
-        codedBigness 2 tableRowCounts
+        coded 2
             [| TableIndex.Module
                TableIndex.ModuleRef
                TableIndex.AssemblyRef
                TableIndex.TypeRef |]
 
-    { StringsBig = heapSizes.StringHeapSize >= 0x10000
-      GuidsBig = heapSizes.GuidHeapSize >= 0x10000
-      BlobsBig = heapSizes.BlobHeapSize >= 0x10000
+    { StringsBig = stringsBig
+      GuidsBig = guidsBig
+      BlobsBig = blobsBig
       SimpleIndexBig = simpleIndexBig
       TypeDefOrRefBig = typeDefOrRefBig
       TypeOrMethodDefBig = typeOrMethodDefBig

@@ -1331,6 +1331,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 userStringEntries
                 methodUpdates
                 baselineHeapOffsets
+                request.Baseline.Metadata.TableRowCounts
 
         let streams = builder.Build()
 

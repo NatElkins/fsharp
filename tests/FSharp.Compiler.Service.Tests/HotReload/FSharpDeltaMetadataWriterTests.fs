@@ -69,6 +69,11 @@ module FSharpDeltaMetadataWriterTests =
         else
             ((bitmask.ValidHigh >>> (index - 32)) &&& 1) <> 0
 
+    let private getRowCounts (reader: MetadataReader) =
+        Array.init MetadataTokens.TableCount (fun i ->
+            let table = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte i)
+            reader.GetTableRowCount table)
+
     [<Fact>]
     let ``metadata writer emits property rows`` () =
         let moduleDef = createPropertyModule None ()
@@ -158,6 +163,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 updates
                 MetadataHeapOffsets.Zero
+                (getRowCounts metadataReader)
 
         let tableCount index = metadataDelta.TableRowCounts.[ int index ]
 
@@ -179,7 +185,8 @@ module FSharpDeltaMetadataWriterTests =
     let ``metadata root omits #JTD when no ENC tables are present`` () =
         let mirror = DeltaMetadataTables MetadataHeapOffsets.Zero
         mirror.AddModuleRow("Empty.dll", System.Guid.NewGuid(), System.Guid.NewGuid(), System.Guid.NewGuid())
-        let sizes = DeltaMetadataSerializer.computeMetadataSizes mirror
+        let sizes =
+            DeltaMetadataSerializer.computeMetadataSizes mirror (Array.zeroCreate MetadataTokens.TableCount)
         let heaps = DeltaMetadataSerializer.buildHeapStreams mirror
         let tableInput : DeltaMetadataSerializer.DeltaTableSerializerInput =
             { Tables = mirror.TableRows
@@ -296,6 +303,7 @@ module FSharpDeltaMetadataWriterTests =
                 methodSemanticsRows
                 updates
                 MetadataHeapOffsets.Zero
+                (getRowCounts metadataReader)
 
         let tableCount index = metadataDelta.TableRowCounts.[int index]
         Assert.Equal(1, tableCount TableIndex.Event)
@@ -460,6 +468,9 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 updates
                 MetadataHeapOffsets.Zero
+                (getRowCounts metadataReader)
+                (getRowCounts metadataReader)
+                (getRowCounts metadataReader)
 
         Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
         Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.Param])

@@ -71,37 +71,23 @@ type DeltaMetadataSizes =
       IndexSizes: DeltaIndexSizing.CodedIndexSizes
       IsEncDelta: bool }
 
-let private promoteIndicesForEncDelta (sizes: DeltaIndexSizing.CodedIndexSizes) : DeltaIndexSizing.CodedIndexSizes =
-    let simpleIndexBig = Array.create MetadataTokens.TableCount true
-    { sizes with
-        StringsBig = true
-        GuidsBig = true
-        BlobsBig = true
-        SimpleIndexBig = simpleIndexBig
-        TypeDefOrRefBig = true
-        TypeOrMethodDefBig = true
-        HasConstantBig = true
-        HasCustomAttributeBig = true
-        HasFieldMarshalBig = true
-        HasDeclSecurityBig = true
-        MemberRefParentBig = true
-        HasSemanticsBig = true
-        MethodDefOrRefBig = true
-        MemberForwardedBig = true
-        ImplementationBig = true
-        CustomAttributeTypeBig = true
-        ResolutionScopeBig = true }
+let computeMetadataSizes (tableMirror: DeltaMetadataTables) (externalRowCounts: int[]) : DeltaMetadataSizes =
+    let normalizedExternal =
+        if externalRowCounts.Length = MetadataTokens.TableCount then
+            externalRowCounts
+        else
+            Array.zeroCreate MetadataTokens.TableCount
 
-let computeMetadataSizes (tableMirror: DeltaMetadataTables) : DeltaMetadataSizes =
     let rowCounts = tableMirror.TableRowCounts
     let heapSizes = tableMirror.HeapSizes
-    let bitMasks = DeltaTableLayout.computeBitMasks rowCounts
     let isEncDelta =
         rowCounts[int TableIndex.EncLog] > 0
         || rowCounts[int TableIndex.EncMap] > 0
+
+    let bitMasks = DeltaTableLayout.computeBitMasks rowCounts isEncDelta
+
     let indexSizes =
-        DeltaIndexSizing.compute rowCounts heapSizes
-        |> fun sizes -> if isEncDelta then promoteIndicesForEncDelta sizes else sizes
+        DeltaIndexSizing.compute rowCounts normalizedExternal heapSizes isEncDelta
 
     { RowCounts = rowCounts
       HeapSizes = heapSizes
