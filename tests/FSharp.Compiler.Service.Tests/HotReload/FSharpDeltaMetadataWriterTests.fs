@@ -556,9 +556,14 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 updates
                 MetadataHeapOffsets.Zero
+                (getRowCounts metadataReader)
 
         Assert.Equal(2, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
         Assert.Equal(2, metadataDelta.TableRowCounts.[int TableIndex.Param])
+        Assert.True(metadataDelta.Metadata.Length > 0)
+        assertTableStreamMatches metadataDelta
+        assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
+        assertBitMasksMatch metadataDelta.TableBitMasks metadataDelta.TableRowCounts
 
     [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for async methods`` () =
@@ -597,6 +602,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 updates
                 MetadataHeapOffsets.Zero
+                (getRowCounts metadataReader)
 
         Assert.Equal(2, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
         Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.Param])
