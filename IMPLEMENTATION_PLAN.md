@@ -393,3 +393,21 @@ This implementation plan intentionally leaves timelines blank but enumerates the
 - Performance baselines captured comparing `main` vs. `fs-1023` for typical IDE workloads, with regression deltas within agreed thresholds.
 
 ---
+
+## Session handoff — 13 Nov 2025 @ 14:40 UTC
+
+- **Completed this iteration**
+  - Added signature-only invalidation coverage (`type provider re-runs when signature file changes`) with fresh fixtures (`Fs1023Signature`). The test mutates only the `.fsi`, confirms the provider reruns (via `[fs1023][provider] define-start` counts), and verifies the signature path is recorded in `DependencyFiles`.
+  - Updated the architecture + plan docs to highlight that both implementation and signature edits are now under regression.
+- **Outstanding TODOs for next agent**
+  1. Phase 4.4 work: finish wiring IlxGen to consume the `ProvidedIlxMemberCatalog` for constructors/properties/events and ensure `/standalone` builds never consult provider IL. Start from `collectProvidedMembersForTycon` and `genProvidedMemberBinding` in `src/Compiler/CodeGen/IlxGen.fs`.
+  2. Phase 1 parity: `TastReflection` still lacks event exposure, `Module.GetMember` parity, and debugger-friendly display strings. See §1.1 “Remaining gaps”.
+  3. Once IlxGen emits every member, extend the Fs1023 regressions to inspect the emitted IL (Mono.Cecil reflection) so relocation bugs surface automatically.
+- **Testing / commands relied upon**
+  - `dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release --no-build --filter "DisplayName~type provider re-runs when source type changes"`
+  - `dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release --filter "DisplayName~type provider re-runs when signature file changes"`
+  - Set `FS1023_PROVIDER_LOG=<path>` plus `FS1023_TRACE=1`/`FS1023_KEEP_TEMP=1` when diagnosing; logs land under `/tmp/fs1023_trace.log` and `fs1023-*` temp directories printed by the tests.
+- **Lessons learned / context**
+  - Default-value assertions should cast to the expected CLR type (`ParameterInfo.DefaultValue :?> int`) to avoid xUnit overload ambiguity.
+  - When working on invalidation scenarios, the `[fs1023][provider] define-start` count is the most reliable signal that the provider actually re-ran.
+  - Keeping provider logs configurable (now via `configureProviderLog`) makes it easy to share repro artifacts without editing every test.
