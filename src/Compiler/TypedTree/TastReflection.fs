@@ -2381,17 +2381,41 @@ and [<DebuggerDisplay("{FullName}")>] ReflectAssembly(builder: TypeReflectionBui
             { new IDisposable with member _.Dispose() = stack.RemoveAt(stack.Count - 1) }
 
     let txTypeDef (declTyOpt: Type option) (inp: TyconRef) =
+        let isNested = Option.isSome declTyOpt
         txTable.Get inp.Stamp (fun () ->
             let stopwatch =
-                if builder.EnableProfiling then Stopwatch.StartNew()
+                if builder.EnableProfiling || builder.Fs1023TraceEnabled() then Stopwatch.StartNew()
                 else null
+            if builder.Fs1023TraceEnabled() then
+                builder.Fs1023TraceMessage(
+                    sprintf "[tastreflection] type-begin name=%s nested=%b" inp.LogicalName isNested)
+
             let typ = ReflectTypeDefinition(asm, declTyOpt, inp) :> System.Type
+
             let duration =
                 if isNull stopwatch then None
                 else
                     stopwatch.Stop()
                     Some stopwatch.Elapsed
             builder.NotifyTypeCreated duration
+
+            if builder.Fs1023TraceEnabled() then
+                let ctorCount =
+                    typ.GetConstructors(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Instance ||| BindingFlags.Static).Length
+                let methodCount =
+                    typ.GetMethods(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Instance ||| BindingFlags.Static).Length
+                let elapsedTicks =
+                    match duration with
+                    | Some span -> span.Ticks.ToString(CultureInfo.InvariantCulture)
+                    | None -> "n/a"
+
+                builder.Fs1023TraceMessage(
+                    sprintf "[tastreflection] type-end name=%s nested=%b ctorCount=%d methodCount=%d elapsedTicks=%s"
+                        inp.LogicalName
+                        isNested
+                        ctorCount
+                        methodCount
+                        elapsedTicks)
             typ)
 
     let manifestModule = lazy (ReflectModule(asm))
