@@ -1,0 +1,21 @@
+<Project>
+  <PropertyGroup>
+    <BUILDING_USING_DOTNET Condition="'$(BUILDING_USING_DOTNET)' == ''">true</BUILDING_USING_DOTNET>
+    <DISABLE_ARCADE Condition="'$(DISABLE_ARCADE)' == ''">true</DISABLE_ARCADE>
+    <IgnoreMibc>true</IgnoreMibc>
+    <FS1023CompilerDir Condition="'$(FS1023CompilerDir)' == ''">$(FS1023_COMPILER_DIR)</FS1023CompilerDir>
+    <WarningsNotAsErrors>FS0066;FS0760;FS3261</WarningsNotAsErrors>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(FS1023CompilerDir)' != ''">
+    <FscToolExe Condition="'$(FscToolExe)' == ''">dotnet</FscToolExe>
+    <DotnetFscCompilerPath Condition="'$(DotnetFscCompilerPath)' == ''">$(FS1023CompilerDir)/artifacts/bin/fsc/Release/net10.0/fsc.dll</DotnetFscCompilerPath>
+    <Fs1023CorePath Condition="'$(Fs1023CorePath)' == ''">$(FS1023CompilerDir)/artifacts/bin/FSharp.Core/Release/netstandard2.0/FSharp.Core.dll</Fs1023CorePath>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(Fs1023CorePath)' != ''">
+    <Reference Include="FSharp.Core">
+      <HintPath>$(Fs1023CorePath)</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>

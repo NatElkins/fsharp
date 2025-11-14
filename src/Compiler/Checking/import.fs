@@ -7,6 +7,7 @@ open System
 open System.Collections.Concurrent
 open System.Collections.Generic
 open System.Collections.Immutable
+open System.Diagnostics
 open System.IO
 open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras

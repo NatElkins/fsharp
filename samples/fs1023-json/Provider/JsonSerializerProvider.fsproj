@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
+    <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
+    <Nullable>enable</Nullable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="JsonSerializerProvider.fs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Fs1023CorePath)' == ''">
+    <PackageReference Include="FSharp.Core" Version="8.0.400" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../../../FSharp.TypeProviders.SDK/src/FSharp.TypeProviders.SDK.fsproj" />
+  </ItemGroup>
+
+  <Target Name="CopyTypeProviderRuntimeDependencies" AfterTargets="Build">
+    <ItemGroup>
+      <ProviderDependency Include="@(ReferenceCopyLocalPaths)" Condition="'%(Filename)%(Extension)' == 'FSharp.TypeProviders.SDK.dll'" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ProviderDependency)" DestinationFolder="$(IntermediateOutputPath)ref" SkipUnchangedFiles="true" Condition="@(ProviderDependency) != ''" />
+  </Target>
+</Project>

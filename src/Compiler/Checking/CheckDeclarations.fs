@@ -3242,6 +3242,8 @@ module EstablishTypeDefinitionCores =
             safeIter "method" methodInfos (fun (methodInfo: Tainted<ProvidedMethodInfo>) ->
                 if not (methodInfo.PUntaint((fun mi -> mi.IsConstructor), m)) then
                     let methodName = methodInfo.PUntaint((fun mi -> mi.Name), m)
+                    if fs1023Enabled () then
+                        fs1023Trace "[tp-generated-type] method %s publish-begin" methodName
 
                     let isPropertyAccessor =
                         methodName.StartsWith("get_", StringComparison.Ordinal)
@@ -3264,7 +3266,12 @@ module EstablishTypeDefinitionCores =
                         let returnTy =
                             importProvidedType (methodInfo.PApply((fun mi -> mi.ReturnType), m))
 
+                        if fs1023Enabled () then
+                            fs1023Trace "[tp-generated-type] method %s args=%d" methodName args.Length
+
                         let vref = addMemberVal methodName SynMemberKind.Member isStatic args returnTy binding
+                        if fs1023Enabled () then
+                            fs1023Trace "[tp-generated-type] method %s publish-succeeded" methodName
                         let key = methodInfo.PUntaint(id, m) :> obj
 
                         match eventAccessorMap.TryGetValue key with
