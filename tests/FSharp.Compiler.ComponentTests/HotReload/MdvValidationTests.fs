@@ -1218,6 +1218,16 @@ type EventDemo() =
             let expectedLiteral = Text.Encoding.Unicode.GetBytes "Property helper added message"
             Assert.True(containsSubsequence delta.Metadata expectedLiteral, "Expected metadata delta to contain added property literal.")
 
+            let containsPropertyName =
+                delta.UserStringUpdates
+                |> List.exists (fun (_, _, text) -> String.Equals(text, "Message", StringComparison.Ordinal))
+            Assert.False(containsPropertyName, "Property name should not be re-emitted into the user string heap when adding a property.")
+
+            let hasAddedLiteral =
+                delta.UserStringUpdates
+                |> List.exists (fun (_, _, text) -> text.Contains("Property helper added message", StringComparison.Ordinal))
+            Assert.True(hasAddedLiteral, "Expected user string updates to include the added property literal.")
+
             withMetadataReader delta.Metadata (fun reader ->
                 Assert.Equal(1, reader.GetTableRowCount TableIndex.Property)
                 Assert.Equal(1, reader.GetTableRowCount TableIndex.PropertyMap))
@@ -1345,6 +1355,16 @@ type EventDemo() =
 
             let expectedLiteral = Text.Encoding.Unicode.GetBytes "Event helper added payload"
             Assert.True(containsSubsequence delta.Metadata expectedLiteral, "Expected metadata delta to contain added event literal.")
+
+            let containsEventName =
+                delta.UserStringUpdates
+                |> List.exists (fun (_, _, text) -> String.Equals(text, "OnChanged", StringComparison.Ordinal))
+            Assert.False(containsEventName, "Event name should not be re-emitted into the user string heap when adding an event.")
+
+            let hasAddedLiteral =
+                delta.UserStringUpdates
+                |> List.exists (fun (_, _, text) -> text.Contains("Event helper added payload", StringComparison.Ordinal))
+            Assert.True(hasAddedLiteral, "Expected user string updates to include the added event literal.")
 
             withMetadataReader delta.Metadata (fun reader ->
                 Assert.Equal(1, reader.GetTableRowCount TableIndex.Event)
