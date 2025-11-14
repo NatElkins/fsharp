@@ -16,6 +16,12 @@ export DOTNET_MODIFIABLE_ASSEMBLIES=debug
 unset FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY
 export FSHARP_HOTRELOAD_DUMP_DELTA=1
 
+if [[ "${FSHARP_HOTRELOAD_TRACE_STRINGS:-}" != "1" ]]; then
+  echo "hint: set FSHARP_HOTRELOAD_TRACE_STRINGS=1 to log user-string updates during the demo" >&2
+else
+  echo "FSHARP_HOTRELOAD_TRACE_STRINGS is enabled; user-string updates will be logged." >&2
+fi
+
 mdv_available=1
 MDV_PATH="${FSHARP_HOTRELOAD_MDV_PATH:-}"
 if [[ -z "${MDV_PATH}" ]]; then
