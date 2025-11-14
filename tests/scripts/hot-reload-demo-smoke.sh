@@ -13,8 +13,17 @@ if [[ ! -d "${APP_DIR}" ]]; then
 fi
 
 export DOTNET_MODIFIABLE_ASSEMBLIES=debug
-unset FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY
 export FSHARP_HOTRELOAD_DUMP_DELTA=1
+
+runtime_apply_args=()
+if [[ "${HOTRELOAD_SMOKE_RUNTIME_APPLY:-}" == "1" ]]; then
+  export FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY=1
+  runtime_apply_args+=(--runtime-apply)
+  echo "HOTRELOAD_SMOKE_RUNTIME_APPLY=1 (MetadataUpdater.ApplyUpdate will be exercised)" >&2
+else
+  unset FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY
+  echo "hint: set HOTRELOAD_SMOKE_RUNTIME_APPLY=1 to enable MetadataUpdater.ApplyUpdate during the smoke test." >&2
+fi
 
 if [[ "${FSHARP_HOTRELOAD_TRACE_STRINGS:-}" != "1" ]]; then
   echo "hint: set FSHARP_HOTRELOAD_TRACE_STRINGS=1 to log user-string updates during the demo" >&2
@@ -46,6 +55,13 @@ if [[ ${mdv_available} -eq 1 ]]; then
     exit 3
   fi
 
+  if ! "${MDV_PATH}" --version >/dev/null 2>&1; then
+    echo "warning: mdv executable at ${MDV_PATH} failed to run; skipping automatic mdv validation" >&2
+    mdv_available=0
+  fi
+fi
+
+if [[ ${mdv_available} -eq 1 ]]; then
   export FSHARP_HOTRELOAD_MDV_PATH="${MDV_PATH}"
   export FSHARP_HOTRELOAD_RUN_MDV=1
 else
@@ -59,7 +75,11 @@ pushd "${APP_DIR}" >/dev/null
 echo "Running HotReloadDemoApp in scripted mode..." >&2
 
 set +e
-output="$(../../../../.dotnet/dotnet run -- --scripted --multi-delta)"
+if [[ ${#runtime_apply_args[@]} -gt 0 ]]; then
+  output="$(../../../../.dotnet/dotnet run -- --scripted --multi-delta "${runtime_apply_args[@]}")"
+else
+  output="$(../../../../.dotnet/dotnet run -- --scripted --multi-delta)"
+fi
 exit_code=$?
 set -e
 
