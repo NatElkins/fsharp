@@ -1340,6 +1340,17 @@ module UseProvided =
                 fireMethod.Invoke(null, [| box null |]) |> ignore
                 Assert.True(!invoked, "Expected handler state to be updated")
 
+                Assert.Null(providedType.GetEvent("Triggered", BindingFlags.NonPublic ||| BindingFlags.Static))
+                Assert.Null(providedType.GetEvent("Triggered", BindingFlags.Public ||| BindingFlags.Instance))
+
+                let publicStaticEvents =
+                    providedType.GetEvents(BindingFlags.Public ||| BindingFlags.Static)
+                    |> Array.map (fun e -> e.Name)
+
+                Assert.Contains("Triggered", publicStaticEvents)
+                Assert.Empty(providedType.GetEvents(BindingFlags.Public ||| BindingFlags.Instance))
+                Assert.Empty(providedType.GetEvents(BindingFlags.NonPublic ||| BindingFlags.Static))
+
             compile projectArgs
             assertEvent outputDll
 
