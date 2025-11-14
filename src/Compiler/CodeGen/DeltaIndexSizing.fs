@@ -2,7 +2,8 @@ module internal FSharp.Compiler.CodeGen.DeltaIndexSizing
 
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
-open FSharp.Compiler.AbstractIL.ILBinaryWriter
+
+type MetadataHeapSizes = FSharp.Compiler.AbstractIL.ILBinaryWriter.MetadataHeapSizes
 
 type CodedIndexSizes =
     { StringsBig: bool
