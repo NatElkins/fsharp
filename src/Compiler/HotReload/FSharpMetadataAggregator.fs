@@ -86,6 +86,14 @@ type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
         let struct (generation, translated) = this.TranslateHandle(ParameterHandle.op_Implicit handle)
         struct (generation, ParameterHandle.op_Explicit translated)
 
+    member this.TranslatePropertyHandle(handle: PropertyDefinitionHandle) =
+        let struct (generation, translated) = this.TranslateHandle(PropertyDefinitionHandle.op_Implicit handle)
+        struct (generation, PropertyDefinitionHandle.op_Explicit translated)
+
+    member this.TranslateEventHandle(handle: EventDefinitionHandle) =
+        let struct (generation, translated) = this.TranslateHandle(EventDefinitionHandle.op_Implicit handle)
+        struct (generation, EventDefinitionHandle.op_Explicit translated)
+
     member _.TranslateStringHandle(sourceReader: MetadataReader, handle: StringHandle) =
         let generation =
             match readerGeneration.TryGetValue sourceReader with
