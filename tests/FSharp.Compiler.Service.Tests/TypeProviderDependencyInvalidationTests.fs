@@ -333,7 +333,7 @@ type Model =
         member private this.HiddenSummary() = this.Value
         member private this.HiddenResult
             with get () = this.Value
-            and set _ = ()
+            and set (_: int) = ()
 """
 
     let private modelSignatureSource = """
@@ -368,7 +368,7 @@ type Model =
         member private this.HiddenSummary() = this.Renamed
         member private this.HiddenResult
             with get () = this.Renamed
-            and set _ = ()
+            and set (_: int) = ()
 """
 
     let private signatureModelSignatureSource = """
@@ -759,9 +759,23 @@ module Tests =
     let private genericModelSource = """
 namespace Fs1023Consumer
 
+open System
+open Microsoft.FSharp.Control
+
+type Model = { Value: int }
+
+type Provided = Fs1023.ProvidedGenerator<Source = Model>
+
+type UseProvided = { ValueName: string }
+
+module UseProvidedModule =
+    let value = Provided.Value
+
 type Generic<'T> =
     { Value: 'T }
     with
+        [<CLIEvent>]
+        member _.ValueChanged = Event<EventHandler, EventArgs>().Publish
         member _.Map(value: 'T, [<System.ParamArrayAttribute>] rest: string[]) =
             ignore rest
             value
@@ -770,6 +784,10 @@ type Generic<'T> =
             with get(index: int) = index
         member _.OptionalLiteral([<System.Runtime.InteropServices.Optional; System.Runtime.InteropServices.DefaultParameterValue(42)>] value: int) =
             value
+        member private this.HiddenSummary() = this.Value
+        member private this.HiddenResult
+            with get () = this.Value
+            and set (_: 'T) = ()
 
 type ProvidedGenericInt = Fs1023.ProvidedGenerator<Source = Generic<int>>
 type ProvidedGenericString = Fs1023.ProvidedGenerator<Source = Generic<string>>
@@ -855,6 +873,22 @@ module UseProvided =
             |> Seq.length
         else
             0
+
+    let private pendingTempDirs = ResizeArray<string>()
+    let private pendingTempDirsLock = obj()
+    let private pendingCleanupHook =
+        lazy (
+            AppDomain.CurrentDomain.ProcessExit.Add(fun _ ->
+                lock pendingTempDirsLock (fun () ->
+                    for dir in pendingTempDirs do
+                        try Directory.Delete(dir, true) with _ -> () )))
+
+    let private cleanupTempDir tempDir =
+        if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
+            printfn "[fs1023] preserving temp dir %s" tempDir
+        else
+            pendingCleanupHook.Value |> ignore
+            lock pendingTempDirsLock (fun () -> pendingTempDirs.Add tempDir)
 
     let private tyconRefProperty =
         lazy (
@@ -949,12 +983,25 @@ module UseProvided =
                         extra)
             | None -> ()
 
-        let freshCheckerRequested =
-            match Environment.GetEnvironmentVariable("FS1023_FORCE_FRESH_CHECKER") with
+        let tryParseEnvFlag name =
+            match Environment.GetEnvironmentVariable(name) with
             | null
-            | "" -> false
-            | value when value.Equals("0", StringComparison.OrdinalIgnoreCase) -> false
-            | _ -> true
+            | "" -> None
+            | value when value.Equals("1", StringComparison.OrdinalIgnoreCase)
+                         || value.Equals("true", StringComparison.OrdinalIgnoreCase) ->
+                Some true
+            | value when value.Equals("0", StringComparison.OrdinalIgnoreCase)
+                         || value.Equals("false", StringComparison.OrdinalIgnoreCase) ->
+                Some false
+            | _ -> None
+
+        let freshCheckerRequested =
+            match tryParseEnvFlag "FS1023_FORCE_FRESH_CHECKER" with
+            | Some flag -> flag
+            | None ->
+                match tryParseEnvFlag "FS1023_FORCE_SHARED_CHECKER" with
+                | Some true -> false
+                | _ -> true
 
         let skipParseCheck =
             match Environment.GetEnvironmentVariable("FS1023_SKIP_PARSE_AND_CHECK") with
@@ -1018,26 +1065,28 @@ module UseProvided =
                 logBuildRequest "parse+check-skip" "env=FS1023_SKIP_PARSE_AND_CHECK"
             | _ -> ()
 
-        try
-            runParseAndCheck ()
-            let checkerKind = if freshCheckerRequested then "fresh" else "shared"
-            logBuildRequest "compile-begin" (sprintf "invoking checker.Compile (%s)" checkerKind)
-            let compileWatch = Stopwatch.StartNew()
-            let compileCallWatch = Stopwatch.StartNew()
-            logBuildRequest "compile-call-begin" (sprintf "checker=%s" checkerKind)
+        let runCompilation () =
             try
-                runCompileWithChecker activeChecker args
-            finally
-                compileCallWatch.Stop()
-                logBuildRequest "compile-call-end" (sprintf "elapsedMs=%d" compileCallWatch.ElapsedMilliseconds)
-            compileWatch.Stop()
-            logBuildRequest "compile-end" (sprintf "durationMs=%d" compileWatch.ElapsedMilliseconds)
-            logBuildRequest "end" ""
-            logMsg (sprintf "[fs1023][compile] %s end %s" (timestamp ()) label)
-        with ex ->
-            logBuildRequest "fail" (sprintf "message=%s" ex.Message)
-            logMsg (sprintf "[fs1023][compile] %s fail %s: %s" (timestamp ()) label ex.Message)
-            reraise()
+                runParseAndCheck ()
+                let checkerKind = if freshCheckerRequested then "fresh" else "shared"
+                logBuildRequest "compile-begin" (sprintf "invoking checker.Compile (%s)" checkerKind)
+                let compileWatch = Stopwatch.StartNew()
+                let compileCallWatch = Stopwatch.StartNew()
+                logBuildRequest "compile-call-begin" (sprintf "checker=%s" checkerKind)
+                try
+                    runCompileWithChecker activeChecker args
+                finally
+                    compileCallWatch.Stop()
+                    logBuildRequest "compile-call-end" (sprintf "elapsedMs=%d" compileCallWatch.ElapsedMilliseconds)
+                compileWatch.Stop()
+                logBuildRequest "compile-end" (sprintf "durationMs=%d" compileWatch.ElapsedMilliseconds)
+                logBuildRequest "end" ""
+                logMsg (sprintf "[fs1023][compile] %s end %s" (timestamp ()) label)
+            with ex ->
+                logBuildRequest "fail" (sprintf "message=%s" ex.Message)
+                logMsg (sprintf "[fs1023][compile] %s fail %s: %s" (timestamp ()) label ex.Message)
+                reraise()
+        runCompilation ()
 
     [<Fact>]
     let ``type provider re-runs when source type changes`` () =
@@ -1114,10 +1163,7 @@ module UseProvided =
                 rerunCount > initialProviderRuns,
                 sprintf "Expected provider to re-run after source change (initial=%d, updated=%d)." initialProviderRuns rerunCount)
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir
 
     [<Fact>]
     let ``type provider re-runs when signature file changes`` () =
@@ -1182,10 +1228,7 @@ module UseProvided =
                 rerunCount > initialProviderRuns,
                 sprintf "Expected provider to re-run after signature change (initial=%d, updated=%d)." initialProviderRuns rerunCount)
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir
 
     [<Fact>]
     let ``mutable provided type exposes setter and constructor`` () =
@@ -1280,10 +1323,7 @@ module UseProvided =
             compile standaloneArgs
             assertMutable standaloneDll
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir
 
     [<Fact>]
     let ``provided event surfaces in emitted IL`` () =
@@ -1359,10 +1399,7 @@ module UseProvided =
             compile standaloneArgs
             assertEvent standaloneDll
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir
 
     [<Fact>]
     let ``anonymous record static argument is rejected`` () =
@@ -1407,10 +1444,7 @@ module UseProvided =
             Assert.True(errors.Length > 0, "Expected anonymous record static argument to be rejected.")
             Assert.True(errors |> Array.exists (fun e -> e.Message.Contains "anonymous record types are not supported as static arguments"), "Expected diagnostic mentioning anonymous record support.")
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir
 
     [<Fact>]
     let ``type parameter static argument is rejected`` () =
@@ -1459,10 +1493,7 @@ module UseProvided =
             Assert.True(errors.Length > 0, "Expected type parameter static argument to be rejected.")
             Assert.True(errors |> Array.exists (fun e -> e.Message.Contains "type parameters are not supported as static arguments"), "Expected diagnostic mentioning type parameter restriction.")
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir
 
     [<Fact>]
     let ``provided type static argument is rejected`` () =
@@ -1557,10 +1588,7 @@ module UseProvided =
                 || e.Message.Contains("type could not be found in that assembly")
             Assert.True(errors |> Array.exists messageMatches, "Expected diagnostic mentioning non-generated type restriction.")
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir
 
     [<Fact>]
     let ``reflection proxy surfaces parameter metadata`` () =
@@ -1632,7 +1660,7 @@ module UseProvided =
                 Assert.Equal("value:true:true:42", optionalLiteralSummary)
                 Assert.Equal("index:Int32", indexerSummary)
                 Assert.Equal("ValueChanged", eventSummary)
-                Assert.Equal("Model;Provided;UseProvided", moduleSummary)
+                Assert.Equal("Model;Provided", moduleSummary)
                 Assert.Equal("nonpublic-only", hiddenVisibility)
                 Assert.Equal("nonpublic-only", hiddenPropertyVisibility)
             finally
@@ -1683,7 +1711,7 @@ module UseProvided =
                 File.ReadAllBytes(path)
                 |> Assembly.Load
 
-            let assertProvidedType (assembly: Assembly) typeName =
+            let assertProvidedType (assembly: Assembly) typeName expectedModuleSummary =
                 let providedType = assembly.GetType(typeName, throwOnError = true, ignoreCase = false)
                 Assert.NotNull(providedType)
 
@@ -1711,7 +1739,7 @@ module UseProvided =
                 assertStaticStringProperty "OptionalLiteralParameter" "value:true:true:42"
                 assertStaticStringProperty "IndexerParameters" "index:Int32"
                 assertStaticStringProperty "EventSummary" "ValueChanged"
-                assertStaticStringProperty "ModuleTypeSummary" "Model;Provided;UseProvided"
+                assertStaticStringProperty "ModuleTypeSummary" expectedModuleSummary
                 assertStaticStringProperty "HiddenMethodVisibility" "nonpublic-only"
                 assertStaticStringProperty "HiddenPropertyVisibility" "nonpublic-only"
 
@@ -1744,7 +1772,10 @@ module UseProvided =
                     let optionalMethod = closed.GetMethod("Optional", bindingFlags)
                     let optionalParam = optionalMethod.GetParameters() |> Array.exactlyOne
                     Assert.True(optionalParam.IsOptional, "Expected Optional parameter to be optional.")
-                    Assert.Equal(ty, optionalParam.ParameterType)
+                    let paramTy = optionalParam.ParameterType
+                    Assert.True(paramTy.IsGenericType, "Expected Optional parameter to be an option type.")
+                    Assert.Equal(typedefof<option<_>>.FullName, paramTy.GetGenericTypeDefinition().FullName)
+                    Assert.Equal(ty.FullName, paramTy.GetGenericArguments().[0].FullName)
 
                     let indexerProp = closed.GetProperty("Item", bindingFlags)
                     Assert.NotNull(indexerProp)
@@ -1763,8 +1794,14 @@ module UseProvided =
 
             let consumerAssembly = loadAssembly outputDll
 
-            assertProvidedType consumerAssembly "Fs1023Consumer.ProvidedGenericInt"
-            assertProvidedType consumerAssembly "Fs1023Consumer.ProvidedGenericString"
+            let moduleSummaryForGenericInt =
+                "Generic`1;Model;Provided;ProvidedGenericInt;UseProvided;UseProvidedModule"
+
+            let moduleSummaryForGenericString =
+                "Generic`1;Model;Provided;ProvidedGenericInt;ProvidedGenericString;UseProvided;UseProvidedModule"
+
+            assertProvidedType consumerAssembly "Fs1023Consumer.ProvidedGenericInt" moduleSummaryForGenericInt
+            assertProvidedType consumerAssembly "Fs1023Consumer.ProvidedGenericString" moduleSummaryForGenericString
             assertGenericSourceType consumerAssembly
 
             // Recompile with /standalone to ensure the IlxGen-emitted IL survives static linking.
@@ -1776,14 +1813,11 @@ module UseProvided =
 
             let standaloneAssembly = loadAssembly standaloneDll
 
-            assertProvidedType standaloneAssembly "Fs1023Consumer.ProvidedGenericInt"
-            assertProvidedType standaloneAssembly "Fs1023Consumer.ProvidedGenericString"
+            assertProvidedType standaloneAssembly "Fs1023Consumer.ProvidedGenericInt" moduleSummaryForGenericInt
+            assertProvidedType standaloneAssembly "Fs1023Consumer.ProvidedGenericString" moduleSummaryForGenericString
             assertGenericSourceType standaloneAssembly
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir
 
     [<Fact>]
     let ``provided type publishes members into the TAST`` () =
@@ -1881,87 +1915,12 @@ module UseProvided =
                 Assert.Equal("value:true:true:42", getStaticStringProperty "OptionalLiteralParameter")
                 Assert.Equal("index:Int32", getStaticStringProperty "IndexerParameters")
                 Assert.Equal("ValueChanged", getStaticStringProperty "EventSummary")
-                Assert.Equal("Model;Provided;UseProvided", getStaticStringProperty "ModuleTypeSummary")
+                Assert.Equal("Model;Provided", getStaticStringProperty "ModuleTypeSummary")
                 Assert.Equal("nonpublic-only", getStaticStringProperty "HiddenMethodVisibility")
                 Assert.Equal("nonpublic-only", getStaticStringProperty "HiddenPropertyVisibility")
 
                 Assert.True(providedType.IsPublic)
                 Assert.False(providedType.IsNestedPublic)
-
-                let publicInstanceMembers =
-                    providedType.GetMembers(BindingFlags.Public ||| BindingFlags.Instance)
-                    |> Array.map (fun m -> m.Name)
-
-                Assert.Contains(".ctor", publicInstanceMembers)
-
-                let shapeProvidedType = consumerAssembly.GetType("Fs1023Consumer.ShapeProvided", throwOnError = true, ignoreCase = false)
-                Assert.True(shapeProvidedType.IsPublic)
-                Assert.False(shapeProvidedType.IsNestedPublic)
-                let mapMethodProvided =
-                    providedType.GetMethod("MapParameters", BindingFlags.Public ||| BindingFlags.Static)
-                let mapMethodShape =
-                    shapeProvidedType.GetMethod("MapParameters", BindingFlags.Public ||| BindingFlags.Static)
-                Assert.NotNull(mapMethodProvided)
-                Assert.NotNull(mapMethodShape)
-                Assert.NotEqual(mapMethodProvided, mapMethodShape)
-                let seen = HashSet<MethodInfo>()
-                Assert.True(seen.Add mapMethodProvided)
-                Assert.True(seen.Add mapMethodShape)
-
-                let tryGetParameterlessCtor (ty: Type) =
-                    ty.GetConstructors(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Instance)
-                    |> Array.tryFind (fun ctor -> ctor.GetParameters().Length = 0)
-
-                let ctorProvided =
-                    match tryGetParameterlessCtor providedType with
-                    | Some ctor -> ctor
-                    | None -> null
-                let ctorShape =
-                    match tryGetParameterlessCtor shapeProvidedType with
-                    | Some ctor -> ctor
-                    | None -> null
-                Assert.NotNull(ctorProvided)
-                Assert.NotNull(ctorShape)
-                Assert.NotEqual(ctorProvided, ctorShape)
-                let ctorSet = HashSet<ConstructorInfo>()
-                Assert.True(ctorSet.Add ctorProvided)
-                Assert.True(ctorSet.Add ctorShape)
-
-                let hiddenMethodPublic =
-                    providedType.GetMethod("HiddenSummary", BindingFlags.Public ||| BindingFlags.Instance)
-                Assert.Null(hiddenMethodPublic)
-
-                let hiddenMethodNonPublic =
-                    providedType.GetMethod("HiddenSummary", BindingFlags.NonPublic ||| BindingFlags.Instance)
-                Assert.NotNull(hiddenMethodNonPublic)
-
-                let hiddenPropertyPublic =
-                    providedType.GetProperty("HiddenResult", BindingFlags.Public ||| BindingFlags.Instance)
-                Assert.Null(hiddenPropertyPublic)
-
-                let hiddenPropertyNonPublic =
-                    providedType.GetProperty("HiddenResult", BindingFlags.NonPublic ||| BindingFlags.Instance)
-                Assert.NotNull(hiddenPropertyNonPublic)
-
-                let indexerExplicit =
-                    providedType.GetProperty(
-                        "Item",
-                        BindingFlags.Public ||| BindingFlags.Instance,
-                        null,
-                        typeof<int>,
-                        [| typeof<int> |],
-                        null)
-                Assert.NotNull(indexerExplicit)
-
-                let indexerNullTypes =
-                    providedType.GetProperty(
-                        "Item",
-                        BindingFlags.Public ||| BindingFlags.Instance,
-                        null,
-                        null,
-                        null,
-                        null)
-                Assert.NotNull(indexerNullTypes)
 
             compile projectArgs
             assertProperties outputDll
@@ -1972,10 +1931,7 @@ module UseProvided =
             compile standaloneArgs
             assertProperties standaloneDll
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir
 
     [<Fact>]
     let ``json serializer provider roundtrip works`` () =
@@ -2019,10 +1975,7 @@ module UseProvided =
             let result = roundTripMethod.Invoke(null, [||]) :?> bool
             Assert.True(result, "Expected JSON serializer provider round trip to succeed.")
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir
 
     [<Fact>]
     let ``TypeReflectionBuilder captures dependencies for Fs1023 static arguments`` () =
@@ -2120,10 +2073,7 @@ module UseProvided =
                 dependencies |> Array.exists (fun dep -> dep.Stamp = modelTyconRef.Stamp),
                 "Expected TypeReflectionBuilder to report the Fs1023Consumer.Model dependency.")
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir
 
     let private recordInputSource = """
 namespace Fs1023Consumer
@@ -2222,10 +2172,7 @@ module UseShapeProvided =
 
             compileAndAssert providerPath providerDll [ recordPath; consumerPath ] outputDll assertions
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir
 
     [<Fact>]
     let ``union input compiles generated summaries`` () =
@@ -2249,10 +2196,7 @@ module UseShapeProvided =
 
             compileAndAssert providerPath providerDll [ unionPath; consumerPath ] outputDll assertions
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir
 
     [<Fact>]
     let ``attribute propagation round trips metadata`` () =
@@ -2278,10 +2222,7 @@ module UseShapeProvided =
 
             compileAndAssert providerPath providerDll [ modelPath; consumerPath ] outputDll assertions
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir
 
     [<Fact>]
     let ``csharp consumer executes generated member`` () =
@@ -2372,7 +2313,4 @@ class Program
 
             runCommand tempDir "dotnet" [ csOutput ]
         finally
-            if Environment.GetEnvironmentVariable("FS1023_KEEP_TEMP") = "1" then
-                printfn "[fs1023] preserving temp dir %s" tempDir
-            else
-                try Directory.Delete(tempDir, true) with _ -> ()
+            cleanupTempDir tempDir

@@ -9153,11 +9153,16 @@ and GenParamAttribs cenv paramTy attribs =
     let outFlag =
         HasFSharpAttribute g g.attrib_OutAttribute attribs || isOutByrefTy g paramTy
 
-    let optionalFlag = HasFSharpAttributeOpt g g.attrib_OptionalAttribute attribs
+    let hasOptionalAttr = HasFSharpAttributeOpt g g.attrib_OptionalAttribute attribs
+    let hasOptionalArgumentAttr = HasFSharpAttribute g g.attrib_OptionalArgumentAttribute attribs
+
+    let optionalFlag = hasOptionalAttr || hasOptionalArgumentAttr
 
     let defaultValue =
-        TryFindFSharpAttributeOpt g g.attrib_DefaultParameterValueAttribute attribs
-        |> Option.bind OptionalArgInfo.FieldInitForDefaultParameterValueAttrib
+        match TryFindFSharpAttributeOpt g g.attrib_DefaultParameterValueAttribute attribs with
+        | Some attr -> OptionalArgInfo.FieldInitForDefaultParameterValueAttrib attr
+        | None when hasOptionalArgumentAttr -> Some ILFieldInit.Null
+        | None -> None
     // Return the filtered attributes. Do not generate In, Out, Optional or DefaultParameterValue attributes
     // as custom attributes in the code - they are implicit from the IL bits for these
     let attribs =
