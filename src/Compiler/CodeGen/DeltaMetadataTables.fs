@@ -359,12 +359,16 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         ms.ToArray()
     let buildUserStringHeapBytes () = userStrings.Bytes
 
-    member _.AddModuleRow(name: string, moduleId: Guid, encId: Guid, encBaseId: Guid) =
+    member _.AddModuleRow(name: string, nameHandleOpt: StringHandle option, moduleId: Guid, encId: Guid, encBaseId: Guid) =
         if moduleRows.Count = 0 then
+            let nameToken =
+                match nameHandleOpt with
+                | Some handle when not handle.IsNil -> MetadataTokens.GetHeapOffset handle, true
+                | _ -> addStringValue name, false
             let row =
                 [|
                     rowElementUShort 0us
-                    rowElementString (addStringValue name)
+                    stringElement nameToken
                     rowElementGuid (addGuidValue moduleId)
                     rowElementGuid (addGuidValue encId)
                     rowElementGuid (addGuidValue encBaseId)

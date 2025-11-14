@@ -122,6 +122,7 @@ type FSharpEmitBaseline =
         EncId: Guid
         EncBaseId: Guid
         NextGeneration: int
+        ModuleNameHandle: StringHandle option
         Metadata: MetadataSnapshot
         TokenMappings: ILTokenMappings
         TypeTokens: Map<string, int>
@@ -453,6 +454,7 @@ let private createCore
         BlobStreamLengthAdded = 0
         GuidStreamLengthAdded = 0
         AddedOrChangedMethods = []
+        ModuleNameHandle = None
     }
 
 let internal applyDelta
@@ -495,6 +497,7 @@ let internal applyDelta
         EncId = encId
         EncBaseId = encBaseId
         NextGeneration = baseline.NextGeneration + 1
+        ModuleNameHandle = baseline.ModuleNameHandle
         TableEntriesAdded = updatedTableEntries
         StringStreamLengthAdded = baseline.StringStreamLengthAdded + deltaHeapSizes.StringHeapSize
         UserStringStreamLengthAdded = baseline.UserStringStreamLengthAdded + deltaHeapSizes.UserStringHeapSize
@@ -642,4 +645,7 @@ let attachMetadataHandles (metadataReader: MetadataReader) (baseline: FSharpEmit
           ParameterHandles = parameterHandles
           PropertyHandles = propertyHandles
           EventHandles = eventHandles }
-    { baseline with MetadataHandles = cache }
+    let moduleDef = metadataReader.GetModuleDefinition()
+    { baseline with
+        MetadataHandles = cache
+        ModuleNameHandle = stringHandleOption moduleDef.Name }

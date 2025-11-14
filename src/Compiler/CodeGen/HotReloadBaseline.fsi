@@ -92,6 +92,7 @@ type FSharpEmitBaseline =
       EncId: Guid
       EncBaseId: Guid
       NextGeneration: int
+      ModuleNameHandle: StringHandle option
       Metadata: MetadataSnapshot
       TokenMappings: ILTokenMappings
       TypeTokens: Map<string, int>

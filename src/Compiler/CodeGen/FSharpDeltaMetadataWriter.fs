@@ -84,6 +84,7 @@ type MetadataDelta =
 let emitWithUserStrings
     (metadataBuilder: MetadataBuilder)
     (moduleName: string)
+    (moduleNameHandle: StringHandle option)
     (encId: Guid)
     (encBaseId: Guid)
     (moduleId: Guid)
@@ -206,13 +207,20 @@ let emitWithUserStrings
         metadataBuilder.SetCapacity(TableIndex.MethodSpec, 0)
         metadataBuilder.SetCapacity(TableIndex.GenericParamConstraint, 0)
 
-        let moduleNameHandle = metadataBuilder.GetOrAddString(moduleName)
+        let moduleNameTokenOpt =
+            match moduleNameHandle with
+            | Some handle when not handle.IsNil -> Some handle
+            | _ -> None
+        let moduleNameHandleOrAdded =
+            match moduleNameHandle with
+            | Some handle when not handle.IsNil -> handle
+            | _ -> metadataBuilder.GetOrAddString(moduleName)
         let mvidHandle = metadataBuilder.GetOrAddGuid(moduleId)
         let encIdHandle = metadataBuilder.GetOrAddGuid(encId)
         let encBaseHandle = metadataBuilder.GetOrAddGuid(encBaseId)
-        let moduleHandle = metadataBuilder.AddModule(0, moduleNameHandle, mvidHandle, encIdHandle, encBaseHandle)
+        let moduleHandle = metadataBuilder.AddModule(0, moduleNameHandleOrAdded, mvidHandle, encIdHandle, encBaseHandle)
         let tableMirror = DeltaMetadataTables(heapOffsets)
-        tableMirror.AddModuleRow(moduleName, moduleId, encId, encBaseId)
+        tableMirror.AddModuleRow(moduleName, moduleNameTokenOpt, moduleId, encId, encBaseId)
 
         let updatesByKey = Dictionary<MethodDefinitionKey, MethodMetadataUpdate>(HashIdentity.Structural)
         for update in updates do
@@ -460,6 +468,7 @@ let emitWithUserStrings
 let emit
     (metadataBuilder: MetadataBuilder)
     (moduleName: string)
+    (moduleNameHandle: StringHandle option)
     (encId: Guid)
     (encBaseId: Guid)
     (moduleId: Guid)
@@ -478,6 +487,7 @@ let emit
     emitWithUserStrings
         metadataBuilder
         moduleName
+        moduleNameHandle
         encId
         encBaseId
         moduleId

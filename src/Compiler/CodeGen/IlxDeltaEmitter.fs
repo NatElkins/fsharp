@@ -308,6 +308,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let metadataReader = peReader.GetMetadataReader()
     let moduleDef = metadataReader.GetModuleDefinition()
     let moduleName = metadataReader.GetString moduleDef.Name
+    let baselineModuleNameHandle = request.Baseline.ModuleNameHandle
     let metadataBuilder = builder.MetadataBuilder
     let stringTokenCache = Dictionary<int, int>()
     let userStringUpdates = ResizeArray<int * int * string>()
@@ -1321,6 +1322,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             MetadataWriter.emitWithUserStrings
                 metadataBuilder
                 moduleName
+                baselineModuleNameHandle
                 encId
                 encBaseId
                 moduleMvid

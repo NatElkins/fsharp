@@ -739,6 +739,7 @@ module internal MetadataDeltaTestHelpers =
         DeltaWriter.emit
             builder.MetadataBuilder
             moduleName
+            None
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())
@@ -864,6 +865,7 @@ module internal MetadataDeltaTestHelpers =
         DeltaWriter.emit
             builder.MetadataBuilder
             moduleName
+            None
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())
@@ -950,6 +952,7 @@ module internal MetadataDeltaTestHelpers =
         DeltaWriter.emit
             builder.MetadataBuilder
             moduleName
+            None
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())
@@ -1119,6 +1122,7 @@ module internal MetadataDeltaTestHelpers =
         DeltaWriter.emit
             builder.MetadataBuilder
             moduleName
+            None
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())
@@ -1265,6 +1269,7 @@ module internal MetadataDeltaTestHelpers =
         DeltaWriter.emit
             builder.MetadataBuilder
             moduleName
+            None
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())

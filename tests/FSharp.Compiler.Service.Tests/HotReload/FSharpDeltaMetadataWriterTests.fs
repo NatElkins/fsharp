@@ -238,6 +238,7 @@ module FSharpDeltaMetadataWriterTests =
             DeltaWriter.emit
                 builder.MetadataBuilder
                 moduleName
+                None
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
@@ -408,7 +409,7 @@ module FSharpDeltaMetadataWriterTests =
     [<Fact>]
     let ``metadata root omits #JTD when no ENC tables are present`` () =
         let mirror = DeltaMetadataTables MetadataHeapOffsets.Zero
-        mirror.AddModuleRow("Empty.dll", System.Guid.NewGuid(), System.Guid.NewGuid(), System.Guid.NewGuid())
+        mirror.AddModuleRow("Empty.dll", None, System.Guid.NewGuid(), System.Guid.NewGuid(), System.Guid.NewGuid())
         let sizes =
             DeltaMetadataSerializer.computeMetadataSizes mirror (Array.zeroCreate MetadataTokens.TableCount)
         let heaps = DeltaMetadataSerializer.buildHeapStreams mirror
@@ -515,6 +516,7 @@ module FSharpDeltaMetadataWriterTests =
             DeltaWriter.emit
                 builder.MetadataBuilder
                 moduleName
+                None
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
@@ -856,6 +858,7 @@ module FSharpDeltaMetadataWriterTests =
             DeltaWriter.emit
                 builder.MetadataBuilder
                 moduleName
+                None
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
@@ -951,6 +954,7 @@ module FSharpDeltaMetadataWriterTests =
             DeltaWriter.emit
                 builder.MetadataBuilder
                 moduleName
+                None
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
@@ -1012,6 +1016,7 @@ module FSharpDeltaMetadataWriterTests =
             DeltaWriter.emit
                 builder.MetadataBuilder
                 moduleName
+                None
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
@@ -1108,6 +1113,7 @@ module FSharpDeltaMetadataWriterTests =
             DeltaWriter.emit
                 builder.MetadataBuilder
                 moduleName
+                None
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
