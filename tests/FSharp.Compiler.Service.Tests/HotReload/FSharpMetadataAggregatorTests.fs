@@ -254,6 +254,7 @@ module FSharpMetadataAggregatorTests =
         let translatedBytes = baselineReader.GetBlobBytes translatedHandle
         Assert.Equal<byte>(baselineBytes, translatedBytes)
 
+    [<Fact>]
     let ``aggregator translates method signature handles across generations`` () =
         let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
         let baselineBytes = artifacts.BaselineBytes
