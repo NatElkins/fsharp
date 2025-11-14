@@ -187,6 +187,40 @@ module FSharpMetadataAggregatorTests =
         Assert.Equal(deltaValue, baselineValue)
 
     [<Fact>]
+    let ``aggregator translates property signature handles to baseline generation`` () =
+        let baselineBytes, delta = emitPropertyDelta None ()
+
+        use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
+        let baselineReader = peReader.GetMetadataReader()
+
+        use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(delta.Metadata))
+        let deltaReader = deltaProvider.GetMetadataReader()
+
+        let aggregator = FSharpMetadataAggregator.Create([ baselineReader; deltaReader ])
+
+        let deltaPropertyHandle =
+            deltaReader.PropertyDefinitions
+            |> Seq.head
+
+        let deltaProperty = deltaReader.GetPropertyDefinition deltaPropertyHandle
+        let struct (generation, translatedHandle) = aggregator.TranslateBlobHandle(deltaReader, deltaProperty.Signature)
+
+        Assert.Equal(0, generation)
+
+        let baselinePropertyHandle =
+            baselineReader.PropertyDefinitions
+            |> Seq.find (fun handle ->
+                let propertyDef = baselineReader.GetPropertyDefinition handle
+                baselineReader.GetString(propertyDef.Name) = "Message")
+
+        let baselinePropertyDef = baselineReader.GetPropertyDefinition baselinePropertyHandle
+        Assert.Equal(baselinePropertyDef.Signature, translatedHandle)
+
+        let baselineBytes = baselineReader.GetBlobBytes baselinePropertyDef.Signature
+        let translatedBytes = baselineReader.GetBlobBytes translatedHandle
+        Assert.Equal<byte>(baselineBytes, translatedBytes)
+
+    [<Fact>]
     let ``aggregator translates event method handles across generations`` () =
         let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
         let baselineBytes = artifacts.BaselineBytes

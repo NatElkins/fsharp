@@ -35,6 +35,44 @@ type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
             | :? BadImageFormatException
             | :? ArgumentOutOfRangeException ->
                 None
+
+    let tryGetBlobBytes (reader: MetadataReader) (handle: BlobHandle) =
+        if handle.IsNil then
+            None
+        else
+            try
+                Some(reader.GetBlobBytes handle)
+            with
+            | :? BadImageFormatException
+            | :? ArgumentOutOfRangeException ->
+                None
+
+    let byteArrayComparer : IEqualityComparer<byte[]> =
+        { new IEqualityComparer<byte[]> with
+            member _.Equals(left, right) =
+                if obj.ReferenceEquals(left, right) then
+                    true
+                elif isNull (box left) || isNull (box right) then
+                    false
+                elif left.Length <> right.Length then
+                    false
+                else
+                    let mutable idx = 0
+                    let mutable equal = true
+                    while equal && idx < left.Length do
+                        if left[idx] <> right[idx] then
+                            equal <- false
+                        idx <- idx + 1
+                    equal
+
+            member _.GetHashCode(value: byte[]) =
+                if isNull (box value) then
+                    0
+                else
+                    let mutable hash = 17
+                    for b in value do
+                        hash <- (hash * 23) + int b
+                    hash }
     let baselineStringHandles =
         let dict = Dictionary<string, StringHandle>(StringComparer.Ordinal)
 
@@ -58,6 +96,25 @@ type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
             let methodDef = baseline.GetMethodDefinition methodHandle
             for parameterHandle in methodDef.GetParameters() do
                 addHandle (baseline.GetParameter(parameterHandle).Name) baseline
+        dict
+
+    let baselineBlobHandles =
+        let dict = Dictionary<byte[], BlobHandle>(byteArrayComparer)
+
+        let addHandle (handle: BlobHandle) (reader: MetadataReader) =
+            if not handle.IsNil then
+                let bytes = reader.GetBlobBytes(handle)
+                if not (dict.ContainsKey bytes) then
+                    dict[bytes] <- handle
+
+        for methodHandle in baseline.MethodDefinitions do
+            let methodDef = baseline.GetMethodDefinition methodHandle
+            addHandle methodDef.Signature baseline
+
+        for propertyHandle in baseline.PropertyDefinitions do
+            let propertyDef = baseline.GetPropertyDefinition propertyHandle
+            addHandle propertyDef.Signature baseline
+
         dict
     let metadataAggregator =
         if deltas.Length = 0 then
@@ -114,6 +171,28 @@ type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
                 | None -> struct (generation, handle)
                 | Some value ->
                     match baselineStringHandles.TryGetValue value with
+                    | true, baselineHandle -> struct (0, baselineHandle)
+                    | _ -> struct (generation, handle)
+
+    member _.TranslateBlobHandle(sourceReader: MetadataReader, handle: BlobHandle) =
+        let generation =
+            match readerGeneration.TryGetValue sourceReader with
+            | true, value -> value
+            | _ -> invalidArg (nameof sourceReader) "Metadata reader is not part of this aggregator."
+
+        if generation = 0 || handle.IsNil then
+            struct (0, handle)
+        else
+            let offset = MetadataTokens.GetHeapOffset handle
+            let heapSize = sourceReader.GetHeapSize(HeapIndex.Blob)
+
+            if offset >= heapSize then
+                struct (0, handle)
+            else
+                match tryGetBlobBytes sourceReader handle with
+                | None -> struct (generation, handle)
+                | Some bytes ->
+                    match baselineBlobHandles.TryGetValue bytes with
                     | true, baselineHandle -> struct (0, baselineHandle)
                     | _ -> struct (generation, handle)
 
