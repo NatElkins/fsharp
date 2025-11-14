@@ -217,9 +217,9 @@ module FSharpDeltaMetadataWriterTests =
                 RowId = 1
                 IsAdded = true
                 Name = metadataReader.GetString propertyDef.Name
-                NameHandle = None
+                NameHandle = if propertyDef.Name.IsNil then None else Some propertyDef.Name
                 Signature = metadataReader.GetBlobBytes propertyDef.Signature
-                SignatureHandle = None
+                SignatureHandle = if propertyDef.Signature.IsNil then None else Some propertyDef.Signature
                 Attributes = propertyDef.Attributes } ]
 
         let propertyMapRows: DeltaWriter.PropertyMapRowInfo list =
@@ -270,7 +270,7 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, metadataDelta.EncLog)
         Assert.Equal<(TableIndex * int)[]>(expectedEncMap, metadataDelta.EncMap)
         Assert.True(metadataDelta.Metadata.Length > 0)
-        Assert.Contains("Message", Encoding.UTF8.GetString(metadataDelta.StringHeap))
+        Assert.DoesNotContain("OnChanged", Encoding.UTF8.GetString(metadataDelta.StringHeap))
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
         assertBitMasksMatch metadataDelta.Metadata metadataDelta.TableBitMasks
@@ -432,7 +432,7 @@ module FSharpDeltaMetadataWriterTests =
                 RowId = 1
                 IsAdded = true
                 Name = metadataReader.GetString eventDef.Name
-                NameHandle = None
+                NameHandle = if eventDef.Name.IsNil then None else Some eventDef.Name
                 Attributes = eventDef.Attributes
                 EventType = eventDef.Type } ]
 
@@ -494,7 +494,7 @@ module FSharpDeltaMetadataWriterTests =
 
         Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, metadataDelta.EncLog)
         Assert.Equal<(TableIndex * int)[]>(expectedEncMap, metadataDelta.EncMap)
-        Assert.Contains("OnChanged", Encoding.UTF8.GetString(metadataDelta.StringHeap))
+        Assert.DoesNotContain("OnChanged", Encoding.UTF8.GetString(metadataDelta.StringHeap))
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
         assertBitMasksMatch metadataDelta.Metadata metadataDelta.TableBitMasks
