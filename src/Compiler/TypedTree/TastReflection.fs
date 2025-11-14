@@ -1323,6 +1323,19 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                 if isUnitTy g retTy then typeof<Void>
                 else asm.TxTType retTy
 
+        let signatureHash =
+            let declaringName =
+                if isNull declTy then String.Empty
+                else
+                    match declTy.AssemblyQualifiedName with
+                    | null -> String.Empty
+                    | name -> name
+            hash (declaringName, compiledName, parameterData.Length, gps2.Length)
+
+        let metadataTokenValue =
+            let token = abs signatureHash + 1
+            if token = 0 then 1 else token
+
         let rec methodInfo : MethodInfo =
             let parametersLazy =
                 lazy (
@@ -1350,21 +1363,31 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             override __.IsGenericMethod = (gps2.Length <> 0)
             override __.IsGenericMethodDefinition = __.IsGenericMethod
 
-            override __.GetHashCode() = hash vref.Stamp //TODO: Implement correct hashing  + hashILParameterTypes inp.Parameters
+            override __.GetHashCode() = signatureHash
             override this.Equals(that:obj) = 
                 match that with 
-                | :? MethodInfo as thatMI -> 
-                    compiledName = thatMI.Name 
-                    (*
-                    TODO: Need to implement equality correctly for method defs
-                    &&
-                    eqType this.DeclaringType thatMI.DeclaringType &&
-                    eqParametersAndILParameterTypesWithInst gps (thatMI.GetParameters()) inp.Parameters *)
+                | :? MethodInfo as thatMI ->
+                    let thatDeclaringType = thatMI.DeclaringType
+                    let namesEqual = String.Equals(compiledName, thatMI.Name, StringComparison.Ordinal)
+                    let declEqual =
+                        not (isNull declTy)
+                        && not (isNull thatDeclaringType)
+                        && eqType declTy thatDeclaringType
+                    let paramsEqual =
+                        let these = parametersLazy.Value
+                        let those = thatMI.GetParameters()
+                        these.Length = those.Length &&
+                        Array.forall2 (fun (p1: ParameterInfo) (p2: ParameterInfo) -> eqType p1.ParameterType p2.ParameterType) these those
+                    let genericsEqual =
+                        let otherGenericCount =
+                            if thatMI.IsGenericMethod then thatMI.GetGenericArguments().Length else 0
+                        gps2.Length = otherGenericCount
+                    namesEqual && declEqual && paramsEqual && genericsEqual
                 | _ -> false
 
             override this.MakeGenericMethod(args) = ReflectMethodSymbol(this, args) :> MethodInfo
 
-            override __.MetadataToken = int vref.Stamp //TODO: Fix me .MetadataToken
+            override __.MetadataToken = metadataTokenValue
 
             // unused
             override __.MethodHandle = notRequired "MethodHandle"

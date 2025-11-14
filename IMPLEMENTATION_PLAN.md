@@ -114,6 +114,7 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
    - Finish the ergonomics perf pass originally promised here: add profiling toggles/measurements for TastReflection projections, and ensure the debugger view for the remaining proxy types is friendly (we only handled `ReflectModule` so far).
 4. **Doc + checklist update**
    - Once the above items are green, mark Phase 1 as “Complete” in this document (not just “In progress”) and move the detailed parity checklist to an appendix for future reference.
+   - **2025-11-14 parity note:** `TxMethodDef` now implements real equality/hash/metadata-token logic (declaring type + parameter types + generic arity). The `record input compiles generated summaries` regression asserts that `MapParameters` from `Fs1023Consumer.Provided` vs. `Fs1023Consumer.ShapeProvided` remain distinct in a `HashSet<MethodInfo>`, so duplicate method identities no longer collapse.
 
 ### 1.1 Create projection module
 

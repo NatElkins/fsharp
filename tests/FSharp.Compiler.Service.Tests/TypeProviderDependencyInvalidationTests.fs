@@ -5,6 +5,7 @@ namespace FSharp.Compiler.Service.Tests
 open System
 open System.IO
 open System.Reflection
+open System.Collections.Generic
 open System.Diagnostics
 open System.Text.Json
 open System.Runtime.Loader
@@ -1872,6 +1873,18 @@ module UseProvided =
                 Assert.Equal("Model;Provided;UseProvided", getStaticStringProperty "ModuleTypeSummary")
                 Assert.Equal("nonpublic-only", getStaticStringProperty "HiddenMethodVisibility")
                 Assert.Equal("nonpublic-only", getStaticStringProperty "HiddenPropertyVisibility")
+
+                let shapeProvidedType = consumerAssembly.GetType("Fs1023Consumer.ShapeProvided", throwOnError = true, ignoreCase = false)
+                let mapMethodProvided =
+                    providedType.GetMethod("MapParameters", BindingFlags.Public ||| BindingFlags.Static)
+                let mapMethodShape =
+                    shapeProvidedType.GetMethod("MapParameters", BindingFlags.Public ||| BindingFlags.Static)
+                Assert.NotNull(mapMethodProvided)
+                Assert.NotNull(mapMethodShape)
+                Assert.NotEqual(mapMethodProvided, mapMethodShape)
+                let seen = HashSet<MethodInfo>()
+                Assert.True(seen.Add mapMethodProvided)
+                Assert.True(seen.Add mapMethodShape)
 
             compile projectArgs
             assertProperties outputDll
