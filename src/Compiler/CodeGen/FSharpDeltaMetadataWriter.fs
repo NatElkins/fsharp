@@ -34,6 +34,13 @@ let private shouldEmitMetadataBuilderTables () =
     | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
     | _ -> false
 
+let private shouldTraceHeaps () =
+    match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_HEAPS") with
+    | null -> false
+    | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+    | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+    | _ -> false
+
 type MethodDefinitionRowInfo = DeltaMetadataTypes.MethodDefinitionRowInfo
 
 type ParameterDefinitionRowInfo = DeltaMetadataTypes.ParameterDefinitionRowInfo
@@ -422,6 +429,16 @@ let emitWithUserStrings
                 paramRows
                 propertyRows
                 eventRows
+                heapStreams.StringsLength
+                heapStreams.BlobsLength
+                heapStreams.GuidsLength
+
+        if shouldTraceHeaps () then
+            printfn
+                "[fsharp-hotreload][heap-summary] baseline:string=%d blob=%d guid=%d | delta:string=%d blob=%d guid=%d"
+                heapOffsets.StringHeapStart
+                heapOffsets.BlobHeapStart
+                heapOffsets.GuidHeapStart
                 heapStreams.StringsLength
                 heapStreams.BlobsLength
                 heapStreams.GuidsLength
