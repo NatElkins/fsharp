@@ -14,6 +14,13 @@ module private ConsoleHelpers =
     open FSharp.Compiler.CodeAnalysis
     open FSharp.Compiler.Diagnostics
 
+    let private shouldTraceUserStrings () =
+        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_STRINGS") with
+        | null -> false
+        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+        | _ -> false
+
     let writeDiagnostics (diagnostics: FSharpDiagnostic[]) =
         if diagnostics.Length = 0 then
             ()
@@ -45,7 +52,7 @@ module private ConsoleHelpers =
                     info.LocalSignatureToken
                     info.CodeOffset
                     info.CodeLength)
-        if delta.UserStringUpdates.Length > 0 then
+        if shouldTraceUserStrings () && delta.UserStringUpdates.Length > 0 then
             printfn "  Updated user strings:"
             delta.UserStringUpdates
             |> List.iter (fun (_, _, literal) -> printfn "    \"%s\"" literal)
