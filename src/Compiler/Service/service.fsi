@@ -58,6 +58,7 @@ type public FSharpChecker =
             bool *
         [<Experimental "This parameter is experimental and likely to be removed in the future.">] ?transparentCompilerCacheSizes:
             CacheSizes *
+        /// <param name="enableFs1023Telemetry">Optional override that mirrors the `--fs1023telemetry` compiler flag for IDE hosts. When true, the checker emits structured FS-1023 telemetry events even if the environment variable is disabled.</param>
         ?enableFs1023Telemetry: bool ->
             FSharpChecker
 

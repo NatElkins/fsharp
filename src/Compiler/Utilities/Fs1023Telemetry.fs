@@ -16,6 +16,11 @@ type internal Fs1023EventSource() =
         if base.IsEnabled() then
             base.WriteEvent(1, message)
 
+    [<Event(2, Level = EventLevel.Informational, Message = "Provided type emitted: {0}")>]
+    member this.ProvidedTypeEmitted(typeName: string, methodCount: int, propertyCount: int, eventCount: int) =
+        if base.IsEnabled() then
+            base.WriteEvent(2, typeName, methodCount, propertyCount, eventCount)
+
 module internal Fs1023Telemetry =
     let tryWrite (message: string) =
         if String.IsNullOrEmpty(message) then
@@ -24,6 +29,11 @@ module internal Fs1023Telemetry =
             try
                 Fs1023EventSource.Instance.Trace(message)
             with _ -> ()
+
+    let providedTypeEmitted typeName methodCount propertyCount eventCount =
+        try
+            Fs1023EventSource.Instance.ProvidedTypeEmitted(typeName, methodCount, propertyCount, eventCount)
+        with _ -> ()
 
 module internal Fs1023TraceControl =
     let private parseEnvSetting () =

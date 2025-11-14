@@ -11340,12 +11340,19 @@ and private GenProvidedTypeDef cenv (mgbuf: AssemblyBuilder) eenv m (tycon: Tyco
             if fs1023TraceEnabled () then
                 fs1023Trace "[ilxgen][provided] event %s missing add/remove entries" name)
 
+    let methodCount = providedCatalog.OrderedEntries.Length
+    let propertyCount = providedCatalog.PropertiesByName.Count
+    let eventCount = providedCatalog.EventsByName.Count
+
     if fs1023TraceEnabled () then
         fs1023Trace
-            "[ilxgen][provided] summary type=%s methods=%d properties=%d"
+            "[ilxgen][provided] summary type=%s methods=%d properties=%d events=%d"
             tref.FullName
-            providedCatalog.OrderedEntries.Length
-            providedCatalog.PropertiesByName.Count
+            methodCount
+            propertyCount
+            eventCount
+
+    Fs1023Telemetry.providedTypeEmitted tref.FullName methodCount propertyCount eventCount
 
     Some tref
 #endif
