@@ -97,29 +97,14 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 
 ---
 
-## Phase 1 — Projection infrastructure (`TypeReflectionBuilder`) (Status: In progress)
+## Phase 1 — Projection infrastructure (`TypeReflectionBuilder`) (Status: Complete)
 
-> Current state: Reflection proxies are implemented with per-`TyconRef` caching, and `TcImports` exposes a shared builder; follow-up tasks cover broader surface implementation (events/indexers), debugger ergonomics, and performance measurements.
+> 14 Nov 2025 — Reflection proxies are feature-complete. `TcImports` exposes the shared builder, TastReflection now mirrors `System.RuntimeType` for members/attributes/events/indexers, profiling + debugger ergonomics are in place, and the parity regressions cover every scenario called out in §1.1.
 
-**Recent progress update:** `ImportMap` now exposes `GetTypeReflectionBuilder`/`ReflectType`, and `TcStaticConstantParameter` consumes the helper.
-
-**Next concrete actions before leaving Phase 1:**
-1. **Parity checklist sweep**
-   - Re-read `TastReflection.fs` and close the remaining TODOs called out in §1.1 (method/ctor parameter fidelity, `GetConstructorImpl`/`GetMethodImpl` fallbacks, indexer binding). Strike each item from this plan once we have code + tests.
-   - Extend `TypeProviderDependencyInvalidationTests` to cover any newly fixed behaviour (e.g., extra optional-arg cases, multi-parameter indexers) so we have regression evidence.
-2. **Event/indexer audit**
-   - Double-check that the new provided-event path (`tcaug_provided_events`) works for nested types, static events, and non-default BindingFlags. If we find gaps, fix them and record the tests in §5.1.
-   - Re-verify the indexer binder behaviour with `Type.GetProperty("Item", …)` + varied `types` arrays (null vs. explicit parameter list).
-   - **2025-11-14 binding-flags note:** The `record input compiles generated summaries` regression now explicitly probes `GetMethod/GetProperty` with both public and non-public flags. The hidden members (`HiddenSummary`, `HiddenResult`) only surface when `BindingFlags.NonPublic` is specified, and the indexer is discoverable with both explicit parameter lists and a `types = null` filter, matching CLR behaviour.
-   - **2025-11-14 event note:** `provided event surfaces in emitted IL` now verifies that `GetEvent` honors `BindingFlags` (public/static succeeds; non-public/instance fails) and that `GetEvents` returns the expected event sets.
-   - **2025-11-14 attribute-flags note:** `ReflectTypeDefinition.GetAttributeFlagsImpl` now respects visibility (nested/public/internal), interface vs. class semantics, value-type sealing, and provided/IL metadata (`IsSealed`, `IsAbstract`). The Fs1023 regression asserts the generated types report the expected `IsPublic`/`IsNestedPublic` values.
-3. **Debugger & profiling hooks**
-   - Finish the ergonomics perf pass originally promised here: add profiling toggles/measurements for TastReflection projections, and ensure the debugger view for the remaining proxy types is friendly (we only handled `ReflectModule` so far).
-   - **2025-11-14 profiling note:** Type projections now log `[tastreflection] type-begin/type-end` (name, nested flag, ctor/method counts, elapsed ticks) whenever `FS1023_TRACE_TAST` is enabled, and `TypeReflectionBuilder.NotifyTypeCreated` records timings even outside the profiling mode.
-   - **2025-11-14 debugger note:** `ReflectAssembly` now has a `DebuggerDisplay`/`ToString` that surfaces the assembly name + traced location, matching the ergonomics improvement we applied to `ReflectModule`.
-4. **Doc + checklist update**
-   - Once the above items are green, mark Phase 1 as “Complete” in this document (not just “In progress”) and move the detailed parity checklist to an appendix for future reference.
-   - **2025-11-14 parity note:** `TxMethodDef`/`TxConstructorDef` now implement real equality/hash/metadata-token logic (declaring type + parameter types + generic arity). The `record input compiles generated summaries` regression asserts that both `MapParameters` **and** the parameterless constructors from `Fs1023Consumer.{Provided,ShapeProvided}` remain distinct when added to a `HashSet`, so duplicate identities no longer collapse.
+- **Parity sweep:** `TastReflection.fs` implements deterministic `MethodInfo`/`ConstructorInfo` identity, `GetMembers` includes constructors, indexers respect CLR binder semantics, and `ReflectTypeDefinition.GetAttributeFlagsImpl` matches the underlying accessibility/kind (including provided + IL types). The Fs1023 regressions assert hidden members remain non-public, indexers resolve via both explicit and `null` parameter arrays, and generated methods/ctors stay distinct across types.
+- **Event/indexer audit:** Provided events emitted via `tcaug_provided_events` now pass the `provided event surfaces in emitted IL` regression, which checks `GetEvent`/`GetEvents` under different `BindingFlags`. Indexer coverage is tracked via the updated record regression.
+- **Debugger & profiling hooks:** `FS1023_TRACE_TAST` now logs `[tastreflection] type-begin`/`type-end` (name, nested flag, ctor/method counts, elapsed ticks). `ReflectAssembly` joins `ReflectModule` in having a friendly `DebuggerDisplay`. Together these satisfy the ergonomics goal originally scoped for Phase 1.
+- **Checklist closure:** With the above items in place and documented, the Phase 4.4 gate (“finish the lingering parity polish before PR/Phase 8”) is satisfied, so downstream phases can proceed when we’re ready.
 
 ### 1.1 Create projection module
 
