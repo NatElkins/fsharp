@@ -1146,6 +1146,7 @@ type EventDemo() =
             let delta = emitDelta request
             File.WriteAllBytes(metadataPath, delta.Metadata)
             File.WriteAllBytes(ilPath, delta.IL)
+            RoslynBaseline.assertWithin "Property" delta.Metadata
 
             let expectedLiteral = Text.Encoding.Unicode.GetBytes("Property helper updated message")
             Assert.True(
@@ -1201,6 +1202,7 @@ type EventDemo() =
             let delta = emitDelta request
             File.WriteAllBytes(metadataPath, delta.Metadata)
             File.WriteAllBytes(ilPath, delta.IL)
+            RoslynBaseline.assertWithin "Property" delta.Metadata
 
             let expectedLiteral = Text.Encoding.Unicode.GetBytes "Property helper added message"
             Assert.True(containsSubsequence delta.Metadata expectedLiteral, "Expected metadata delta to contain added property literal.")
@@ -1261,6 +1263,7 @@ type EventDemo() =
             let delta = emitDelta request
             File.WriteAllBytes(metadataPath, delta.Metadata)
             File.WriteAllBytes(ilPath, delta.IL)
+            RoslynBaseline.assertWithin "Event" delta.Metadata
 
             let expectedLiteral = Text.Encoding.Unicode.GetBytes("Event helper updated payload")
             Assert.True(
