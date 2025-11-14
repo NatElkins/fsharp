@@ -219,20 +219,21 @@ let emitWithUserStrings
         for row in methodDefinitionRows do
             match updatesByKey.TryGetValue row.Key with
             | true, update ->
-                if emitSrmTables then
-                    let nameHandle = metadataBuilder.GetOrAddString row.Name
-                    let signatureHandle = metadataBuilder.GetOrAddBlob row.Signature
+                if row.IsAdded then
+                    if emitSrmTables then
+                        let nameHandle = metadataBuilder.GetOrAddString row.Name
+                        let signatureHandle = metadataBuilder.GetOrAddBlob row.Signature
 
-                    metadataBuilder.AddMethodDefinition(
-                        row.Attributes,
-                        row.ImplAttributes,
-                        nameHandle,
-                        signatureHandle,
-                        update.Body.CodeOffset,
-                        ParameterHandle()
-                    )
-                    |> ignore
-                tableMirror.AddMethodRow(row, update.Body)
+                        metadataBuilder.AddMethodDefinition(
+                            row.Attributes,
+                            row.ImplAttributes,
+                            nameHandle,
+                            signatureHandle,
+                            update.Body.CodeOffset,
+                            ParameterHandle()
+                        )
+                        |> ignore
+                    tableMirror.AddMethodRow(row, update.Body)
 
                 let methodHandle = MetadataTokens.MethodDefinitionHandle row.RowId
                 let operation = if row.IsAdded then EditAndContinueOperation.AddMethod else EditAndContinueOperation.Default

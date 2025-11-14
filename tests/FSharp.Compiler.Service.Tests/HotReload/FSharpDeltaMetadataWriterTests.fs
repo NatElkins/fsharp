@@ -563,11 +563,11 @@ module FSharpDeltaMetadataWriterTests =
         assertIndexes artifacts.Generation2
 
     [<Fact>]
-    let ``metadata writer emits async method rows`` () =
+    let ``metadata writer omits method rows for async body edits`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
         let metadataDelta = artifacts.Delta
 
-        Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
+        Assert.Equal(0, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
         Assert.Equal(0, metadataDelta.TableRowCounts.[int TableIndex.Param])
 
         let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
