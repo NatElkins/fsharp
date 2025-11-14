@@ -1874,6 +1874,9 @@ module UseProvided =
                 Assert.Equal("nonpublic-only", getStaticStringProperty "HiddenMethodVisibility")
                 Assert.Equal("nonpublic-only", getStaticStringProperty "HiddenPropertyVisibility")
 
+                Assert.True(providedType.IsPublic)
+                Assert.False(providedType.IsNestedPublic)
+
                 let publicInstanceMembers =
                     providedType.GetMembers(BindingFlags.Public ||| BindingFlags.Instance)
                     |> Array.map (fun m -> m.Name)
@@ -1881,6 +1884,8 @@ module UseProvided =
                 Assert.Contains(".ctor", publicInstanceMembers)
 
                 let shapeProvidedType = consumerAssembly.GetType("Fs1023Consumer.ShapeProvided", throwOnError = true, ignoreCase = false)
+                Assert.True(shapeProvidedType.IsPublic)
+                Assert.False(shapeProvidedType.IsNestedPublic)
                 let mapMethodProvided =
                     providedType.GetMethod("MapParameters", BindingFlags.Public ||| BindingFlags.Static)
                 let mapMethodShape =

@@ -2266,15 +2266,45 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
     override this.MakeByRefType() = ReflectTypeSymbol(ReflectTypeSymbolKind.ByRef, [| this |]) :> Type
 
     override __.GetAttributeFlagsImpl() = 
-        //TODO: GetAttributeFlagsImpl this needs fully completing
-        let attr = TypeAttributes.Public 
-      //  let attr = if inp.IsSealed then attr ||| TypeAttributes.Sealed else attr
-        let attr = 
-            if isInterfaceTyconRef tcref then attr ||| TypeAttributes.Interface 
-            else attr ||| TypeAttributes.Class 
-       // let attr = if inp.Is then attr ||| TypeAttributes.Serializable else attr
-       // if isNested then adjustTypeAttributes isNested attr else attr
-        attr
+        let tycon = tcref.Deref
+
+        let add flag condition acc =
+            if condition then acc ||| flag else acc
+
+        let visibility =
+            let access = tycon.Accessibility
+            if isNested then
+                if access.IsPublic then TypeAttributes.NestedPublic
+                elif access.IsInternal then TypeAttributes.NestedAssembly
+                else TypeAttributes.NestedPrivate
+            else
+                if access.IsPublic then TypeAttributes.Public
+                else TypeAttributes.NotPublic
+
+        let kindAttrs =
+            if isInterfaceTyconRef tcref then
+                TypeAttributes.Interface ||| TypeAttributes.Abstract
+            else
+                enum<TypeAttributes>(0)
+
+        let baseAttr = visibility ||| kindAttrs
+
+        let attrWithValueSemantics =
+            add TypeAttributes.Sealed (tcref.IsStructOrEnumTycon || tcref.IsFSharpStructOrEnumTycon) baseAttr
+
+        let attrWithProvidedOrILInfo =
+            match tycon.TypeReprInfo with
+            | TProvidedTypeRepr info ->
+                attrWithValueSemantics
+                |> add TypeAttributes.Sealed info.IsSealed
+                |> add TypeAttributes.Abstract info.IsAbstract
+            | TILObjectRepr (TILObjectReprData(_, _, td)) ->
+                attrWithValueSemantics
+                |> add TypeAttributes.Sealed td.IsSealed
+                |> add TypeAttributes.Abstract td.IsAbstract
+            | _ -> attrWithValueSemantics
+
+        attrWithProvidedOrILInfo
 
     override __.IsValueTypeImpl() = tcref.IsStructOrEnumTycon || tcref.IsFSharpStructOrEnumTycon
     override __.IsArrayImpl() = false
