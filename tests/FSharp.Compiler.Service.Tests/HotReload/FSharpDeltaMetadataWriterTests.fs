@@ -317,6 +317,16 @@ module FSharpDeltaMetadataWriterTests =
         assertDelta artifacts.Generation2
 
     [<Fact>]
+    let ``property multi-generation string heap omits accessor names`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
+        let assertHeap (delta: DeltaWriter.MetadataDelta) =
+            let heapText = Encoding.UTF8.GetString(delta.StringHeap)
+            Assert.DoesNotContain("Message", heapText)
+
+        assertHeap artifacts.Generation1
+        assertHeap artifacts.Generation2
+
+    [<Fact>]
     let ``async multi-generation uses ENC-sized indexes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
 
@@ -544,6 +554,16 @@ module FSharpDeltaMetadataWriterTests =
 
         assertDelta artifacts.Generation1
         assertDelta artifacts.Generation2
+
+    [<Fact>]
+    let ``event multi-generation string heap omits accessor names`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
+        let assertHeap (delta: DeltaWriter.MetadataDelta) =
+            let heapText = Encoding.UTF8.GetString(delta.StringHeap)
+            Assert.DoesNotContain("OnChanged", heapText)
+
+        assertHeap artifacts.Generation1
+        assertHeap artifacts.Generation2
 
     [<Fact>]
     let ``event multi-generation uses ENC-sized indexes`` () =
