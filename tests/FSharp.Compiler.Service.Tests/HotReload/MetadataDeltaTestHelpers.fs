@@ -661,10 +661,12 @@ module internal MetadataDeltaTestHelpers =
 
     type MetadataDeltaArtifacts =
         { BaselineBytes: byte[]
+          BaselineHeapSizes: MetadataHeapSizes
           Delta: DeltaWriter.MetadataDelta }
 
     type MultiGenerationMetadataArtifacts =
         { BaselineBytes: byte[]
+          BaselineHeapSizes: MetadataHeapSizes
           Generation1: DeltaWriter.MetadataDelta
           Generation2: DeltaWriter.MetadataDelta }
 
@@ -766,6 +768,7 @@ module internal MetadataDeltaTestHelpers =
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()
+        let baselineHeapSizes = getHeapSizes metadataReader
         let builder = IlDeltaStreamBuilder None
         let heapOffsets = computeHeapOffsets metadataReader
         let metadataDelta = emitPropertyDeltaCore metadataReader builder heapOffsets
@@ -812,6 +815,7 @@ module internal MetadataDeltaTestHelpers =
                 (srmReader.GetHeapSize HeapIndex.Guid)
 
         { BaselineBytes = assemblyBytes
+          BaselineHeapSizes = baselineHeapSizes
           Delta = metadataDelta }
 
     let private emitLocalSignatureDeltaCore
@@ -886,11 +890,13 @@ module internal MetadataDeltaTestHelpers =
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()
+        let baselineHeapSizes = getHeapSizes metadataReader
         let builder = IlDeltaStreamBuilder None
         let heapOffsets = computeHeapOffsets metadataReader
         let metadataDelta = emitLocalSignatureDeltaCore metadataReader peReader builder heapOffsets
 
         { BaselineBytes = assemblyBytes
+          BaselineHeapSizes = baselineHeapSizes
           Delta = metadataDelta }
 
     let private emitLocalSignatureDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) =
@@ -911,6 +917,7 @@ module internal MetadataDeltaTestHelpers =
         let generation2 = emitLocalSignatureDeltaFromBaseline generation1.BaselineBytes nextOffsets
 
         { BaselineBytes = generation1.BaselineBytes
+          BaselineHeapSizes = generation1.BaselineHeapSizes
           Generation1 = generation1.Delta
           Generation2 = generation2 }
 
@@ -973,6 +980,7 @@ module internal MetadataDeltaTestHelpers =
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()
+        let baselineHeapSizes = getHeapSizes metadataReader
         let builder = IlDeltaStreamBuilder None
         let heapOffsets = computeHeapOffsets metadataReader
         let metadataDelta = emitAsyncDeltaCore metadataReader builder heapOffsets
@@ -980,6 +988,7 @@ module internal MetadataDeltaTestHelpers =
         assertTableStreamMatches metadataDelta
 
         { BaselineBytes = assemblyBytes
+          BaselineHeapSizes = baselineHeapSizes
           Delta = metadataDelta }
 
     let private emitAsyncDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) =
@@ -1000,6 +1009,7 @@ module internal MetadataDeltaTestHelpers =
         let generation2 = emitAsyncDeltaFromBaseline generation1.BaselineBytes nextOffsets
 
         { BaselineBytes = generation1.BaselineBytes
+          BaselineHeapSizes = generation1.BaselineHeapSizes
           Generation1 = generation1.Delta
           Generation2 = generation2 }
 
@@ -1015,6 +1025,7 @@ module internal MetadataDeltaTestHelpers =
         let generation2 = emitPropertyDeltaFromBaseline generation1.BaselineBytes nextOffsets
 
         { BaselineBytes = generation1.BaselineBytes
+          BaselineHeapSizes = generation1.BaselineHeapSizes
           Generation1 = generation1.Delta
           Generation2 = generation2 }
 
@@ -1149,11 +1160,13 @@ module internal MetadataDeltaTestHelpers =
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()
+        let baselineHeapSizes = getHeapSizes metadataReader
         let builder = IlDeltaStreamBuilder None
         let heapOffsets = computeHeapOffsets metadataReader
         let metadataDelta = emitEventDeltaCore metadataReader builder heapOffsets
 
         { BaselineBytes = assemblyBytes
+          BaselineHeapSizes = baselineHeapSizes
           Delta = metadataDelta }
 
     let emitEventMultiGenerationArtifacts () : MultiGenerationMetadataArtifacts =
@@ -1168,6 +1181,7 @@ module internal MetadataDeltaTestHelpers =
         let generation2 = emitEventDeltaFromBaseline generation1.BaselineBytes nextOffsets
 
         { BaselineBytes = generation1.BaselineBytes
+          BaselineHeapSizes = generation1.BaselineHeapSizes
           Generation1 = generation1.Delta
           Generation2 = generation2 }
 
@@ -1290,6 +1304,7 @@ module internal MetadataDeltaTestHelpers =
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()
+        let baselineHeapSizes = getHeapSizes metadataReader
         let builder = IlDeltaStreamBuilder None
         let heapOffsets = computeHeapOffsets metadataReader
         let delta = emitClosureDeltaCore metadataReader builder heapOffsets
@@ -1297,6 +1312,7 @@ module internal MetadataDeltaTestHelpers =
         assertTableStreamMatches delta
 
         { BaselineBytes = assemblyBytes
+          BaselineHeapSizes = baselineHeapSizes
           Delta = delta }
 
     let private emitClosureDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) =
@@ -1317,6 +1333,7 @@ module internal MetadataDeltaTestHelpers =
         let generation2 = emitClosureDeltaFromBaseline generation1.BaselineBytes nextOffsets
 
         { BaselineBytes = generation1.BaselineBytes
+          BaselineHeapSizes = generation1.BaselineHeapSizes
           Generation1 = generation1.Delta
           Generation2 = generation2 }
 
