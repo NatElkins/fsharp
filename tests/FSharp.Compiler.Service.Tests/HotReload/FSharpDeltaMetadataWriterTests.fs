@@ -469,6 +469,18 @@ module FSharpDeltaMetadataWriterTests =
         assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap
 
     [<Fact>]
+    let ``event delta uses ENC-sized indexes`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitEventDeltaArtifacts None ()
+        let indexSizes = artifacts.Delta.IndexSizes
+
+        Assert.True(indexSizes.StringsBig)
+        Assert.True(indexSizes.BlobsBig)
+        Assert.True(indexSizes.HasSemanticsBig)
+        Assert.True(indexSizes.MemberRefParentBig)
+        Assert.True(indexSizes.SimpleIndexBig[int TableIndex.Event])
+        Assert.True(indexSizes.SimpleIndexBig[int TableIndex.EventMap])
+
+    [<Fact>]
     let ``event multi-generation deltas preserve EncLog ordering`` () =
         let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
 
