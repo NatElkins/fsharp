@@ -155,6 +155,25 @@ module FSharpDeltaMetadataWriterTests =
         assertDelta artifacts.Generation1
         assertDelta artifacts.Generation2
 
+    let private assertBlobHeapGrowthWithin label (artifacts: MetadataDeltaTestHelpers.MetadataDeltaArtifacts) maxGrowthBytes =
+        assertBaselineHeapSnapshot artifacts
+        let growth = getHeapSize artifacts.Delta.Metadata HeapIndex.Blob
+        Assert.True(
+            growth <= maxGrowthBytes,
+            sprintf "[%s] blob heap grew by %d bytes (limit %d)" label growth maxGrowthBytes)
+
+    let private assertBlobHeapGrowthWithinMulti label (artifacts: MetadataDeltaTestHelpers.MultiGenerationMetadataArtifacts) maxGrowthBytes =
+        assertBaselineHeapSnapshotMulti artifacts
+
+        let assertDelta (delta: DeltaWriter.MetadataDelta) =
+            let growth = getHeapSize delta.Metadata HeapIndex.Blob
+            Assert.True(
+                growth <= maxGrowthBytes,
+                sprintf "[%s] blob heap grew by %d bytes (limit %d)" label growth maxGrowthBytes)
+
+        assertDelta artifacts.Generation1
+        assertDelta artifacts.Generation2
+
     let private assertTableCountsMatch metadata (expected: int[]) =
         withMetadataReader metadata (fun reader ->
             for i = 0 to expected.Length - 1 do
@@ -416,6 +435,16 @@ module FSharpDeltaMetadataWriterTests =
         assertBaselineHeapSnapshotMulti artifacts
 
     [<Fact>]
+    let ``local signature delta blob heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitLocalSignatureDeltaArtifacts None ()
+        assertBlobHeapGrowthWithin "localsig-delta" artifacts 48
+
+    [<Fact>]
+    let ``local signature multi-generation blob heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitLocalSignatureMultiGenerationArtifacts ()
+        assertBlobHeapGrowthWithinMulti "localsig-multigen" artifacts 48
+
+    [<Fact>]
     let ``async multi-generation uses ENC-sized indexes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
 
@@ -491,6 +520,16 @@ module FSharpDeltaMetadataWriterTests =
     let ``async multi-generation string heap growth stays bounded`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
         assertStringHeapGrowthWithinMulti "async-multigen" artifacts 32
+
+    [<Fact>]
+    let ``async delta blob heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
+        assertBlobHeapGrowthWithin "async-delta" artifacts 128
+
+    [<Fact>]
+    let ``async multi-generation blob heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
+        assertBlobHeapGrowthWithinMulti "async-multigen" artifacts 128
 
     [<Fact>]
     let ``property multi-generation uses ENC-sized indexes`` () =
