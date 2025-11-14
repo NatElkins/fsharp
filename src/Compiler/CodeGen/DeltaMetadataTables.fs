@@ -308,6 +308,14 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             let idx = addStringValue value
             idx, false
 
+    let addExistingStringOptionHandle (handleOpt: StringHandle option) (valueOpt: string option) : int * bool =
+        match handleOpt with
+        | Some handle when not handle.IsNil -> MetadataTokens.GetHeapOffset handle, true
+        | _ ->
+            match valueOpt with
+            | Some v when not (String.IsNullOrEmpty v) -> strings.AddSharedEntry v, false
+            | _ -> 0, false
+
     let addStringOption (value: string option) : int * bool =
         match value with
         | Some v when not (String.IsNullOrEmpty v) ->
@@ -392,12 +400,12 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         methodRows.Add rowElements
 
     member _.AddParameterRow(row: ParameterDefinitionRowInfo) =
-        let nameIdx, _ = addStringOption row.Name
+        let nameToken = addExistingStringOptionHandle row.NameHandle row.Name
         let rowElements =
             [|
                 rowElementUShort (uint16 row.Attributes)
                 rowElementUShort (uint16 row.SequenceNumber)
-                rowElementString nameIdx
+                stringElement nameToken
             |]
         paramRows.Add rowElements
 

@@ -371,6 +371,12 @@ module FSharpDeltaMetadataWriterTests =
         Assert.DoesNotContain("async generation", heapText)
 
     [<Fact>]
+    let ``async delta string heap omits parameter names`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
+        let heapText = Encoding.UTF8.GetString(artifacts.Delta.StringHeap)
+        Assert.DoesNotContain("token", heapText, StringComparison.Ordinal)
+
+    [<Fact>]
     let ``async delta user string heap stays empty`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts (Some "async generation 2") ()
         let userStringSize = getHeapSize artifacts.Delta.Metadata HeapIndex.UserString
@@ -380,6 +386,17 @@ module FSharpDeltaMetadataWriterTests =
     let ``async multi-generation string heap size stays constant`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
         Assert.Equal(artifacts.Generation1.StringHeap.Length, artifacts.Generation2.StringHeap.Length)
+
+    [<Fact>]
+    let ``async multi-generation string heap omits parameter names`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
+
+        let assertHeap (delta: DeltaWriter.MetadataDelta) =
+            let heapText = Encoding.UTF8.GetString(delta.StringHeap)
+            Assert.DoesNotContain("token", heapText, StringComparison.Ordinal)
+
+        assertHeap artifacts.Generation1
+        assertHeap artifacts.Generation2
 
     [<Fact>]
     let ``async multi-generation user string heap size stays constant`` () =
