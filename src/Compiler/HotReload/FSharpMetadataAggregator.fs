@@ -25,6 +25,16 @@ type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
     let readerGeneration = Dictionary<MetadataReader, int>(HashIdentity.Reference)
     do
         readersArray |> Array.iteri (fun generation reader -> readerGeneration[reader] <- generation)
+    let tryGetStringValue (reader: MetadataReader) (handle: StringHandle) =
+        if handle.IsNil then
+            None
+        else
+            try
+                Some(reader.GetString handle)
+            with
+            | :? BadImageFormatException
+            | :? ArgumentOutOfRangeException ->
+                None
     let baselineStringHandles =
         let dict = Dictionary<string, StringHandle>(StringComparer.Ordinal)
 
@@ -82,14 +92,22 @@ type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
             | true, value -> value
             | _ -> invalidArg (nameof sourceReader) "Metadata reader is not part of this aggregator."
 
-        if generation = 0 then
+        if generation = 0 || handle.IsNil then
             struct (0, handle)
         else
-            let value = sourceReader.GetString handle
+            let offset = MetadataTokens.GetHeapOffset handle
+            let heapSize = sourceReader.GetHeapSize(HeapIndex.String)
 
-            match baselineStringHandles.TryGetValue value with
-            | true, baselineHandle -> struct (0, baselineHandle)
-            | _ -> struct (generation, handle)
+            if offset >= heapSize then
+                // The handle already points into the baseline heap; treat it as generation 0.
+                struct (0, handle)
+            else
+                match tryGetStringValue sourceReader handle with
+                | None -> struct (generation, handle)
+                | Some value ->
+                    match baselineStringHandles.TryGetValue value with
+                    | true, baselineHandle -> struct (0, baselineHandle)
+                    | _ -> struct (generation, handle)
 
     static member Create(readers: seq<MetadataReader>) =
         FSharpMetadataAggregator(ImmutableArray.CreateRange(readers))

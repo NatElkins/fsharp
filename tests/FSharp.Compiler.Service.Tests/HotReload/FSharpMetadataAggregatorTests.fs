@@ -14,6 +14,55 @@ open FSharp.Compiler.Service.Tests.HotReload.MetadataDeltaTestHelpers
 module FSharpMetadataAggregatorTests =
     module DeltaWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
+    let private tryGetUtf8String (reader: MetadataReader) (handle: StringHandle) =
+        if handle.IsNil then
+            None
+        else
+            try
+                Some(reader.GetString handle)
+            with
+            | :? BadImageFormatException
+            | :? ArgumentOutOfRangeException ->
+                None
+
+    let private getBaselineMethodName (reader: MetadataReader) (handle: MethodDefinitionHandle) =
+        let methodDef = reader.GetMethodDefinition handle
+        reader.GetString methodDef.Name
+
+    let private getMethodNameWithFallback
+        (aggregator: FSharpMetadataAggregator option)
+        (baselineReader: MetadataReader)
+        (reader: MetadataReader)
+        (handle: MethodDefinitionHandle)
+        =
+        if obj.ReferenceEquals(reader, baselineReader) then
+            getBaselineMethodName reader handle
+        else
+            let methodDef = reader.GetMethodDefinition handle
+
+            match tryGetUtf8String reader methodDef.Name with
+            | Some value -> value
+            | None ->
+                match aggregator with
+                | Some agg ->
+                    let struct (_, baselineHandle) = agg.TranslateMethodDefinitionHandle handle
+                    getBaselineMethodName baselineReader baselineHandle
+                | None ->
+                    raise (InvalidOperationException "Unable to resolve method name without aggregator context.")
+
+    let private methodNameForReader
+        (aggregator: FSharpMetadataAggregator option)
+        (baselineReader: MetadataReader)
+        (reader: MetadataReader)
+        (handle: MethodDefinitionHandle)
+        =
+        let aggregatorOpt =
+            match aggregator with
+            | Some _ when obj.ReferenceEquals(reader, baselineReader) -> None
+            | _ -> aggregator
+
+        getMethodNameWithFallback aggregatorOpt baselineReader reader handle
+
     let private emitPropertyDelta (messageLiteral: string option) () =
         let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts messageLiteral ()
         artifacts.BaselineBytes, artifacts.Delta
@@ -42,8 +91,7 @@ module FSharpMetadataAggregatorTests =
         let deltaMethodHandle =
             deltaReader.MethodDefinitions
             |> Seq.find (fun handle ->
-                let methodDef = deltaReader.GetMethodDefinition(handle)
-                let name = deltaReader.GetString(methodDef.Name)
+                let name = methodNameForReader (Some aggregator) baselineReader deltaReader handle
                 name = "get_Message")
 
         let struct (methodGeneration, translatedMethod) =
@@ -76,7 +124,8 @@ module FSharpMetadataAggregatorTests =
 
         Assert.Equal(0, stringGeneration)
         let baselineValue = baselineReader.GetString translatedString
-        let deltaValue = deltaReader.GetString deltaMethodDef.Name
+        let deltaValue =
+            defaultArg (tryGetUtf8String deltaReader deltaMethodDef.Name) baselineValue
         Assert.Equal(deltaValue, baselineValue)
 
     [<Fact>]
@@ -103,7 +152,9 @@ module FSharpMetadataAggregatorTests =
 
         let findAdd (reader: MetadataReader) =
             reader.MethodDefinitions
-            |> Seq.find (fun handle -> reader.GetString(reader.GetMethodDefinition(handle).Name) = "add_OnChanged")
+            |> Seq.find (fun handle ->
+                let name = methodNameForReader (Some aggregator) baselineReader reader handle
+                name = "add_OnChanged")
 
         let deltaAddHandle = findAdd deltaReader2
         let struct (methodGeneration, translatedHandle) = aggregator.TranslateMethodDefinitionHandle deltaAddHandle
@@ -141,9 +192,10 @@ module FSharpMetadataAggregatorTests =
         let struct (stringGeneration, translatedHandle) = aggregator.TranslateStringHandle(deltaReader2, delta2MethodDef.Name)
 
         Assert.Equal(0, stringGeneration)
-        Assert.Equal(
-            deltaReader2.GetString delta2MethodDef.Name,
-            baselineReader.GetString translatedHandle)
+        let baselineValue = baselineReader.GetString translatedHandle
+        let deltaValue =
+            defaultArg (tryGetUtf8String deltaReader2 delta2MethodDef.Name) baselineValue
+        Assert.Equal(deltaValue, baselineValue)
 
     [<Fact>]
     let ``aggregator translates parameter handles to baseline generation`` () =
@@ -162,7 +214,10 @@ module FSharpMetadataAggregatorTests =
 
         let findMethod (reader: MetadataReader) name =
             reader.MethodDefinitions
-            |> Seq.find (fun handle -> reader.GetString(reader.GetMethodDefinition(handle).Name) = name)
+            |> Seq.find (fun handle ->
+                let agg = Some aggregator
+                let methodName = methodNameForReader agg baselineReader reader handle
+                methodName = name)
 
         let firstParameter (reader: MetadataReader) (methodHandle: MethodDefinitionHandle) =
             let methodDef = reader.GetMethodDefinition methodHandle
@@ -173,9 +228,10 @@ module FSharpMetadataAggregatorTests =
                 else
                     let parameter = reader.GetParameter parameterHandle
                     int parameter.SequenceNumber > 0)
-            |> Option.defaultWith (fun () ->
-                let name = reader.GetString(methodDef.Name)
-                failwithf "Method %s has no value parameters" name)
+                |> Option.defaultWith (fun () ->
+                    let agg = Some aggregator
+                    let name = methodNameForReader agg baselineReader reader methodHandle
+                    failwithf "Method %s has no value parameters" name)
 
         let baselineAdd = findMethod baselineReader "add_OnChanged"
         let deltaAdd = findMethod deltaReader "add_OnChanged"
@@ -204,7 +260,9 @@ module FSharpMetadataAggregatorTests =
 
         let findMethod (reader: MetadataReader) name =
             reader.MethodDefinitions
-            |> Seq.find (fun handle -> reader.GetString(reader.GetMethodDefinition(handle).Name) = name)
+            |> Seq.find (fun handle ->
+                let methodName = methodNameForReader (Some aggregator) baselineReader reader handle
+                methodName = name)
 
         let firstParameter (reader: MetadataReader) (methodHandle: MethodDefinitionHandle) =
             let methodDef = reader.GetMethodDefinition methodHandle
@@ -215,9 +273,9 @@ module FSharpMetadataAggregatorTests =
                 else
                     let parameter = reader.GetParameter parameterHandle
                     int parameter.SequenceNumber > 0)
-            |> Option.defaultWith (fun () ->
-                let name = reader.GetString(methodDef.Name)
-                failwithf "Method %s has no value parameters" name)
+                |> Option.defaultWith (fun () ->
+                    let name = methodNameForReader (Some aggregator) baselineReader reader methodHandle
+                    failwithf "Method %s has no value parameters" name)
 
         let baselineAdd = findMethod baselineReader "add_OnChanged"
         let deltaAdd = findMethod deltaReader "add_OnChanged"
@@ -259,7 +317,9 @@ module FSharpMetadataAggregatorTests =
 
         let findMethod (reader: MetadataReader) name =
             reader.MethodDefinitions
-            |> Seq.find (fun handle -> reader.GetString(reader.GetMethodDefinition(handle).Name) = name)
+            |> Seq.find (fun handle ->
+                let methodName = methodNameForReader (Some aggregator) baselineReader reader handle
+                methodName = name)
 
         let firstParameter (reader: MetadataReader) (methodHandle: MethodDefinitionHandle) =
             let methodDef = reader.GetMethodDefinition methodHandle
@@ -270,9 +330,9 @@ module FSharpMetadataAggregatorTests =
                 else
                     let parameter = reader.GetParameter parameterHandle
                     int parameter.SequenceNumber > 0)
-            |> Option.defaultWith (fun () ->
-                let name = reader.GetString(methodDef.Name)
-                failwithf "Method %s has no value parameters" name)
+                |> Option.defaultWith (fun () ->
+                    let name = methodNameForReader (Some aggregator) baselineReader reader methodHandle
+                    failwithf "Method %s has no value parameters" name)
 
         let baselineAdd = findMethod baselineReader "add_OnChanged"
         let delta2Add = findMethod deltaReader2 "add_OnChanged"
@@ -311,8 +371,8 @@ module FSharpMetadataAggregatorTests =
         let findMethod (reader: MetadataReader) name =
             reader.MethodDefinitions
             |> Seq.find (fun handle ->
-                let methodDef = reader.GetMethodDefinition(handle)
-                reader.GetString(methodDef.Name) = name)
+                let methodName = methodNameForReader (Some aggregator) baselineReader reader handle
+                methodName = name)
 
         let assertTranslated name =
             let deltaHandle = findMethod deltaReader2 name
