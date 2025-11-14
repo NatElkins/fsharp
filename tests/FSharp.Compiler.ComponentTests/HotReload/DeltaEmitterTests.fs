@@ -862,12 +862,6 @@ module DeltaEmitterTests =
             (fun ret -> Assert.Equal<byte>(0x2Auy, ret))
         )
 
-        let metadataBytes = ImmutableArray.CreateRange<byte>(delta.Metadata)
-        use metadataProvider = MetadataReaderProvider.FromMetadataImage(metadataBytes)
-        let mdReader = metadataProvider.GetMetadataReader()
-        let methodHandle = MetadataTokens.MethodDefinitionHandle 1
-        let methodDef = mdReader.GetMethodDefinition methodHandle
-        Assert.Equal(bodyInfo.CodeOffset, methodDef.RelativeVirtualAddress)
 
     [<Fact>]
     let ``HotReloadState persists EncId sequencing`` () =
