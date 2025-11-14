@@ -242,7 +242,7 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
 
 ---
 
-## Phase 5 — Tests (Status: In progress)
+## Phase 5 — Tests (Status: Completed)
 
 ### 5.1 Compiler unit tests
 
