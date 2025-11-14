@@ -3,6 +3,7 @@
 namespace FSharp.Compiler.ComponentTests.HotReload
 
 open System
+open System.Text.Json
 open System.Collections.Immutable
 open System.Diagnostics
 open System.IO
@@ -66,6 +67,62 @@ module MdvValidationTests =
                 ImmutableArray.CreateRange metadata)
         let reader = provider.GetMetadataReader()
         action reader
+
+    module private RoslynBaseline =
+        let private baselines : Lazy<Map<string, Map<string, int>>> = lazy (
+            let path = Path.Combine(__SOURCE_DIRECTORY__, "../../../../tools/baselines/roslyn_tables.json") |> Path.GetFullPath
+            if not (File.Exists path) then
+                failwithf "Roslyn baseline table snapshot not found: %s" path
+
+            let options = JsonSerializerOptions(PropertyNameCaseInsensitive = true)
+            let dict = JsonSerializer.Deserialize<Collections.Generic.Dictionary<string, Collections.Generic.Dictionary<string, int>>>(File.ReadAllText path, options)
+            dict
+            |> Seq.map (fun outer ->
+                let innerMap =
+                    outer.Value
+                    |> Seq.map (fun inner -> inner.Key, inner.Value)
+                    |> Map.ofSeq
+                outer.Key, innerMap)
+            |> Map.ofSeq)
+
+        let private tryFindTableIndex key =
+            match key with
+            | "Module" -> Some TableIndex.Module
+            | "TypeRef" -> Some TableIndex.TypeRef
+            | "TypeDef" -> Some TableIndex.TypeDef
+            | "Field" -> Some TableIndex.Field
+            | "MethodDef" -> Some TableIndex.MethodDef
+            | "Param" -> Some TableIndex.Param
+            | "MemberRef" -> Some TableIndex.MemberRef
+            | "StandAloneSig" -> Some TableIndex.StandAloneSig
+            | "Property" -> Some TableIndex.Property
+            | "PropertyMap" -> Some TableIndex.PropertyMap
+            | "Event" -> Some TableIndex.Event
+            | "EventMap" -> Some TableIndex.EventMap
+            | "MethodSemantics" -> Some TableIndex.MethodSemantics
+            | "TypeSpec" -> Some TableIndex.TypeSpec
+            | "AssemblyRef" -> Some TableIndex.AssemblyRef
+            | "EncLog" -> Some TableIndex.EncLog
+            | "EncMap" -> Some TableIndex.EncMap
+            | _ -> None
+
+        let private countRows (metadata: byte[]) tableIndex =
+            withMetadataReader metadata (fun reader -> reader.GetTableRowCount tableIndex)
+
+        let assertWithin (scenario: string) (metadata: byte[]) =
+            let expected =
+                baselines.Value
+                |> Map.tryFind scenario
+                |> Option.defaultWith (fun () -> failwithf "Roslyn baseline '%s' missing" scenario)
+
+            for KeyValue(key, budget) in expected do
+                match tryFindTableIndex key with
+                | Some tableIndex ->
+                    let actual = countRows metadata tableIndex
+                    Assert.True(
+                        actual <= budget,
+                        sprintf "[Roslyn baseline] scenario '%s' exceeded %A: actual=%d baseline=%d" scenario tableIndex actual budget)
+                | None -> ()
 
     let private methodRowIdFromToken (methodToken: int) = methodToken &&& 0x00FFFFFF
 
@@ -1393,6 +1450,8 @@ type EventDemo() =
             let delta1 = emitDelta request1
             File.WriteAllBytes(meta1Path, delta1.Metadata)
             File.WriteAllBytes(il1Path, delta1.IL)
+            RoslynBaseline.assertWithin "Async" delta1.Metadata
+            RoslynBaseline.assertWithin "Property" delta1.Metadata
 
             let expectedLiteral1 = Text.Encoding.Unicode.GetBytes "Property helper generation 1"
             Assert.True(
@@ -1428,6 +1487,8 @@ type EventDemo() =
             let delta2 = emitDelta request2
             File.WriteAllBytes(meta2Path, delta2.Metadata)
             File.WriteAllBytes(il2Path, delta2.IL)
+            RoslynBaseline.assertWithin "AsyncUpdate" delta2.Metadata
+            RoslynBaseline.assertWithin "PropertyUpdate" delta2.Metadata
 
             let expectedLiteral2 = Text.Encoding.Unicode.GetBytes "Property helper generation 2"
             Assert.True(
@@ -1476,6 +1537,7 @@ type EventDemo() =
 
         let delta1 = emitDelta request1
         File.WriteAllBytes(meta1Path, delta1.Metadata)
+        RoslynBaseline.assertWithin "Event" delta1.Metadata
         assertMethodEncLog delta1 methodToken
         assertEncMapContains delta1 TableIndex.MethodDef methodRowId
 
@@ -1494,6 +1556,7 @@ type EventDemo() =
 
         let delta2 = emitDelta request2
         File.WriteAllBytes(meta2Path, delta2.Metadata)
+        RoslynBaseline.assertWithin "EventUpdate" delta2.Metadata
         assertMethodEncLog delta2 methodToken
         assertEncMapContains delta2 TableIndex.MethodDef methodRowId
 
