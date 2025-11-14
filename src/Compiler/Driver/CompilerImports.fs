@@ -1287,6 +1287,8 @@ and [<Sealed>] TcImports
     let mutable disposed = false // this doesn't need locking, it's only for debugging
     let mutable tcGlobals = None // this doesn't need locking, it's set during construction of the TcImports
     let mutable typeReflectionBuilder : TypeReflectionBuilder option = None
+    let pendingReflectionTycons = ResizeArray<CcuThunk * TyconRef>()
+    let reflectionRegisteredTycons = HashSet<Stamp>()
 
     let CheckDisposed () =
         if disposed then
@@ -1370,6 +1372,25 @@ and [<Sealed>] TcImports
             RequireTcImportsLock(tcitok, typeProviderTypeDependencies)
             typeProviderTypeDependencies.Add tcref |> ignore)
 #endif
+
+    member tcImports.RegisterTyconForReflection(thisCcu: CcuThunk, tycon: Tycon) =
+        CheckDisposed()
+        let stamp = tycon.Stamp
+        if reflectionRegisteredTycons.Add stamp then
+            let tcref = mkLocalTyconRef tycon
+            let logRegistrations =
+                match Environment.GetEnvironmentVariable("FS1023_TRACE_REGISTER") with
+                | null -> false
+                | value when String.Equals(value.Trim(), "1", StringComparison.Ordinal) -> true
+                | _ -> false
+            if logRegistrations then
+                let builderReady = typeReflectionBuilder.IsSome
+                printfn "[fs1023][register] assembly=%s stamp=%A name=%s isModule=%b builderReady=%b" thisCcu.AssemblyName thisCcu.Stamp tycon.CompiledName tycon.IsModuleOrNamespace builderReady
+            match typeReflectionBuilder with
+            | Some builder ->
+                builder.RegisterTycon(thisCcu, tcref)
+            | None ->
+                pendingReflectionTycons.Add(thisCcu, tcref)
 
     member _.RegisterCcu ccuInfo =
         tciLock.AcquireLock(fun tcitok ->
@@ -1859,6 +1880,9 @@ and [<Sealed>] TcImports
 
                 member _.GetTypeReflectionBuilder() =
                     tcImports.GetTypeReflectionBuilder()
+
+                member _.RegisterTyconForReflection(ccu, tycon) =
+                    tcImports.RegisterTyconForReflection(ccu, tycon)
             }
 #else
             { new AssemblyLoader with
@@ -1885,6 +1909,9 @@ and [<Sealed>] TcImports
                     tcImports.GetTypeReflectionBuilder()
 
                 member _.RecordTypeDependency tcref = tcImports.RecordTypeDependency tcref
+
+                member _.RegisterTyconForReflection(ccu, tycon) =
+                    tcImports.RegisterTyconForReflection(ccu, tycon)
             }
 #endif
         ImportMap(tcImports.GetTcGlobals(), loaderInterface)
@@ -1900,12 +1927,20 @@ and [<Sealed>] TcImports
             | Some g ->
                 let builder = TypeReflectionBuilder g
                 typeReflectionBuilder <- Some builder
+                if pendingReflectionTycons.Count > 0 then
+                    for ccu, tcref in pendingReflectionTycons do
+                        builder.RegisterTycon(ccu, tcref)
+                    pendingReflectionTycons.Clear()
                 builder
             | None ->
                 match importsBase with
                 | Some baseImports ->
                     let builder = baseImports.GetTypeReflectionBuilder()
                     typeReflectionBuilder <- Some builder
+                    if pendingReflectionTycons.Count > 0 then
+                        for ccu, tcref in pendingReflectionTycons do
+                            builder.RegisterTycon(ccu, tcref)
+                        pendingReflectionTycons.Clear()
                     builder
                 | None -> failwith "Type reflection builder requested before TcGlobals initialized"
 

@@ -259,26 +259,31 @@ let AddLocalTyconRefs ownDefinition g amap m tcrefs env =
     { env with eNameResEnv = AddTyconRefsToNameEnv BulkAdd.No ownDefinition g amap env.eAccessRights m false env.eNameResEnv tcrefs }
 
 /// Add a list of type definitions to TcEnv
-let AddLocalTycons g amap m (tycons: Tycon list) env =
-    if isNil tycons then env else
-    env |> AddLocalTyconRefs false g amap m (List.map mkLocalTyconRef tycons) 
+let AddLocalTycons g amap thisCcu m (tycons: Tycon list) env =
+    if isNil tycons then env
+    else
+        let env = env |> AddLocalTyconRefs false g amap m (List.map mkLocalTyconRef tycons)
+        for tycon in tycons do
+            amap.assemblyLoader.RegisterTyconForReflection(thisCcu, tycon)
+        env
 
 /// Add a list of type definitions to TcEnv and report them to the sink
-let AddLocalTyconsAndReport tcSink scopem g amap m tycons env = 
-    let env = AddLocalTycons g amap m tycons env
+let AddLocalTyconsAndReport tcSink scopem g amap thisCcu m tycons env = 
+    let env = AddLocalTycons g amap thisCcu m tycons env
     CallEnvSink tcSink (scopem, env.NameEnv, env.eAccessRights)
     env
 
 /// Add a "module X = ..." definition to the TcEnv 
-let AddLocalSubModule g amap m env (moduleEntity: ModuleOrNamespace) =
+let AddLocalSubModule g amap thisCcu m env (moduleEntity: ModuleOrNamespace) =
     let env = { env with
                     eNameResEnv = AddModuleOrNamespaceRefToNameEnv g amap m false env.eAccessRights env.eNameResEnv (mkLocalModuleRef moduleEntity)
                     eUngeneralizableItems = addFreeItemOfModuleTy moduleEntity.ModuleOrNamespaceType env.eUngeneralizableItems }
+    amap.assemblyLoader.RegisterTyconForReflection(thisCcu, moduleEntity)
     env
 
 /// Add a "module X = ..." definition to the TcEnv and report it to the sink
-let AddLocalSubModuleAndReport tcSink scopem g amap m env (moduleEntity: ModuleOrNamespace) =
-    let env = AddLocalSubModule g amap m env moduleEntity
+let AddLocalSubModuleAndReport tcSink scopem g amap thisCcu m env (moduleEntity: ModuleOrNamespace) =
+    let env = AddLocalSubModule g amap thisCcu m env moduleEntity
     if not (equals scopem m) then
         // Don't report another environment for top-level module at its own range,
         // so it doesn't overwrite inner environment used by features like code completion. 
@@ -1826,7 +1831,7 @@ module MutRecBindingChecking =
                 let envForDecls = envAbove
 
                 // Add the modules being defined
-                let envForDecls = (envForDecls, moduls) ||> List.fold ((if report then AddLocalSubModuleAndReport cenv.tcSink scopem else AddLocalSubModule) g cenv.amap m)
+                let envForDecls = (envForDecls, moduls) ||> List.fold ((if report then AddLocalSubModuleAndReport cenv.tcSink scopem else AddLocalSubModule) g cenv.amap cenv.thisCcu m)
 
                 // Process the 'open' declarations                
                 let envForDecls =
@@ -1836,11 +1841,11 @@ module MutRecBindingChecking =
                         env)
 
                 // Add the type definitions being defined
-                let envForDecls = (if report then AddLocalTyconsAndReport cenv.tcSink scopem else AddLocalTycons) g cenv.amap m tycons envForDecls 
+                let envForDecls = (if report then AddLocalTyconsAndReport cenv.tcSink scopem else AddLocalTycons) g cenv.amap cenv.thisCcu m tycons envForDecls 
                 // Add the exception definitions being defined
                 let envForDecls = (envForDecls, exns) ||> List.fold (AddLocalExnDefnAndReport cenv.tcSink scopem)
                 // Add the modules again (but don't report them a second time)
-                let envForDecls = (envForDecls, moduls) ||> List.fold (AddLocalSubModule g cenv.amap m)
+                let envForDecls = (envForDecls, moduls) ||> List.fold (AddLocalSubModule g cenv.amap cenv.thisCcu m)
                 // Add the module abbreviations
                 let envForDecls = (envForDecls, moduleAbbrevs) ||> List.fold (TcModuleAbbrevDecl cenv scopem)
                 // Add the values and members
@@ -2543,7 +2548,7 @@ module TcExceptionDeclarations =
     let TcExnDefn (cenv: cenv) envInitial parent (SynExceptionDefn(core, _, aug, m), scopem) = 
         let g = cenv.g
         let binds1, exnc = TcExnDefnCore cenv envInitial parent core
-        let envMutRec = AddLocalExnDefnAndReport cenv.tcSink scopem (AddLocalTycons g cenv.amap scopem [exnc] envInitial) exnc 
+        let envMutRec = AddLocalExnDefnAndReport cenv.tcSink scopem (AddLocalTycons g cenv.amap cenv.thisCcu scopem [exnc] envInitial) exnc 
 
         let defns = [MutRecShape.Tycon(MutRecDefnsPhase2DataForTycon(Some exnc, parent, ModuleOrMemberBinding, mkLocalEntityRef exnc, None, NoSafeInitInfo, [], aug, m, NoNewSlots, (fun () -> ())))]
         let binds2, envFinal = TcMutRecDefns_Phase2 cenv envInitial m scopem None envMutRec defns true
@@ -2559,7 +2564,7 @@ module TcExceptionDeclarations =
         | _ ->
             let g = cenv.g
             let binds, exnc = TcExnDefnCore cenv envInitial parent core
-            let envMutRec = AddLocalExnDefnAndReport cenv.tcSink scopem (AddLocalTycons g cenv.amap scopem [exnc] envInitial) exnc 
+            let envMutRec = AddLocalExnDefnAndReport cenv.tcSink scopem (AddLocalTycons g cenv.amap cenv.thisCcu scopem [exnc] envInitial) exnc 
             let ecref = mkLocalEntityRef exnc
             let containerInfo = ContainerInfo(parent, Some(MemberOrValContainerInfo(ecref, None, None, NoSafeInitInfo, [])))
             let vals, _ = TcTyconMemberSpecs cenv envMutRec containerInfo ModuleOrMemberBinding tpenv aug            
@@ -3352,6 +3357,7 @@ module EstablishTypeDefinitionCores =
             ProvidedGeneratedTypeRegistry.register assemblyName pathArray entity
 
             cenv.amap.assemblyLoader.RecordGeneratedTycon entity
+            cenv.amap.assemblyLoader.RegisterTyconForReflection(cenv.thisCcu, entity)
 
             match entity.CompilationPathOpt with
             | Some compPath ->
@@ -5298,7 +5304,7 @@ let rec TcSignatureElementNonMutRec (cenv: cenv) parent typeNames endm (env: TcE
                 moduleEntity.entity_modul_type <- MaybeLazy.Strict moduleTy 
                 let scopem = unionRanges m endm
                 PublishModuleDefn cenv env moduleEntity
-                let env = AddLocalSubModuleAndReport cenv.tcSink scopem g cenv.amap m env moduleEntity
+                let env = AddLocalSubModuleAndReport cenv.tcSink scopem g cenv.amap cenv.thisCcu m env moduleEntity
                 return env
             
         | SynModuleSigDecl.ModuleAbbrev (id, p, m) -> 
@@ -5770,7 +5776,7 @@ let rec TcModuleOrNamespaceElementNonMutRec (cenv: cenv) parent typeNames scopem
 
               PublishModuleDefn cenv env moduleEntity 
 
-              let env = AddLocalSubModuleAndReport cenv.tcSink scopem g cenv.amap m env moduleEntity
+              let env = AddLocalSubModuleAndReport cenv.tcSink scopem g cenv.amap cenv.thisCcu m env moduleEntity
           
               // isContinuingModule is true for all of the following
               //   - the implicit module of a script 

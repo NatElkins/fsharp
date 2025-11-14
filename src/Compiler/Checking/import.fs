@@ -100,6 +100,8 @@ type AssemblyLoader =
 
     abstract GetTypeReflectionBuilder : unit -> TypeReflectionBuilder
 
+    abstract RegisterTyconForReflection : CcuThunk * Tycon -> unit
+
 //-------------------------------------------------------------------------
 // Import an IL types as F# types.
 //-------------------------------------------------------------------------

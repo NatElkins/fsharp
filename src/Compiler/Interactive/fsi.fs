@@ -2970,7 +2970,7 @@ type internal FsiDynamicCompiler
                 mkBoundValueTypedImpl istate.tcGlobals range0 qualifiedName.Text name ty
 
             let tcEnvAtEndOfLastInput =
-                AddLocalSubModule tcGlobals amap range0 istate.tcState.TcEnvFromImpls moduleEntity
+                AddLocalSubModule tcGlobals amap istate.tcState.Ccu range0 istate.tcState.TcEnvFromImpls moduleEntity
                 |> AddLocalVal tcGlobals TcResultsSink.NoSink range0 v
 
             // Generate IL for the given typled impl and create new interactive state.

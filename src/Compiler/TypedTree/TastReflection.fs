@@ -1325,6 +1325,45 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
             |> List.mapi (fun i gp -> TxGenericParam asm (fun () -> gps, gps2) (i + gps.Length) gp)
             |> List.toArray
 
+        let pairTyparsWithTypes (typars: Typar list) (types: Type[]) =
+            if List.isEmpty typars then
+                []
+            elif Array.isEmpty types then
+                []
+            else
+                let typarArray = typars |> List.toArray
+                if typarArray.Length <> types.Length then
+                    []
+                else
+                    Array.zip typarArray types |> Array.toList
+
+        let enclosingTyconPairs =
+            if vref.IsMember then
+                let tycon = vref.MemberApparentEntity
+                pairTyparsWithTypes tycon.TyparsNoRange gps
+            else
+                match vref.TryDeref with
+                | ValueSome v ->
+                    match v.TryDeclaringEntity with
+                    | Parent tcref -> pairTyparsWithTypes tcref.TyparsNoRange gps
+                    | ParentNone -> []
+                | ValueNone -> []
+
+        let methodTyparPairs = pairTyparsWithTypes typars gps2
+
+        let pushTypars () =
+            let combined =
+                if List.isEmpty methodTyparPairs then enclosingTyconPairs
+                elif List.isEmpty enclosingTyconPairs then methodTyparPairs
+                else enclosingTyconPairs @ methodTyparPairs
+
+            if List.isEmpty combined then
+                { new IDisposable with member _.Dispose() = () }
+            else
+                asm.PushTyparScope combined
+
+        use _typarScope = pushTypars ()
+
         let isStatic =
             match vref.MemberInfo with
             | Some info -> not info.MemberFlags.IsInstance
@@ -1436,17 +1475,37 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         methodInfo
 
     /// Makes a property definition read from a binary available as a PropertyInfo. Not all methods are implemented.
-    and TxPropertyDefinition (asmArg: ReflectAssembly) declTy _ (* gps *) (tycon:TyconRef) (inp: ValRef) = 
+    and TxPropertyDefinition (asmArg: ReflectAssembly) declTy (gps: Type[]) (tycon:TyconRef) (inp: ValRef) = 
         let asm: ReflectAssembly = asmArg
         let tcGlobals: TcGlobals = asm.TcGlobals
         let compilerGlobalState = tcGlobals.CompilerGlobalState
         let compiledName : string = inp.CompiledName compilerGlobalState
+        let pushTypars () =
+            let typars = tycon.TyparsNoRange
+            if List.isEmpty typars || Array.isEmpty gps then
+                { new IDisposable with member _.Dispose() = () }
+            else
+                let pairs =
+                    (typars, gps |> Array.toList)
+                    ||> List.zip
+                asm.PushTyparScope pairs
+
+        use _typarScope = pushTypars ()
+
         let propertyReturnType =
             try
                 ReturnTypeOfPropertyVal tcGlobals inp.Deref
             with _ ->
                 inp.Type
-        let propertyType : Type = asm.TxTType propertyReturnType
+        let propertyType : Type =
+#if !NO_TYPEPROVIDERS
+            match inp.Deref.TryGetProvidedBinding with
+            | Some binding when not (obj.ReferenceEquals(binding.ResultType, null)) ->
+                binding.ResultType.RawSystemType
+            | _ -> asm.TxTType propertyReturnType
+#else
+            asm.TxTType propertyReturnType
+#endif
 
         let membersForProperty : ValRef list =
             let direct =
@@ -1658,7 +1717,18 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
 
             override __.ToString() = sprintf "ctxt literal field %s(...) in type %s" inp.rfield_id.idText declTy.FullName }
 
-    and TxRecordFieldPropertyDefinition (asm: ReflectAssembly) declTy (tycon: TyconRef) (field: RecdField) =
+    and TxRecordFieldPropertyDefinition (asm: ReflectAssembly) declTy (gps: Type[]) (tycon: TyconRef) (field: RecdField) =
+        let pushTypars () =
+            let typars = tycon.TyparsNoRange
+            if List.isEmpty typars || Array.isEmpty gps then
+                { new IDisposable with member _.Dispose() = () }
+            else
+                let pairs =
+                    (typars, gps |> Array.toList)
+                    ||> List.zip
+                asm.PushTyparScope pairs
+
+        use _typarScope = pushTypars ()
         let getter =
             tycon.MembersOfFSharpTyconSorted
             |> List.tryFind (fun vref -> vref.IsPropertyGetterMethod && vref.PropertyName = field.LogicalName)
@@ -1991,13 +2061,23 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                 let handlerTy = asm.TxTType info.HandlerType
                 TxEventDefinition asm this info.EventName None info.AddMethod info.RemoveMethod (Some handlerTy))
 
-        Seq.append declaredEvents providedEvents
-        |> Seq.filter (fun ev ->
+        let events =
+            Seq.append declaredEvents providedEvents
+            |> Seq.filter (fun ev ->
             let addMethod = ev.GetAddMethod(true)
             let handlerIsStatic = if isNull addMethod then false else addMethod.IsStatic
             let handlerIsPublic = if isNull addMethod then true else addMethod.IsPublic
             visibilityFilter handlerIsPublic handlerIsStatic)
-        |> Seq.toArray
+            |> Seq.toArray
+
+        if asm.Fs1023TraceEnabled() then
+            asm.Fs1023TraceMessage(
+                sprintf
+                    "[tastreflection] get-events ty=%s count=%d"
+                    this.FullName
+                    events.Length)
+
+        events
 
     override this.GetProperties(bindingAttr) =
         use _ = pushTyparScope ()
@@ -2026,7 +2106,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                 tcref.AllFieldsArray
                 |> Array.toList
                 |> List.filter (fun field -> existingPropertyNames.Add field.LogicalName)
-                |> List.map (TxRecordFieldPropertyDefinition asm this tcref)
+                |> List.map (TxRecordFieldPropertyDefinition asm this gps tcref)
             else
                 []
 
@@ -2359,6 +2439,11 @@ and [<DebuggerDisplay("{DebuggerDisplay,nq}")>] ReflectAssembly(builder: TypeRef
     let typarScopeStack =
         ThreadLocal<ResizeArray<TyparScope>>(fun () -> ResizeArray())
     let globalTyparByKey = ConcurrentDictionary<string, Type>(StringComparer.Ordinal)
+    let globalTyparByStamp = ConcurrentDictionary<Stamp, Type>()
+    let typarDebugEnabled () =
+        match Environment.GetEnvironmentVariable("FS1023_TRACE_TYPAR") with
+        | null -> false
+        | value -> value.Trim() = "1"
 
     let typarScopeKey (tp: Typar) =
         tp.DisplayName + "|" + string tp.Kind
@@ -2371,14 +2456,72 @@ and [<DebuggerDisplay("{DebuggerDisplay,nq}")>] ReflectAssembly(builder: TypeRef
             let scope =
                 { ByStamp = Dictionary<Stamp, Type>(enumerated.Length)
                   ByKey = Dictionary<string, Type>(StringComparer.Ordinal) }
-            for (tp, ty) in enumerated do
+            for tp, ty in enumerated do
                 let key = typarScopeKey tp
                 scope.ByStamp[tp.Stamp] <- ty
                 scope.ByKey[key] <- ty
                 globalTyparByKey[key] <- ty
+                globalTyparByStamp[tp.Stamp] <- ty
             let stack = typarScopeStack.Value
             stack.Add scope
             { new IDisposable with member _.Dispose() = stack.RemoveAt(stack.Count - 1) }
+    let createTyparPlaceholder (tp: Typar) =
+        { new Type() with
+            override __.Name = tp.Name
+            override __.Assembly = (asm :> Assembly)
+            override __.FullName = tp.Name
+            override __.IsGenericParameter = true
+            override __.GenericParameterPosition = 0
+            override __.GetGenericParameterConstraints() = [||]
+            override __.MemberType = enum 0
+            override __.Namespace = null
+            override __.DeclaringType = null
+            override __.BaseType = null
+            override __.GetInterfaces() = [||]
+            override this.GetConstructors(_bindingFlags) = [||]
+            override this.GetMethods(_bindingFlags) = [||]
+            override this.GetField(_name, _bindingFlags) = null
+            override this.GetFields(_bindingFlags) = [||]
+            override this.GetEvent(_name, _bindingFlags) = null
+            override this.GetEvents(_bindingFlags) = [||]
+            override this.GetProperties(_bindingFlags) = [||]
+            override this.GetMembers(_bindingFlags) = [||]
+            override this.GetNestedTypes(_bindingFlags) = [||]
+            override this.GetNestedType(_name, _bindingFlags) = null
+            override this.GetPropertyImpl(_name, _bindingFlags, _binder, _returnType, _types, _modifiers) = null
+            override this.MakeGenericType(_args) = notRequired "MakeGenericType"
+            override this.MakeArrayType() = ReflectTypeSymbol(ReflectTypeSymbolKind.SDArray, [| this |]) :> Type
+            override this.MakeArrayType arg = ReflectTypeSymbol(ReflectTypeSymbolKind.Array arg, [| this |]) :> Type
+            override this.MakePointerType() = ReflectTypeSymbol(ReflectTypeSymbolKind.Pointer, [| this |]) :> Type
+            override this.MakeByRefType() = ReflectTypeSymbol(ReflectTypeSymbolKind.ByRef, [| this |]) :> Type
+            override __.GetAttributeFlagsImpl() = TypeAttributes.Public ||| TypeAttributes.Class ||| TypeAttributes.Sealed
+            override __.IsArrayImpl() = false
+            override __.IsByRefImpl() = false
+            override __.IsPointerImpl() = false
+            override __.IsPrimitiveImpl() = false
+            override __.IsCOMObjectImpl() = false
+            override __.IsGenericType = false
+            override __.IsGenericTypeDefinition = false
+            override __.HasElementTypeImpl() = false
+            override __.GetElementType() = null
+            override __.InvokeMember(_name, _invokeAttr, _binder, _target, _args, _modifiers, _culture, _namedParameters) = notRequired "InvokeMember"
+            override __.UnderlyingSystemType = typeof<obj>
+            override __.GetCustomAttributes(_inherit) = [||]
+            override __.GetCustomAttributes(_attributeType, _inherit) = [||]
+            override __.IsDefined(_attributeType, _inherit) = false
+            override __.StructLayoutAttribute = notRequired "StructLayoutAttribute"
+            override __.GUID = Guid.Empty
+            override __.GetHashCode() = hash tp.Stamp
+            override __.Equals(other: obj) =
+                match other with
+                | :? Type as ty -> ty.IsGenericParameter && String.Equals(ty.Name, tp.Name, StringComparison.Ordinal)
+                | _ -> false
+            override __.AssemblyQualifiedName = tp.Name
+            override __.Module = asm.ManifestModule
+            override this.GetConstructorImpl(_bindingAttr, _binder, _callConvention, _types, _modifiers) = null
+            override this.GetInterface(_name, _ignoreCase) = null
+            override this.GetMethodImpl(_name, _bindingAttr, _binder, _callConvention, _types, _modifiers) = null
+            override __.ToString() = tp.Name }
 
     let txTypeDef (declTyOpt: Type option) (inp: TyconRef) =
         let isNested = Option.isSome declTyOpt
@@ -2418,12 +2561,160 @@ and [<DebuggerDisplay("{DebuggerDisplay,nq}")>] ReflectAssembly(builder: TypeRef
                         elapsedTicks)
             typ)
 
+    let verboseModuleScan =
+        lazy (
+            match Environment.GetEnvironmentVariable("FS1023_TRACE_TAST_VERBOSE") with
+            | "1" -> true
+            | _ -> false)
+
+    let rec collectModuleContents declTyOpt (mtyp: ModuleOrNamespaceType) : seq<Type> =
+        if builder.Fs1023TraceEnabled() || verboseModuleScan.Value then
+            let moduleCount = mtyp.ModuleAndNamespaceDefinitions |> List.length
+            let typeCount = mtyp.TypeAndExceptionDefinitions |> List.length
+            let message =
+                sprintf
+                    "[tastreflection] module-contents-scan nested=%b modules=%d types=%d"
+                    (Option.isSome declTyOpt)
+                    moduleCount
+                    typeCount
+            if builder.Fs1023TraceEnabled() then
+                builder.Fs1023TraceMessage(message)
+            elif verboseModuleScan.Value then
+                printfn "%s" message
+        seq {
+            for modul in mtyp.ModuleAndNamespaceDefinitions do
+                let isNamespace = modul.IsNamespace
+                if builder.Fs1023TraceEnabled() then
+                    let entityCount =
+                        modul.ModuleOrNamespaceType.AllEntities
+                        |> Seq.length
+                    builder.Fs1023TraceMessage(
+                        sprintf
+                            "[tastreflection] module-contents module=%s nested=%b isNamespace=%b entityCount=%d"
+                            modul.CompiledName
+                            (Option.isSome declTyOpt)
+                            isNamespace
+                            entityCount)
+                if isNamespace then
+                    yield! collectModuleContents declTyOpt modul.ModuleOrNamespaceType
+                else
+                    let moduleType = txTypeDef declTyOpt (mkLocalModuleRef modul)
+                    if builder.Fs1023TraceEnabled() then
+                        builder.Fs1023TraceMessage(
+                            sprintf
+                                "[tastreflection] module-emitted name=%s nested=%b"
+                                moduleType.FullName
+                                (Option.isSome declTyOpt))
+                    yield moduleType
+                    yield! collectModuleContents (Some moduleType) modul.ModuleOrNamespaceType
+
+            for tycon in mtyp.TypeAndExceptionDefinitions do
+                let currentType = txTypeDef declTyOpt (mkLocalTyconRef tycon)
+                if builder.Fs1023TraceEnabled() then
+                    let childEntityCount =
+                        tycon.ModuleOrNamespaceType.AllEntities
+                        |> Seq.length
+                    builder.Fs1023TraceMessage(
+                        sprintf
+                            "[tastreflection] module-contents type=%s nested=%b childEntityCount=%d isModule=%b isProvided=%b"
+                            tycon.CompiledName
+                            (Option.isSome declTyOpt)
+                            childEntityCount
+                            tycon.IsModuleOrNamespace
+                            tycon.IsProvidedGeneratedTycon)
+                yield currentType
+                yield! collectModuleContents (Some currentType) tycon.ModuleOrNamespaceType
+        }
+
     let manifestModule = lazy (ReflectModule(asm))
     let name = lazy new AssemblyName(match ccu.ILScopeRef with ILScopeRef.Local -> ccu.AssemblyName | _ -> ccu.ILScopeRef.QualifiedName)
     let fullName = lazy name.Value.ToString()
-    let types = lazy [| for td in ccu.RootModulesAndNamespaces -> txTypeDef None (mkLocalEntityRef td) |]
+    let typesLock = obj()
+    let mutable cachedTypes : Type[] = Array.empty
+    let mutable typesComputed = false
 
-    override x.GetTypes () = types.Value
+    let computeTypes () =
+        let collected = collectModuleContents None ccu.Contents.ModuleOrNamespaceType |> Seq.toArray
+        let registeredTycons = builder.GetRegisteredTycons(ccu)
+        let dedup = HashSet<string>()
+        let addIfNew (ty: Type) =
+            let fullName = ty.FullName
+            let key =
+                if String.IsNullOrEmpty fullName then ty.Name
+                else fullName
+            if String.IsNullOrEmpty key then
+                true
+            else
+                dedup.Add key
+        let initial =
+            collected
+            |> Array.filter (fun ty ->
+                let added = addIfNew ty
+                if not added && builder.Fs1023TraceEnabled() then
+                    builder.Fs1023TraceMessage(
+                        sprintf "[tastreflection] skip-duplicate type=%s assembly=%s" ty.FullName ccu.AssemblyName)
+                added)
+        let extras =
+            registeredTycons
+            |> Array.choose (fun tcref ->
+                try
+                    let ty = txTypeDef None tcref
+                    if addIfNew ty then Some ty
+                    else None
+                with ex ->
+                    if builder.Fs1023TraceEnabled() then
+                        builder.Fs1023TraceMessage(
+                            sprintf
+                                "[tastreflection] skip-registered-tycon name=%s reason=%s"
+                                tcref.CompiledName
+                                ex.Message)
+                    None)
+
+        if initial.Length = 0 && extras.Length > 0 then
+            if builder.Fs1023TraceEnabled() || verboseModuleScan.Value then
+                let knownTypeCount = txTable.Values |> Seq.length
+                let rootModules = ccu.RootModulesAndNamespaces |> List.map (fun m -> m.CompiledName)
+                let registeredNames =
+                    registeredTycons
+                    |> Array.map (fun tcref -> tcref.CompiledName)
+                let message =
+                    sprintf
+                        "[tastreflection] module-fallback assembly=%s stamp=%A knownTypes=%d registeredTycons=%d rootModuleCount=%d rootModules=%A registered=%A"
+                        ccu.AssemblyName
+                        ccu.Stamp
+                        knownTypeCount
+                        registeredTycons.Length
+                        rootModules.Length
+                        rootModules
+                        registeredNames
+                if builder.Fs1023TraceEnabled() then
+                    builder.Fs1023TraceMessage(message)
+                elif verboseModuleScan.Value then
+                    printfn "%s" message
+
+        let result = Array.append initial extras
+        if builder.Fs1023TraceEnabled() then
+            builder.Fs1023TraceMessage(
+                sprintf
+                    "[tastreflection] assembly-types assembly=%s count=%d registeredExtras=%d"
+                    ccu.AssemblyName
+                    result.Length
+                    extras.Length)
+
+        result
+
+    member private asm.EnsureTypes() =
+        if not typesComputed then
+            lock typesLock (fun () ->
+                if not typesComputed then
+                    cachedTypes <- computeTypes ()
+                    typesComputed <- true)
+        cachedTypes
+
+    member internal asm.InvalidateTypes() =
+        lock typesLock (fun () -> typesComputed <- false)
+
+    override x.GetTypes () = asm.EnsureTypes()
     override x.Location = location
 
     override x.ManifestModule = manifestModule.Value :> Module
@@ -2537,12 +2828,28 @@ and [<DebuggerDisplay("{DebuggerDisplay,nq}")>] ReflectAssembly(builder: TypeRef
                         | _ -> ()
 
                     if isNull resolved then
+                        match globalTyparByStamp.TryGetValue tp.Stamp with
+                        | true, ty -> resolved <- ty
+                        | _ -> ()
+
+                    if isNull resolved then
+                        let placeholder = createTyparPlaceholder tp
+                        resolved <- placeholder
+                        globalTyparByStamp[tp.Stamp] <- placeholder
+                        let key = typarScopeKey tp
+                        globalTyparByKey[key] <- placeholder
                         if builder.Fs1023TraceEnabled() then
                             builder.Fs1023TraceMessage(
-                                sprintf "[typeproxy] typar-lookup miss name=%s stamp=%A" tp.DisplayName tp.Stamp)
-                        failwithf "TxTType: unresolved typar %s (stamp=%A)" tp.DisplayName tp.Stamp
-                    else
-                        resolved
+                                sprintf "[typeproxy] typar-lookup miss name=%s stamp=%A (synthesized placeholder)" tp.DisplayName tp.Stamp)
+                        elif typarDebugEnabled() then
+                            let scopeDepth = typarScopeStack.Value.Count
+                            System.Console.WriteLine(
+                                "[fs1023][typar-miss] assembly={0} name={1} stamp={2} depth={3} synthesized=placeholder",
+                                ccu.AssemblyName,
+                                tp.DisplayName,
+                                tp.Stamp,
+                                scopeDepth)
+                    resolved
             | _ -> failwithf "Unsupported TxTType %+A" typ
 
     member _.TcGlobals = g
@@ -2710,6 +3017,7 @@ and TypeReflectionBuilder(g: TcGlobals) as this =
         let profilingEnabled = ref false
         let dependencyScopes =
             new ThreadLocal<ResizeArray<ResizeArray<TyconRef>>>(fun () -> ResizeArray())
+        let registeredTycons = ConcurrentDictionary<Stamp, ConcurrentDictionary<Stamp, TyconRef>>()
 
         let recordProjection duration =
             Interlocked.Increment(&typeCount.contents) |> ignore
@@ -2719,8 +3027,14 @@ and TypeReflectionBuilder(g: TcGlobals) as this =
             | _ -> ()
 
         let createAssembly (ccu: CcuThunk) =
+            ccu.EnsureDerefable([||])
             let location = defaultArg ccu.FileName ""
             Interlocked.Increment(&assemblyCount.contents) |> ignore
+            let moduleCount = List.length ccu.RootModulesAndNamespaces
+            let typeCount = List.length ccu.RootTypeAndExceptionDefinitions
+            if this.Fs1023TraceEnabled() then
+                this.Fs1023TraceMessage(
+                    sprintf "[tastreflection] init assembly=%s modules=%d types=%d" ccu.AssemblyName moduleCount typeCount)
             ReflectAssembly(this, g, ccu, location)
 
         let isEnabled envVar =
@@ -2826,6 +3140,28 @@ and TypeReflectionBuilder(g: TcGlobals) as this =
 
         member internal this.RecordDependency(tcref: TyconRef) =
             this.TryAddDependency tcref
+
+        member internal this.RegisterTycon(ccu: CcuThunk, tcref: TyconRef) : unit =
+            let bucket =
+                registeredTycons.GetOrAdd(
+                    ccu.Stamp,
+                    fun _ -> ConcurrentDictionary<Stamp, TyconRef>())
+            bucket[tcref.Stamp] <- tcref
+            let logRegistrations =
+                match System.Environment.GetEnvironmentVariable("FS1023_TRACE_REGISTER") with
+                | null -> false
+                | value -> value.Trim() = "1"
+            if logRegistrations then
+                let count = bucket.Count
+                printfn "[fs1023][builder-register] assembly=%s count=%d added=%s" ccu.AssemblyName count tcref.CompiledName
+            match assemblies.TryGetValue ccu.Stamp with
+            | true, assembly -> assembly.InvalidateTypes()
+            | _ -> ()
+
+        member internal this.GetRegisteredTycons(ccu: CcuThunk) : TyconRef[] =
+            match registeredTycons.TryGetValue ccu.Stamp with
+            | true, bucket -> bucket.Values |> Seq.toArray
+            | _ -> Array.empty<TyconRef>
 
         member this.GetSystemType(topCcu: CcuThunk, ty: TType) =
             let assembly = this.GetOrAddAssembly(topCcu)

@@ -50,6 +50,8 @@ type AssemblyLoader =
 
     abstract GetTypeReflectionBuilder: unit -> TypeReflectionBuilder
 
+    abstract RegisterTyconForReflection: CcuThunk * Tycon -> unit
+
 /// Represents a context used for converting AbstractIL .NET and provided types to F# internal compiler data structures.
 /// Also cache the conversion of AbstractIL ILTypeRef nodes, based on hashes of these.
 ///
