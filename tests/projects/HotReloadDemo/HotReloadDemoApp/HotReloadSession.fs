@@ -338,11 +338,31 @@ module HotReloadSession =
                             with ex ->
                                 if shouldTraceRuntimeApply () then
                                     printfn "[hotreload-runtime] ApplyUpdate exception: %s" (ex.ToString())
-                                let errorMessage =
+
+                                let innerSummary =
                                     match ex.InnerException with
-                                    | null -> ex.Message
-                                    | inner -> $"{ex.Message} (inner: {inner.GetType().FullName}: {inner.Message})"
-                                return HotReloadError $"MetadataUpdater.ApplyUpdate failed: {errorMessage}"
+                                    | null -> None
+                                    | inner ->
+                                        let innerInfo =
+                                            sprintf
+                                                "%s HR=0x%08X msg=%s"
+                                                (inner.GetType().FullName)
+                                                inner.HResult
+                                                inner.Message
+                                        Some innerInfo
+
+                                let detailedMessage =
+                                    match innerSummary with
+                                    | Some innerInfo ->
+                                        sprintf
+                                            "MetadataUpdater.ApplyUpdate failed (HR=0x%08X): %s | inner=%s"
+                                            ex.HResult
+                                            ex.Message
+                                            innerInfo
+                                    | None ->
+                                        sprintf "MetadataUpdater.ApplyUpdate failed (HR=0x%08X): %s" ex.HResult ex.Message
+
+                                return HotReloadError detailedMessage
         }
 
     let dispose (session: DemoSession) =
