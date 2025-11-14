@@ -425,6 +425,16 @@ module FSharpDeltaMetadataWriterTests =
         assertStringHeapGrowthWithinMulti "property-multigen" artifacts 32
 
     [<Fact>]
+    let ``property delta blob heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
+        assertBlobHeapGrowthWithin "property-delta" artifacts 64
+
+    [<Fact>]
+    let ``property multi-generation blob heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
+        assertBlobHeapGrowthWithinMulti "property-multigen" artifacts 64
+
+    [<Fact>]
     let ``local signature delta artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitLocalSignatureDeltaArtifacts None ()
         assertBaselineHeapSnapshot artifacts
@@ -794,6 +804,16 @@ module FSharpDeltaMetadataWriterTests =
         assertStringHeapGrowthWithinMulti "event-multigen" artifacts 48
 
     [<Fact>]
+    let ``event delta blob heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitEventDeltaArtifacts None ()
+        assertBlobHeapGrowthWithin "event-delta" artifacts 64
+
+    [<Fact>]
+    let ``event multi-generation blob heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
+        assertBlobHeapGrowthWithinMulti "event-multigen" artifacts 64
+
+    [<Fact>]
     let ``closure delta artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitClosureDeltaArtifacts ()
         assertBaselineHeapSnapshot artifacts
@@ -802,6 +822,16 @@ module FSharpDeltaMetadataWriterTests =
     let ``closure multi-generation artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitClosureMultiGenerationArtifacts ()
         assertBaselineHeapSnapshotMulti artifacts
+
+    [<Fact>]
+    let ``closure delta blob heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitClosureDeltaArtifacts ()
+        assertBlobHeapGrowthWithin "closure-delta" artifacts 64
+
+    [<Fact>]
+    let ``closure multi-generation blob heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitClosureMultiGenerationArtifacts ()
+        assertBlobHeapGrowthWithinMulti "closure-multigen" artifacts 64
 
     [<Fact>]
     let ``event multi-generation uses ENC-sized indexes`` () =
