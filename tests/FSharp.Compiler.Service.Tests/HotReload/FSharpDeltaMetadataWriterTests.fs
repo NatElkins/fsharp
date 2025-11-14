@@ -136,9 +136,17 @@ module FSharpDeltaMetadataWriterTests =
     let private getHeapSize (metadata: byte[]) (heap: HeapIndex) : int =
         withMetadataReader metadata (fun reader -> reader.GetHeapSize heap)
 
+    let private getDeltaHeapSize (delta: DeltaWriter.MetadataDelta) (heap: HeapIndex) : int =
+        match heap with
+        | HeapIndex.String -> delta.HeapSizes.StringHeapSize
+        | HeapIndex.Blob -> delta.HeapSizes.BlobHeapSize
+        | HeapIndex.Guid -> delta.HeapSizes.GuidHeapSize
+        | HeapIndex.UserString -> delta.HeapSizes.UserStringHeapSize
+        | _ -> invalidArg (nameof heap) "Unsupported heap index for delta metadata"
+
     let private assertStringHeapGrowthWithin label (artifacts: MetadataDeltaTestHelpers.MetadataDeltaArtifacts) maxGrowthBytes =
         assertBaselineHeapSnapshot artifacts
-        let growth = getHeapSize artifacts.Delta.Metadata HeapIndex.String
+        let growth = getDeltaHeapSize artifacts.Delta HeapIndex.String
         Assert.True(
             growth <= maxGrowthBytes,
             sprintf "[%s] string heap grew by %d bytes (limit %d)" label growth maxGrowthBytes)
@@ -147,7 +155,7 @@ module FSharpDeltaMetadataWriterTests =
         assertBaselineHeapSnapshotMulti artifacts
 
         let assertDelta (delta: DeltaWriter.MetadataDelta) =
-            let growth = getHeapSize delta.Metadata HeapIndex.String
+            let growth = getDeltaHeapSize delta HeapIndex.String
             Assert.True(
                 growth <= maxGrowthBytes,
                 sprintf "[%s] string heap grew by %d bytes (limit %d)" label growth maxGrowthBytes)
@@ -157,7 +165,7 @@ module FSharpDeltaMetadataWriterTests =
 
     let private assertBlobHeapGrowthWithin label (artifacts: MetadataDeltaTestHelpers.MetadataDeltaArtifacts) maxGrowthBytes =
         assertBaselineHeapSnapshot artifacts
-        let growth = getHeapSize artifacts.Delta.Metadata HeapIndex.Blob
+        let growth = getDeltaHeapSize artifacts.Delta HeapIndex.Blob
         Assert.True(
             growth <= maxGrowthBytes,
             sprintf "[%s] blob heap grew by %d bytes (limit %d)" label growth maxGrowthBytes)
@@ -166,7 +174,7 @@ module FSharpDeltaMetadataWriterTests =
         assertBaselineHeapSnapshotMulti artifacts
 
         let assertDelta (delta: DeltaWriter.MetadataDelta) =
-            let growth = getHeapSize delta.Metadata HeapIndex.Blob
+            let growth = getDeltaHeapSize delta HeapIndex.Blob
             Assert.True(
                 growth <= maxGrowthBytes,
                 sprintf "[%s] blob heap grew by %d bytes (limit %d)" label growth maxGrowthBytes)
@@ -390,14 +398,14 @@ module FSharpDeltaMetadataWriterTests =
     [<Fact>]
     let ``property delta user string heap stays empty`` () =
         let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
-        let userStringSize = getHeapSize artifacts.Delta.Metadata HeapIndex.UserString
+        let userStringSize = getDeltaHeapSize artifacts.Delta HeapIndex.UserString
         Assert.Equal(1, userStringSize)
 
     [<Fact>]
     let ``property multi-generation user string heap stays empty`` () =
         let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
-        Assert.Equal(1, getHeapSize artifacts.Generation1.Metadata HeapIndex.UserString)
-        Assert.Equal(1, getHeapSize artifacts.Generation2.Metadata HeapIndex.UserString)
+        Assert.Equal(1, getDeltaHeapSize artifacts.Generation1 HeapIndex.UserString)
+        Assert.Equal(1, getDeltaHeapSize artifacts.Generation2 HeapIndex.UserString)
 
     [<Fact>]
     let ``property multi-generation string heap size stays constant`` () =
@@ -408,6 +416,16 @@ module FSharpDeltaMetadataWriterTests =
     let ``property delta artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
         assertBaselineHeapSnapshot artifacts
+
+    [<Fact>]
+    let ``property delta heap sizes reflect metadata`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
+        let expectString = getHeapSize artifacts.Delta.Metadata HeapIndex.String
+        let expectBlob = getHeapSize artifacts.Delta.Metadata HeapIndex.Blob
+        let expectUserString = getHeapSize artifacts.Delta.Metadata HeapIndex.UserString
+        Assert.Equal(expectString, getDeltaHeapSize artifacts.Delta HeapIndex.String)
+        Assert.Equal(expectBlob, getDeltaHeapSize artifacts.Delta HeapIndex.Blob)
+        Assert.Equal(expectUserString, getDeltaHeapSize artifacts.Delta HeapIndex.UserString)
 
     [<Fact>]
     let ``property multi-generation artifacts capture baseline heap sizes`` () =
@@ -495,7 +513,7 @@ module FSharpDeltaMetadataWriterTests =
     [<Fact>]
     let ``async delta user string heap stays empty`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts (Some "async generation 2") ()
-        let userStringSize = getHeapSize artifacts.Delta.Metadata HeapIndex.UserString
+        let userStringSize = getDeltaHeapSize artifacts.Delta HeapIndex.UserString
         Assert.Equal(1, userStringSize)
 
     [<Fact>]
@@ -517,8 +535,8 @@ module FSharpDeltaMetadataWriterTests =
     [<Fact>]
     let ``async multi-generation user string heap size stays constant`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
-        let gen1Size = getHeapSize artifacts.Generation1.Metadata HeapIndex.UserString
-        let gen2Size = getHeapSize artifacts.Generation2.Metadata HeapIndex.UserString
+        let gen1Size = getDeltaHeapSize artifacts.Generation1 HeapIndex.UserString
+        let gen2Size = getDeltaHeapSize artifacts.Generation2 HeapIndex.UserString
         Assert.Equal(1, gen1Size)
         Assert.Equal(gen1Size, gen2Size)
 
@@ -779,14 +797,14 @@ module FSharpDeltaMetadataWriterTests =
     [<Fact>]
     let ``event delta user string heap stays empty`` () =
         let artifacts = MetadataDeltaTestHelpers.emitEventDeltaArtifacts None ()
-        let userStringSize = getHeapSize artifacts.Delta.Metadata HeapIndex.UserString
+        let userStringSize = getDeltaHeapSize artifacts.Delta HeapIndex.UserString
         Assert.Equal(1, userStringSize)
 
     [<Fact>]
     let ``event multi-generation user string heap stays empty`` () =
         let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
-        Assert.Equal(1, getHeapSize artifacts.Generation1.Metadata HeapIndex.UserString)
-        Assert.Equal(1, getHeapSize artifacts.Generation2.Metadata HeapIndex.UserString)
+        Assert.Equal(1, getDeltaHeapSize artifacts.Generation1 HeapIndex.UserString)
+        Assert.Equal(1, getDeltaHeapSize artifacts.Generation2 HeapIndex.UserString)
 
     [<Fact>]
     let ``event multi-generation string heap size stays constant`` () =
