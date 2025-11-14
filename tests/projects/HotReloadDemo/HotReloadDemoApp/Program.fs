@@ -281,6 +281,7 @@ let main argv =
     let multiDelta = hasFlag "--multi-delta"
     let runtimeApply =
         if hasFlag "--runtime-apply" then true else (match mode with | RunMode.Interactive -> true | _ -> false)
+    let keepWorkdirFlag = hasFlag "--keep-workdir"
 
     let modifiableAssemblies = Environment.GetEnvironmentVariable("DOTNET_MODIFIABLE_ASSEMBLIES")
 
@@ -296,6 +297,7 @@ let main argv =
         printfn "This sample compiles a small library using the F# compiler's hot reload APIs."
         printfn "Tip: set FSHARP_HOTRELOAD_TRACE_STRINGS=1 to log user-string updates, and"
         printfn "     FSHARP_HOTRELOAD_KEEP_WORKDIR=1 if you want to keep the temporary working directory."
+        printfn "     (You can also pass --keep-workdir to this demo to set the env var automatically.)"
         printfn ""
 
         match mode with
@@ -335,6 +337,8 @@ let main argv =
             printfn "Failed to load baseline assembly: %s" message
             1
         | Ok session ->
+            if keepWorkdirFlag then
+                Environment.SetEnvironmentVariable("FSHARP_HOTRELOAD_KEEP_WORKDIR", "1")
             match mode with
             | RunMode.Scripted -> runNonInteractive "script" runtimeApply multiDelta session
             | RunMode.Auto -> runNonInteractive "auto" runtimeApply multiDelta session
