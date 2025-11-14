@@ -270,7 +270,7 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, metadataDelta.EncLog)
         Assert.Equal<(TableIndex * int)[]>(expectedEncMap, metadataDelta.EncMap)
         Assert.True(metadataDelta.Metadata.Length > 0)
-        Assert.DoesNotContain("OnChanged", Encoding.UTF8.GetString(metadataDelta.StringHeap))
+        Assert.DoesNotContain("Message", Encoding.UTF8.GetString(metadataDelta.StringHeap))
         assertTableStreamMatches metadataDelta
         assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts
         assertBitMasksMatch metadataDelta.Metadata metadataDelta.TableBitMasks
