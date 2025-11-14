@@ -262,82 +262,81 @@ let emitWithUserStrings
             encMap.Add(struct (TableIndex.Param, row.RowId))
 
         for row in propertyDefinitionRows do
-            if emitSrmTables then
-                let nameHandle = metadataBuilder.GetOrAddString row.Name
-                let signatureHandle = metadataBuilder.GetOrAddBlob row.Signature
-                metadataBuilder.AddProperty(row.Attributes, nameHandle, signatureHandle) |> ignore
-            tableMirror.AddPropertyRow row
+            if row.IsAdded then
+                if emitSrmTables then
+                    let nameHandle = metadataBuilder.GetOrAddString row.Name
+                    let signatureHandle = metadataBuilder.GetOrAddBlob row.Signature
+                    metadataBuilder.AddProperty(row.Attributes, nameHandle, signatureHandle) |> ignore
+                tableMirror.AddPropertyRow row
 
-            let propertyHandle = MetadataTokens.PropertyDefinitionHandle row.RowId
-            let operation = if row.IsAdded then EditAndContinueOperation.AddProperty else EditAndContinueOperation.Default
-            metadataBuilder.AddEncLogEntry(propertyHandle, operation) |> ignore
-            metadataBuilder.AddEncMapEntry(propertyHandle) |> ignore
-            encLog.Add(struct (TableIndex.Property, row.RowId, operation))
-            encMap.Add(struct (TableIndex.Property, row.RowId))
+                let propertyHandle = MetadataTokens.PropertyDefinitionHandle row.RowId
+                metadataBuilder.AddEncLogEntry(propertyHandle, EditAndContinueOperation.AddProperty) |> ignore
+                metadataBuilder.AddEncMapEntry(propertyHandle) |> ignore
+                encLog.Add(struct (TableIndex.Property, row.RowId, EditAndContinueOperation.AddProperty))
+                encMap.Add(struct (TableIndex.Property, row.RowId))
 
         for row in eventDefinitionRows do
-            if emitSrmTables then
-                let nameHandle = metadataBuilder.GetOrAddString row.Name
-                let typeHandle = row.EventType
-                metadataBuilder.AddEvent(row.Attributes, nameHandle, typeHandle) |> ignore
-            tableMirror.AddEventRow row
+            if row.IsAdded then
+                if emitSrmTables then
+                    let nameHandle = metadataBuilder.GetOrAddString row.Name
+                    let typeHandle = row.EventType
+                    metadataBuilder.AddEvent(row.Attributes, nameHandle, typeHandle) |> ignore
+                tableMirror.AddEventRow row
 
-            let eventHandle = MetadataTokens.EventDefinitionHandle row.RowId
-            let operation = if row.IsAdded then EditAndContinueOperation.AddEvent else EditAndContinueOperation.Default
-            metadataBuilder.AddEncLogEntry(eventHandle, operation) |> ignore
-            metadataBuilder.AddEncMapEntry(eventHandle) |> ignore
-            encLog.Add(struct (TableIndex.Event, row.RowId, operation))
-            encMap.Add(struct (TableIndex.Event, row.RowId))
+                let eventHandle = MetadataTokens.EventDefinitionHandle row.RowId
+                metadataBuilder.AddEncLogEntry(eventHandle, EditAndContinueOperation.AddEvent) |> ignore
+                metadataBuilder.AddEncMapEntry(eventHandle) |> ignore
+                encLog.Add(struct (TableIndex.Event, row.RowId, EditAndContinueOperation.AddEvent))
+                encMap.Add(struct (TableIndex.Event, row.RowId))
 
         for row in propertyMapRows do
-            let handle = MetadataTokens.EntityHandle(TableIndex.PropertyMap, row.RowId)
-            if emitSrmTables && row.IsAdded then
-                let parentHandle = MetadataTokens.TypeDefinitionHandle row.TypeDefRowId
-                let propertyListHandle =
-                    match row.FirstPropertyRowId with
-                    | Some deltaRowId -> MetadataTokens.PropertyDefinitionHandle deltaRowId
-                    | None -> invalidOp "Property map rows marked as added require a property list pointer."
-                metadataBuilder.AddPropertyMap(parentHandle, propertyListHandle) |> ignore
+            if row.IsAdded then
+                let handle = MetadataTokens.EntityHandle(TableIndex.PropertyMap, row.RowId)
+                if emitSrmTables then
+                    let parentHandle = MetadataTokens.TypeDefinitionHandle row.TypeDefRowId
+                    let propertyListHandle =
+                        match row.FirstPropertyRowId with
+                        | Some deltaRowId -> MetadataTokens.PropertyDefinitionHandle deltaRowId
+                        | None -> invalidOp "Property map rows marked as added require a property list pointer."
+                    metadataBuilder.AddPropertyMap(parentHandle, propertyListHandle) |> ignore
 
-            let operation = if row.IsAdded then EditAndContinueOperation.AddProperty else EditAndContinueOperation.Default
-            metadataBuilder.AddEncLogEntry(handle, operation) |> ignore
-            metadataBuilder.AddEncMapEntry(handle) |> ignore
-            encLog.Add(struct (TableIndex.PropertyMap, row.RowId, operation))
-            encMap.Add(struct (TableIndex.PropertyMap, row.RowId))
-            tableMirror.AddPropertyMapRow row
+                metadataBuilder.AddEncLogEntry(handle, EditAndContinueOperation.AddProperty) |> ignore
+                metadataBuilder.AddEncMapEntry(handle) |> ignore
+                encLog.Add(struct (TableIndex.PropertyMap, row.RowId, EditAndContinueOperation.AddProperty))
+                encMap.Add(struct (TableIndex.PropertyMap, row.RowId))
+                tableMirror.AddPropertyMapRow row
 
         for row in eventMapRows do
-            let handle = MetadataTokens.EntityHandle(TableIndex.EventMap, row.RowId)
-            if emitSrmTables && row.IsAdded then
-                let parentHandle = MetadataTokens.TypeDefinitionHandle row.TypeDefRowId
-                let eventListHandle =
-                    match row.FirstEventRowId with
-                    | Some deltaRowId -> MetadataTokens.EventDefinitionHandle deltaRowId
-                    | None -> invalidOp "Event map rows marked as added require an event list pointer."
-                metadataBuilder.AddEventMap(parentHandle, eventListHandle) |> ignore
+            if row.IsAdded then
+                let handle = MetadataTokens.EntityHandle(TableIndex.EventMap, row.RowId)
+                if emitSrmTables then
+                    let parentHandle = MetadataTokens.TypeDefinitionHandle row.TypeDefRowId
+                    let eventListHandle =
+                        match row.FirstEventRowId with
+                        | Some deltaRowId -> MetadataTokens.EventDefinitionHandle deltaRowId
+                        | None -> invalidOp "Event map rows marked as added require an event list pointer."
+                    metadataBuilder.AddEventMap(parentHandle, eventListHandle) |> ignore
 
-            let operation = if row.IsAdded then EditAndContinueOperation.AddEvent else EditAndContinueOperation.Default
-            metadataBuilder.AddEncLogEntry(handle, operation) |> ignore
-            metadataBuilder.AddEncMapEntry(handle) |> ignore
-            encLog.Add(struct (TableIndex.EventMap, row.RowId, operation))
-            encMap.Add(struct (TableIndex.EventMap, row.RowId))
-            tableMirror.AddEventMapRow row
+                metadataBuilder.AddEncLogEntry(handle, EditAndContinueOperation.AddEvent) |> ignore
+                metadataBuilder.AddEncMapEntry(handle) |> ignore
+                encLog.Add(struct (TableIndex.EventMap, row.RowId, EditAndContinueOperation.AddEvent))
+                encMap.Add(struct (TableIndex.EventMap, row.RowId))
+                tableMirror.AddEventMapRow row
 
         for row in methodSemanticsRows do
             if row.IsAdded then
                 let methodRowId = row.MethodToken &&& 0x00FFFFFF
                 let methodHandle = MetadataTokens.MethodDefinitionHandle methodRowId
                 metadataBuilder.AddMethodSemantics(row.Association, row.Attributes, methodHandle) |> ignore
-            tableMirror.AddMethodSemanticsRow row
+                tableMirror.AddMethodSemanticsRow row
 
-            let semanticsHandle =
-                MetadataTokens.Handle(TableIndex.MethodSemantics, row.RowId)
-                |> EntityHandle.op_Explicit
-            let operation = if row.IsAdded then EditAndContinueOperation.AddMethod else EditAndContinueOperation.Default
-            metadataBuilder.AddEncLogEntry(semanticsHandle, operation) |> ignore
-            metadataBuilder.AddEncMapEntry(semanticsHandle) |> ignore
-            encLog.Add(struct (TableIndex.MethodSemantics, row.RowId, operation))
-            encMap.Add(struct (TableIndex.MethodSemantics, row.RowId))
+                let semanticsHandle =
+                    MetadataTokens.Handle(TableIndex.MethodSemantics, row.RowId)
+                    |> EntityHandle.op_Explicit
+                metadataBuilder.AddEncLogEntry(semanticsHandle, EditAndContinueOperation.AddMethod) |> ignore
+                metadataBuilder.AddEncMapEntry(semanticsHandle) |> ignore
+                encLog.Add(struct (TableIndex.MethodSemantics, row.RowId, EditAndContinueOperation.AddMethod))
+                encMap.Add(struct (TableIndex.MethodSemantics, row.RowId))
 
         for originalToken, _, literal in userStringUpdates do
             let offset = originalToken &&& 0x00FFFFFF
