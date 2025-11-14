@@ -158,6 +158,7 @@
     <Compile Include="Utilities\PathMap.fsi" />
     <Compile Include="Utilities\PathMap.fs" />
     <Compile Include="Utilities\RidHelpers.fs" />
+    <Compile Include="Utilities\Fs1023Telemetry.fs" />
     <Compile Include="Utilities\range.fsi" />
     <Compile Include="Utilities\range.fs" />
     <EmbeddedText Include="Facilities\UtilsStrings.txt" />

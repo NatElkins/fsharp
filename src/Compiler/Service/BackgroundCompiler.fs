@@ -60,7 +60,9 @@ module private BackgroundCompilerFs1023Trace =
 
                     try
                         File.AppendAllText(path, entry)
-                    with _ -> ())
+                    with _ -> ()
+
+                    Fs1023Telemetry.tryWrite entry)
             format
 
 type SourceTextHash = int64

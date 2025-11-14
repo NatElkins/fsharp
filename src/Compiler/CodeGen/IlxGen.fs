@@ -25,6 +25,7 @@ open FSharp.Compiler.AbstractIL.ILX
 open FSharp.Compiler.AbstractIL.ILX.Types
 open FSharp.Compiler.AttributeChecking
 open FSharp.Compiler.CompilerGlobalState
+open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.DiagnosticsLogger
 open FSharp.Compiler.Features
 open FSharp.Compiler.Infos
@@ -72,7 +73,9 @@ let private fs1023Trace format =
 
                 try
                     File.AppendAllText(path, entry)
-                with _ -> ())
+                with _ -> ()
+
+                Fs1023Telemetry.tryWrite entry)
         format
 
 #if !NO_TYPEPROVIDERS

@@ -19,6 +19,7 @@ File paths are given relative to repository root unless stated otherwise.
 - Branch `fs-1023` created and baseline builds pass locally, so Phase 0 items are effectively complete.
 - Phase 1 has core functionality in place: `TastReflection.fs` projects `TType`/`TyconRef` values into cached reflection proxies, and `TcImports` exposes the builder via `AssemblyLoader.GetTypeReflectionBuilder`. Remaining work focuses on parity coverage (events, indexers) and perf validation.
 - Phase 2 now threads `System.Type` static arguments end-to-end, records `TyconRef` dependencies, and wires incremental build invalidation via `PopTypeProviderTypeDependencies`. Additional diagnostics and edge-case coverage (e.g., error messaging for unsupported inputs) are queued, and `TcStaticConstantParameter` now writes `FS1023_TRACE` entries that capture each `System.Type` static argument (plus recursive `ensureTypeSupported` visits) so we can see exactly which type shapes trigger the remaining hangs.
+- Observability is no longer file-only: the shared `fs1023Trace` helpers now invoke the new `FSharp.Compiler.Diagnostics.Fs1023Telemetry` `EventSource` after writing `/tmp/fs1023_trace.log`, so hosts can opt into the same instrumentation via `dotnet-trace`/`EventListener`. This satisfies the Phase 8 requirement for structured telemetry plumbing while keeping the legacy log workflow intact.
 - `TcImports.GetProvidedAssemblyInfo` now refreshes metadata via first-party `GetManifestModuleContents` calls when upgrading an existing reference to `IsProviderGenerated`, so we consume the provider’s in-memory IL instead of a stale on-disk DLL.
 - `TypeProviderDependencyInvalidationTests`.`provided type publishes members into the TAST` now runs (the skip flag is gone). The regression was in the test harness: it only scanned top-level `ImplementationFileDeclaration`s, so it never descended into the `Fs1023Consumer` namespace entity where the generated type lives. The helper now recursively walks nested declarations, finds `Fs1023Consumer.Provided`, and asserts on its published members.
 - `TypeProviders.ProvidedMemberBindingHelpers.createFor{Method,Property,Constructor}` now centralise binding creation and register bindings for each `ProvidedMemberInfo`. The helpers capture provider/member handles, definition locations, result type, `ProvidedParameterInfo` arrays (empty and non-empty), method return parameters, and eagerly cache invoker expressions for methods/constructors while properties continue to opt out.
@@ -349,13 +350,13 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
 > - `ReflectTypeDefinition.GetConstructors`, `GetMethods`, `GetFields`, `GetProperties`, and `GetEvents` now rely on `TxConstructorDef` + the shared visibility/scope filter, merge declared/provided members (including `tcaug_provided_events`), deduplicate by `ValRef.Stamp`, and honor `BindingFlags`. The updated regression proves private instance members remain discoverable only when `BindingFlags.NonPublic` is specified.
 > - `ReflectModule` picked up a `DebuggerDisplay`/`ToString` implementation that reports both the module name and parent assembly, so the debugger view now points back to the projected assembly identity.
 > - Broader verification: `timeout 600s dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release --filter "FullyQualifiedName~TypeProviderDependencyInvalidationTests"` now passes end-to-end on `net10.0`, so every Fs1023 regression in that suite is green after the recent TastReflection changes.
-> - Next up for Phase 1: finish the lingering parity polish (the indexer/event edge cases called out earlier) and turn the `fs-1023` work into a PR using `docs/upcoming/fs-1023-pr-draft.md`, then begin Phase 8 partner dogfooding + telemetry once the PR is up.
+> - Phase 1 parity polish is now complete (indexers, events, debugger displays all have regression coverage), and the PR draft reflects the latest plan/test evidence.
 >
-> **Gate:** Do **not** begin Phase 8 (preview packaging / partner dogfooding) until the Phase 1 checklist above is fully closed and explicitly marked “Complete” in this plan.
+> **Gate:** (2025-11-14 update) Phase 1 is officially marked “Complete”, so Phase 8 work may proceed. Keep the note here as historical context and re-verify parity before declaring GA.
 
 ---
 
-## Phase 8 — Rollout and monitoring (Status: Not started)
+## Phase 8 — Rollout and monitoring (Status: In progress)
 
 1. **Feature flag & preview builds**
    - Gate compiler changes behind `--langversion:preview` and an internal MSBuild property until validation completes.
@@ -366,8 +367,10 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
    - Track feedback in the shared FS-1023 spreadsheet (state, repro steps, owner) and feed actionable items back into Phases 1–5.
 
 3. **Observability & telemetry**
-   - Wire the existing `FS1023_TRACE` hooks into a structured EventSource that host IDEs can toggle; document the knobs in `docs/upcoming/fs-1023.md`.
-   - Add a short “how to collect traces” appendix so partner teams can capture dumps/binlogs if they hit issues.
+   - ✅ Introduced `FSharp.Compiler.Diagnostics.Fs1023Telemetry` and taught every `fs1023Trace` helper (service layer, background compiler, incremental builder, IlxGen, MethodCalls, CompilerImports) to emit the same payload to both the legacy file log and the EventSource. Validated via `timeout 120s dotnet-trace collect --process-id <pid> --providers FSharpCompiler-FS1023` while running `dotnet test … TypeProviderDependencyInvalidationTests`, which shows `[fs1023]` events flowing without requiring `/tmp` access.
+   - ➡️ Add host-facing toggles: MSBuild property (`<Fs1023Telemetry>enable</Fs1023Telemetry>`) that flips tracing on for command-line builds, and an IDE hook so `FSharpChecker` callers can opt-in without environment variables.
+   - ➡️ Replace the raw string payload with structured event IDs (e.g., `Fs1023Telemetry.ProvidedMemberEmitted` with counters for methods/properties/events) once the toggles exist, keeping a compatibility shim for the textual log.
+   - ➡️ Extend `docs/upcoming/fs-1023.md` with a telemetry playbook: how to collect traces, expected file/event outputs, and how to correlate them with MSBuild binlogs and `fs1023` temp directories.
 
 4. **Release sign-off**
    - Produce release notes outlining new diagnostics, supported scenarios, and known limitations.

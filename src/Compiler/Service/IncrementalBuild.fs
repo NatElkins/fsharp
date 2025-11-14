@@ -61,7 +61,9 @@ module private IncrementalBuilderFs1023Trace =
 
                     try
                         File.AppendAllText(path, entry)
-                    with _ -> ())
+                    with _ -> ()
+
+                    Fs1023Telemetry.tryWrite entry)
             format
 
 [<AutoOpen>]

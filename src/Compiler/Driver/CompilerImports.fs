@@ -26,6 +26,7 @@ open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryReader
 open FSharp.Compiler.AbstractIL.Diagnostics
 open FSharp.Compiler.CheckDeclarations
+open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.CompilerGlobalState
 open FSharp.Compiler.CompilerConfig
 open FSharp.Compiler.DependencyManager
@@ -74,7 +75,9 @@ let private fs1023Trace format =
 
                 try
                     File.AppendAllText(path, entry)
-                with _ -> ())
+                with _ -> ()
+
+                Fs1023Telemetry.tryWrite entry)
         format
 
 //----------------------------------------------------------------------------

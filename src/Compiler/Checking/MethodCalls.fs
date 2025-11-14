@@ -12,6 +12,7 @@ open FSharp.Compiler
 open FSharp.Compiler.AbstractIL.IL 
 open FSharp.Compiler.AccessibilityLogic
 open FSharp.Compiler.AttributeChecking
+open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.DiagnosticsLogger
 open FSharp.Compiler.Features
 open FSharp.Compiler.Import
@@ -51,6 +52,7 @@ let private fs1023Trace format =
 
                 let entry = sprintf "%s [fs1023][methodcalls] %s%s" (System.DateTime.UtcNow.ToString("O")) message System.Environment.NewLine
                 System.IO.File.AppendAllText(path, entry)
+                Fs1023Telemetry.tryWrite entry
             with _ -> ()) format
 
 //-------------------------------------------------------------------------
