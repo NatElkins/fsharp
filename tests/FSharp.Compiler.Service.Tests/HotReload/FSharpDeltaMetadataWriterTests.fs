@@ -115,6 +115,9 @@ module FSharpDeltaMetadataWriterTests =
         let reader = provider.GetMetadataReader()
         action reader
 
+    let private getHeapSize (metadata: byte[]) (heap: HeapIndex) : int =
+        withMetadataReader metadata (fun reader -> reader.GetHeapSize heap)
+
     let private assertTableCountsMatch metadata (expected: int[]) =
         withMetadataReader metadata (fun reader ->
             for i = 0 to expected.Length - 1 do
@@ -354,9 +357,23 @@ module FSharpDeltaMetadataWriterTests =
         Assert.DoesNotContain("async generation", heapText)
 
     [<Fact>]
+    let ``async delta user string heap stays empty`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts (Some "async generation 2") ()
+        let userStringSize = getHeapSize artifacts.Delta.Metadata HeapIndex.UserString
+        Assert.Equal(1, userStringSize)
+
+    [<Fact>]
     let ``async multi-generation string heap size stays constant`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
         Assert.Equal(artifacts.Generation1.StringHeap.Length, artifacts.Generation2.StringHeap.Length)
+
+    [<Fact>]
+    let ``async multi-generation user string heap size stays constant`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
+        let gen1Size = getHeapSize artifacts.Generation1.Metadata HeapIndex.UserString
+        let gen2Size = getHeapSize artifacts.Generation2.Metadata HeapIndex.UserString
+        Assert.Equal(1, gen1Size)
+        Assert.Equal(gen1Size, gen2Size)
 
     [<Fact>]
     let ``property multi-generation uses ENC-sized indexes`` () =
