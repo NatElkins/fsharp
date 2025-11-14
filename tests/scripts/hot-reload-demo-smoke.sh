@@ -22,6 +22,14 @@ else
   echo "FSHARP_HOTRELOAD_TRACE_STRINGS is enabled; user-string updates will be logged." >&2
 fi
 
+if [[ "${HOTRELOAD_SMOKE_KEEP_WORKDIR:-}" == "1" ]]; then
+  export FSHARP_HOTRELOAD_KEEP_WORKDIR=1
+  echo "FSHARP_HOTRELOAD_KEEP_WORKDIR=1 (temporary demo directory will be preserved)" >&2
+else
+  unset FSHARP_HOTRELOAD_KEEP_WORKDIR
+  echo "hint: set HOTRELOAD_SMOKE_KEEP_WORKDIR=1 to keep the demo working directory (for inspecting dumped deltas)." >&2
+fi
+
 mdv_available=1
 MDV_PATH="${FSHARP_HOTRELOAD_MDV_PATH:-}"
 if [[ -z "${MDV_PATH}" ]]; then
