@@ -1886,6 +1886,25 @@ module UseProvided =
                 Assert.True(seen.Add mapMethodProvided)
                 Assert.True(seen.Add mapMethodShape)
 
+                let tryGetParameterlessCtor (ty: Type) =
+                    ty.GetConstructors(BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Instance)
+                    |> Array.tryFind (fun ctor -> ctor.GetParameters().Length = 0)
+
+                let ctorProvided =
+                    match tryGetParameterlessCtor providedType with
+                    | Some ctor -> ctor
+                    | None -> null
+                let ctorShape =
+                    match tryGetParameterlessCtor shapeProvidedType with
+                    | Some ctor -> ctor
+                    | None -> null
+                Assert.NotNull(ctorProvided)
+                Assert.NotNull(ctorShape)
+                Assert.NotEqual(ctorProvided, ctorShape)
+                let ctorSet = HashSet<ConstructorInfo>()
+                Assert.True(ctorSet.Add ctorProvided)
+                Assert.True(ctorSet.Add ctorShape)
+
             compile projectArgs
             assertProperties outputDll
 

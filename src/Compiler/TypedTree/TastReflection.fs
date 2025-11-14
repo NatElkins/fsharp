@@ -1153,6 +1153,19 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         let attributes = computeMethodAttributes vref compiledName true
         let callingConvention = computeCallingConvention isStatic
 
+        let signatureHash =
+            let declaringName =
+                if isNull declTy then String.Empty
+                else
+                    match declTy.AssemblyQualifiedName with
+                    | null -> String.Empty
+                    | name -> name
+            hash (declaringName, compiledName, parameterData.Length)
+
+        let metadataTokenValue =
+            let token = abs signatureHash + 1
+            if token = 0 then 1 else token
+
         let rec ctorInfo : ConstructorInfo =
             let parametersLazy =
                 lazy (
@@ -1175,13 +1188,18 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
 
                 override _.GetParameters() = parametersLazy.Value
 
-                override _.GetHashCode() = hash vref.Stamp
+                override _.GetHashCode() = signatureHash
                 override this.Equals(that: obj) =
                     match that with
                     | :? ConstructorInfo as other ->
+                        let paramsEqual =
+                            let these = parametersLazy.Value
+                            let those = other.GetParameters()
+                            these.Length = those.Length
+                            && Array.forall2 (fun (p1: ParameterInfo) (p2: ParameterInfo) -> eqType p1.ParameterType p2.ParameterType) these those
                         eqType this.DeclaringType other.DeclaringType
                         && other.Name = compiledName
-                        && other.GetParameters().Length = parametersLazy.Value.Length
+                        && paramsEqual
                     | _ -> false
 
                 override _.IsDefined(attributeType, _inherit) =
@@ -1198,7 +1216,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
                 override _.GetCustomAttributes(_inherit) = methodAttributeInstances.Value |> Array.copy
                 override _.GetCustomAttributes(attributeType, _inherit) =
                     filterAttributesByType attributeType methodAttributeInstances.Value
-                override _.MetadataToken = int vref.Stamp
+                override _.MetadataToken = metadataTokenValue
                 override _.ToString() = sprintf "ctxt constructor %s(...) in type %s" compiledName declTy.FullName }
 
         ctorInfo
