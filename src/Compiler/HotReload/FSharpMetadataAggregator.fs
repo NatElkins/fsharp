@@ -22,9 +22,6 @@ type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
     let readersArray = readers.ToArray()
     let baseline = readersArray.[0]
     let deltas = readersArray |> Array.skip 1
-    let readerGeneration = Dictionary<MetadataReader, int>(HashIdentity.Reference)
-    do
-        readersArray |> Array.iteri (fun generation reader -> readerGeneration[reader] <- generation)
     let tryGetStringValue (reader: MetadataReader) (handle: StringHandle) =
         if handle.IsNil then
             None
@@ -162,50 +159,53 @@ type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
         let struct (generation, translated) = this.TranslateHandle(EventDefinitionHandle.op_Implicit handle)
         struct (generation, EventDefinitionHandle.op_Explicit translated)
 
-    member _.TranslateStringHandle(sourceReader: MetadataReader, handle: StringHandle) =
-        let generation =
-            match readerGeneration.TryGetValue sourceReader with
-            | true, value -> value
-            | _ -> invalidArg (nameof sourceReader) "Metadata reader is not part of this aggregator."
-
-        if generation = 0 || handle.IsNil then
+    member this.TranslateStringHandle(sourceReader: MetadataReader, handle: StringHandle) =
+        if handle.IsNil then
             struct (0, handle)
         else
-            let offset = MetadataTokens.GetHeapOffset handle
-            let heapSize = sourceReader.GetHeapSize(HeapIndex.String)
+            match metadataAggregator with
+            | Some _ ->
+                let struct (generation, translatedHandle) =
+                    this.TranslateHandle(StringHandle.op_Implicit handle)
 
-            if offset >= heapSize then
-                // The handle already points into the baseline heap; treat it as generation 0.
+                let translatedString = StringHandle.op_Explicit translatedHandle
+
+                if generation = 0 then
+                    struct (0, translatedString)
+                else
+                    match tryGetStringValue sourceReader translatedString with
+                    | Some value ->
+                        match baselineStringHandles.TryGetValue value with
+                        | true, baselineHandle -> struct (0, baselineHandle)
+                        | _ -> struct (generation, translatedString)
+                    | None ->
+                        struct (generation, translatedString)
+            | None ->
                 struct (0, handle)
-            else
-                match tryGetStringValue sourceReader handle with
-                | None -> struct (generation, handle)
-                | Some value ->
-                    match baselineStringHandles.TryGetValue value with
-                    | true, baselineHandle -> struct (0, baselineHandle)
-                    | _ -> struct (generation, handle)
 
-    member _.TranslateBlobHandle(sourceReader: MetadataReader, handle: BlobHandle) =
-        let generation =
-            match readerGeneration.TryGetValue sourceReader with
-            | true, value -> value
-            | _ -> invalidArg (nameof sourceReader) "Metadata reader is not part of this aggregator."
-
-        if generation = 0 || handle.IsNil then
+    member this.TranslateBlobHandle(sourceReader: MetadataReader, handle: BlobHandle) =
+        if handle.IsNil then
             struct (0, handle)
         else
-            let offset = MetadataTokens.GetHeapOffset handle
-            let heapSize = sourceReader.GetHeapSize(HeapIndex.Blob)
+            match metadataAggregator with
+            | Some _ ->
+                let struct (generation, translatedHandle) =
+                    this.TranslateHandle(BlobHandle.op_Implicit handle)
 
-            if offset >= heapSize then
+                let translatedBlob = BlobHandle.op_Explicit translatedHandle
+
+                if generation = 0 then
+                    struct (0, translatedBlob)
+                else
+                    match tryGetBlobBytes sourceReader translatedBlob with
+                    | Some bytes ->
+                        match baselineBlobHandles.TryGetValue bytes with
+                        | true, baselineHandle -> struct (0, baselineHandle)
+                        | _ -> struct (generation, translatedBlob)
+                    | None ->
+                        struct (generation, translatedBlob)
+            | None ->
                 struct (0, handle)
-            else
-                match tryGetBlobBytes sourceReader handle with
-                | None -> struct (generation, handle)
-                | Some bytes ->
-                    match baselineBlobHandles.TryGetValue bytes with
-                    | true, baselineHandle -> struct (0, baselineHandle)
-                    | _ -> struct (generation, handle)
 
     static member Create(readers: seq<MetadataReader>) =
         FSharpMetadataAggregator(ImmutableArray.CreateRange(readers))

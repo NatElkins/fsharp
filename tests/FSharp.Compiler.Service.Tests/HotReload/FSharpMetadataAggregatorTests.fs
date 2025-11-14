@@ -53,8 +53,18 @@ module FSharpMetadataAggregatorTests =
             | None ->
                 match aggregator with
                 | Some agg ->
-                    let struct (_, baselineHandle) = agg.TranslateMethodDefinitionHandle handle
-                    getBaselineMethodName baselineReader baselineHandle
+                    let struct (stringGeneration, translatedHandle) =
+                        agg.TranslateStringHandle(reader, methodDef.Name)
+
+                    if stringGeneration = 0 then
+                        baselineReader.GetString translatedHandle
+                    else
+                        match tryGetUtf8String reader translatedHandle with
+                        | Some value -> value
+                        | None ->
+                            raise (
+                                InvalidOperationException "Unable to resolve method name without aggregator context."
+                            )
                 | None ->
                     raise (InvalidOperationException "Unable to resolve method name without aggregator context.")
 
@@ -91,8 +101,18 @@ module FSharpMetadataAggregatorTests =
             | None ->
                 match aggregatorOpt with
                 | Some agg ->
-                    let struct (_, translated) = agg.TranslatePropertyHandle handle
-                    getBaselinePropertyName baselineReader translated
+                    let struct (stringGeneration, translatedHandle) =
+                        agg.TranslateStringHandle(reader, propertyDef.Name)
+
+                    if stringGeneration = 0 then
+                        baselineReader.GetString translatedHandle
+                    else
+                        match tryGetUtf8String reader translatedHandle with
+                        | Some value -> value
+                        | None ->
+                            raise (
+                                InvalidOperationException "Unable to resolve property name without aggregator context."
+                            )
                 | None ->
                     raise (InvalidOperationException "Unable to resolve property name without aggregator context.")
 
@@ -116,8 +136,18 @@ module FSharpMetadataAggregatorTests =
             | None ->
                 match aggregatorOpt with
                 | Some agg ->
-                    let struct (_, translated) = agg.TranslateEventHandle handle
-                    getBaselineEventName baselineReader translated
+                    let struct (stringGeneration, translatedHandle) =
+                        agg.TranslateStringHandle(reader, eventDef.Name)
+
+                    if stringGeneration = 0 then
+                        baselineReader.GetString translatedHandle
+                    else
+                        match tryGetUtf8String reader translatedHandle with
+                        | Some value -> value
+                        | None ->
+                            raise (
+                                InvalidOperationException "Unable to resolve event name without aggregator context."
+                            )
                 | None ->
                     raise (InvalidOperationException "Unable to resolve event name without aggregator context.")
 

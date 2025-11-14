@@ -420,7 +420,8 @@ let emitWithUserStrings
               StringHeapOffsets = tableMirror.StringHeapOffsets
               BlobHeap = tableMirror.BlobHeapBytes
               BlobHeapOffsets = tableMirror.BlobHeapOffsets
-              GuidHeap = tableMirror.GuidHeapBytes }
+              GuidHeap = tableMirror.GuidHeapBytes
+              HeapOffsets = heapOffsets }
 
         let tableStream = DeltaMetadataSerializer.buildTableStream tableStreamInput
         let heapStreams = DeltaMetadataSerializer.buildHeapStreams tableMirror

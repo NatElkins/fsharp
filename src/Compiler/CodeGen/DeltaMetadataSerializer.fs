@@ -102,7 +102,8 @@ type DeltaTableSerializerInput =
       StringHeapOffsets: int[]
       BlobHeap: byte[]
       BlobHeapOffsets: int[]
-      GuidHeap: byte[] }
+      GuidHeap: byte[]
+      HeapOffsets: MetadataHeapOffsets }
 
 let private writeUInt16 (writer: BinaryWriter) (value: int) =
     writer.Write(uint16 value)
@@ -150,13 +151,15 @@ let private writeRowElement (writer: BinaryWriter) (indexSizes: DeltaIndexSizing
         let offset =
             if element.IsAbsolute then value
             elif value = 0 then 0
-            else input.StringHeapOffsets.[value]
+            else
+                input.HeapOffsets.StringHeapStart + input.StringHeapOffsets.[value]
         writeHeapIndex writer indexSizes.StringsBig offset
     elif tag = RowElementTags.Blob then
         let offset =
             if element.IsAbsolute then value
             elif value = 0 then 0
-            else input.BlobHeapOffsets.[value]
+            else
+                input.HeapOffsets.BlobHeapStart + input.BlobHeapOffsets.[value]
         writeHeapIndex writer indexSizes.BlobsBig offset
     elif tag = RowElementTags.Guid then
         writeHeapIndex writer indexSizes.GuidsBig value
