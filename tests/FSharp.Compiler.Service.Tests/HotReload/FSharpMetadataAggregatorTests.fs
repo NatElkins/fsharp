@@ -393,6 +393,46 @@ module FSharpMetadataAggregatorTests =
         Assert.Equal(baselineAddHandle, translatedHandle)
 
     [<Fact>]
+    let ``aggregator translates event name string handles across generations`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
+        let baselineBytes = artifacts.BaselineBytes
+        let deltaGen1 = artifacts.Generation1
+        let deltaGen2 = artifacts.Generation2
+
+        use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
+        let baselineReader = peReader.GetMetadataReader()
+
+        use deltaProvider1 = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(deltaGen1.Metadata))
+        let deltaReader1 = deltaProvider1.GetMetadataReader()
+
+        use deltaProvider2 = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(deltaGen2.Metadata))
+        let deltaReader2 = deltaProvider2.GetMetadataReader()
+
+        let aggregator =
+            FSharpMetadataAggregator.Create(
+                [ baselineReader
+                  deltaReader1
+                  deltaReader2 ])
+
+        let baselineEventHandle =
+            baselineReader.EventDefinitions
+            |> Seq.find (fun handle ->
+                eventNameForReader None baselineReader baselineReader handle = "OnChanged")
+
+        let deltaEventHandle =
+            deltaReader2.EventDefinitions
+            |> Seq.find (fun handle ->
+                eventNameForReader (Some aggregator) baselineReader deltaReader2 handle = "OnChanged")
+
+        let deltaEventDef = deltaReader2.GetEventDefinition deltaEventHandle
+        let struct (generation, translatedHandle) =
+            aggregator.TranslateStringHandle(deltaReader2, deltaEventDef.Name)
+
+        Assert.Equal(0, generation)
+        let baselineEventDef = baselineReader.GetEventDefinition baselineEventHandle
+        Assert.Equal(baselineEventDef.Name, translatedHandle)
+
+    [<Fact>]
     let ``aggregator translates string handles across multiple generations`` () =
         let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
         let baselineBytes = artifacts.BaselineBytes
