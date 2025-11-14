@@ -352,6 +352,74 @@ module FSharpMetadataAggregatorTests =
             baselineReader.GetString translatedHandle)
 
     [<Fact>]
+    let ``aggregator translates property name string handles to baseline generation`` () =
+        let baselineBytes, delta = emitPropertyDelta None ()
+
+        use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
+        let baselineReader = peReader.GetMetadataReader()
+
+        use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(delta.Metadata))
+        let deltaReader = deltaProvider.GetMetadataReader()
+
+        let aggregator =
+            FSharpMetadataAggregator.Create(
+                [ baselineReader
+                  deltaReader ])
+
+        let findProperty (reader: MetadataReader) =
+            reader.PropertyDefinitions
+            |> Seq.find (fun handle ->
+                let name = propertyNameForReader (Some aggregator) baselineReader reader handle
+                name = "Message")
+
+        let baselineProperty = findProperty baselineReader
+        let deltaProperty = findProperty deltaReader
+
+        let baselineDef = baselineReader.GetPropertyDefinition baselineProperty
+        let deltaDef = deltaReader.GetPropertyDefinition deltaProperty
+
+        let struct (generation, translatedHandle) = aggregator.TranslateStringHandle(deltaReader, deltaDef.Name)
+
+        Assert.Equal(0, generation)
+        Assert.Equal(
+            baselineReader.GetString baselineDef.Name,
+            baselineReader.GetString translatedHandle)
+
+    [<Fact>]
+    let ``aggregator translates event name string handles to baseline generation`` () =
+        let baselineBytes, delta = emitEventDelta None ()
+
+        use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
+        let baselineReader = peReader.GetMetadataReader()
+
+        use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(delta.Metadata))
+        let deltaReader = deltaProvider.GetMetadataReader()
+
+        let aggregator =
+            FSharpMetadataAggregator.Create(
+                [ baselineReader
+                  deltaReader ])
+
+        let findEvent (reader: MetadataReader) =
+            reader.EventDefinitions
+            |> Seq.find (fun handle ->
+                let name = eventNameForReader (Some aggregator) baselineReader reader handle
+                name = "OnChanged")
+
+        let baselineEvent = findEvent baselineReader
+        let deltaEvent = findEvent deltaReader
+
+        let baselineDef = baselineReader.GetEventDefinition baselineEvent
+        let deltaDef = deltaReader.GetEventDefinition deltaEvent
+
+        let struct (generation, translatedHandle) = aggregator.TranslateStringHandle(deltaReader, deltaDef.Name)
+
+        Assert.Equal(0, generation)
+        Assert.Equal(
+            baselineReader.GetString baselineDef.Name,
+            baselineReader.GetString translatedHandle)
+
+    [<Fact>]
     let ``aggregator translates property handles across multiple generations`` () =
         let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
         let baselineBytes = artifacts.BaselineBytes
