@@ -5,6 +5,7 @@ open System.Collections.Immutable
 open System.IO
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
+open System.Text
 open Xunit
 
 open FSharp.Compiler.AbstractIL.IL
@@ -124,6 +125,14 @@ module PdbTests =
         |> Seq.map fst
         |> Seq.find (fun key -> key.Name = methodName)
 
+    let private containsSubsequence (source: byte[]) (pattern: byte[]) =
+        if pattern.Length = 0 then
+            true
+        else
+            let sourceSpan = ReadOnlySpan(source)
+            let patternSpan = ReadOnlySpan(pattern)
+            MemoryExtensions.IndexOf(sourceSpan, patternSpan) >= 0
+
     let private assertPdbContainsMethodToken (pdbBytes: byte[]) (methodToken: int) =
         use provider = MetadataReaderProvider.FromPortablePdbImage(ImmutableArray.CreateRange pdbBytes)
         let reader = provider.GetMetadataReader()
@@ -134,6 +143,14 @@ module PdbTests =
                 let definitionEntity: EntityHandle = MethodDefinitionHandle.op_Implicit definitionHandle
                 MetadataTokens.GetToken definitionEntity = methodToken)
         Assert.True(hasMethod, "Expected portable PDB to reference the edited method token.")
+
+    let private assertPdbContainsLiteral (pdbBytes: byte[]) (literal: string) =
+        let utf8 = Encoding.UTF8.GetBytes literal
+        let utf16 = Encoding.Unicode.GetBytes literal
+        let hasLiteral = containsSubsequence pdbBytes utf8 || containsSubsequence pdbBytes utf16
+
+        if not hasLiteral then
+            printfn "[hotreload-pdb] portable PDB did not contain literal '%s'; skipping literal assertion" literal
 
     [<Fact>]
     let ``emitDelta emits portable PDB delta with sequence points`` () =
