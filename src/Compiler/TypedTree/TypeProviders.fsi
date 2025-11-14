@@ -15,7 +15,7 @@ open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.Text
 
 type TypeProviderDesignation = TypeProviderDesignation of string
-type 'a ProvidedArray = ('a[]) MaybeNull
+type 'a ProvidedArray = 'a[] MaybeNull
 
 /// Captures metadata needed to rehydrate provider-generated members inside the typed tree.
 type ProvidedMemberBinding =

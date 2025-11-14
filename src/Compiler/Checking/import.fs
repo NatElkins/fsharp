@@ -7,13 +7,9 @@ open System
 open System.Collections.Concurrent
 open System.Collections.Generic
 open System.Collections.Immutable
-open System.Diagnostics
 open System.IO
-
 open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras
-open Internal.Utilities.TypeHashing
-
 open FSharp.Compiler
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.CompilerGlobalState
@@ -29,7 +25,6 @@ open FSharp.Compiler.TypedTreeOps
 open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.Caches
 open FSharp.Compiler.TastReflect
-
 #if !NO_TYPEPROVIDERS
 open FSharp.Compiler.TypeProviders
 #endif
@@ -427,13 +422,13 @@ let rec ImportILTypeWithNullness (env: ImportMap) m tinst (nf:Nullness.NullableF
 
     | ILType.Array(bounds, innerTy) ->
         let n = bounds.Rank
-        let (arrayNullness,nf) = Nullness.evaluateFirstOrderNullnessAndAdvance ty nf
+        let arrayNullness,nf = Nullness.evaluateFirstOrderNullnessAndAdvance ty nf
         let struct(elemTy,nf) = ImportILTypeWithNullness env m tinst nf innerTy
         mkArrayTy env.g n arrayNullness elemTy m, nf
 
     | ILType.Boxed  tspec | ILType.Value tspec ->
         let tcref = ImportILTypeRef env m tspec.TypeRef
-        let (typeRefNullness,nf) = Nullness.evaluateFirstOrderNullnessAndAdvance ty nf
+        let typeRefNullness,nf = Nullness.evaluateFirstOrderNullnessAndAdvance ty nf
         let struct(inst,nullableFlagsLeft) = (nf,tspec.GenericArgs) ||> List.vMapFold (fun nf current -> ImportILTypeWithNullness env m tinst nf current )
 
         ImportTyconRefApp env tcref inst typeRefNullness, nullableFlagsLeft
@@ -461,7 +456,7 @@ let rec ImportILTypeWithNullness (env: ImportMap) m tinst (nf:Nullness.NullableF
             with _ ->
                 error(Error(FSComp.SR.impNotEnoughTypeParamsInScopeWhileImporting(), m))
 
-        let (typeVarNullness,nf) = Nullness.evaluateFirstOrderNullnessAndAdvance ty nf
+        let typeVarNullness,nf = Nullness.evaluateFirstOrderNullnessAndAdvance ty nf
         addNullnessToTy typeVarNullness ttype, nf
 
 /// Determines if an IL type can be imported as an F# type

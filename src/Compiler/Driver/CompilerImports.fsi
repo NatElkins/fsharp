@@ -17,7 +17,6 @@ open FSharp.Compiler.TypedTree
 open FSharp.Compiler.TypedTreeOps
 open FSharp.Compiler.TastReflect
 open FSharp.Compiler.TcGlobals
-open FSharp.Compiler.BuildGraph
 open FSharp.Compiler.IO
 open FSharp.Compiler.Text
 open FSharp.Core.CompilerServices

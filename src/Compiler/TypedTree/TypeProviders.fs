@@ -24,7 +24,7 @@ open FSharp.Compiler.Text
 open FSharp.Compiler.Text.Range
 
 type TypeProviderDesignation = TypeProviderDesignation of string
-type 'a ProvidedArray= ('a[]) MaybeNull
+type 'a ProvidedArray = 'a[] MaybeNull
 
 type ProvidedMemberBinding =
     {
@@ -38,7 +38,6 @@ type ProvidedMemberBinding =
         DefinitionLocation: range option
         AssociatedMember: obj option
     }
-
 module ProvidedArray =
     let map f (arr:_ ProvidedArray) : _ ProvidedArray = 
         match arr with
@@ -255,7 +254,8 @@ let TryTypeMemberArray (st: Tainted<_>, fullName, memberName, m, f) =
         [||]
 
 /// Try to access a member on a provided type, catching and reporting errors and checking the result is non-null, 
-let TryTypeMemberNonNull<'T, 'U when 'U : not null and 'U : not struct>(st: Tainted<'T>, fullName, memberName, m, recover: 'U, (f: 'T -> 'U | null)) : Tainted<'U> =
+let TryTypeMemberNonNull<'T, 'U when 'U : not null and 'U : not struct>(st: Tainted<'T>, fullName, memberName, m, recover: 'U,
+                                                                        f: 'T -> 'U | null) : Tainted<'U> =
     match TryTypeMember<'T, 'U | null>(st, fullName, memberName, m, withNull recover, f) with 
     | Tainted.Null -> 
         errorR(Error(FSComp.SR.etUnexpectedNullFromProvidedTypeMember(fullName, memberName), m))
@@ -510,7 +510,7 @@ type ProvidedType (x: Type, ctxt: ProvidedTypeContext) =
         let argTypes = args |> Array.map (fun arg -> arg.RawSystemType)
         ProvidedType.CreateNoContext(x.MakeGenericType(argTypes))
 
-    member _.AsProvidedVar name = ProvidedVar.CreateNonNull ctxt (Quotations.Var(name, x))
+    member _.AsProvidedVar name = ProvidedVar.CreateNonNull ctxt (Var(name, x))
 
     static member Create ctxt x : ProvidedType MaybeNull = 
         match x with 
@@ -529,7 +529,7 @@ type ProvidedType (x: Type, ctxt: ProvidedTypeContext) =
 
     static member CreateNoContext (x:Type) = ProvidedType.CreateNonNull ProvidedTypeContext.Empty x
 
-    static member Void = ProvidedType.CreateNoContext typeof<System.Void>
+    static member Void = ProvidedType.CreateNoContext typeof<Void>
 
     member _.Handle = x
 
@@ -686,7 +686,7 @@ type ProvidedAssembly (x: Assembly) =
 
     member _.GetManifestModuleContents(provider: ITypeProvider) = provider.GetGeneratedAssemblyContents x
 
-    static member Create (x: Assembly MaybeNull) : ProvidedAssembly MaybeNull = match x with null -> null | t -> ProvidedAssembly (t)
+    static member Create (x: Assembly MaybeNull) : ProvidedAssembly MaybeNull = match x with null -> null | t -> ProvidedAssembly t
 
     member _.Handle = x
 
@@ -1091,7 +1091,7 @@ type ProvidedVar (x: Var, ctxt) =
 
 /// Get the provided invoker expression for a particular use of a method.
 let GetInvokerExpression (provider: ITypeProvider, methodBase: ProvidedMethodBase, paramExprs: ProvidedVar[]) = 
-    provider.GetInvokerExpression(methodBase.Handle, [| for p in paramExprs -> Quotations.Expr.Var p.Handle |]) |> ProvidedExpr.Create methodBase.Context
+    provider.GetInvokerExpression(methodBase.Handle, [| for p in paramExprs -> Expr.Var p.Handle |]) |> ProvidedExpr.Create methodBase.Context
 
 /// Compute the Name or FullName property of a provided type, reporting appropriate errors
 let CheckAndComputeProvidedNameProperty(m, st: Tainted<ProvidedType>, proj, propertyString) =
