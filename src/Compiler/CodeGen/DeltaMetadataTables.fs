@@ -86,7 +86,7 @@ type private RowTableBuilder() =
     member _.Entries = rows.ToArray()
     member _.Count = rows.Count
 
-type private StringHeapBuilder(_baselineLength: int) =
+type private StringHeapBuilder(baselineLength: int) =
     let entries = ResizeArray<string>()
     let lookup = Dictionary<string, int>(StringComparer.Ordinal)
     let utf8 = Encoding.UTF8
@@ -118,7 +118,7 @@ type private StringHeapBuilder(_baselineLength: int) =
             let mutable currentOffset = int ms.Length
             for i = 0 to entries.Count - 1 do
                 let entryIndex = i + 1
-                entryOffsets.[entryIndex] <- currentOffset
+                entryOffsets.[entryIndex] <- baselineLength + currentOffset
                 let bytes = utf8.GetBytes entries.[i]
                 writer.Write(bytes)
                 writer.Write(byte 0)
@@ -137,7 +137,7 @@ type private StringHeapBuilder(_baselineLength: int) =
             this.BuildIfNeeded()
             offsetsCache.Value
 
-type private ByteArrayHeapBuilder(_baselineLength: int) =
+type private ByteArrayHeapBuilder(baselineLength: int) =
     let entries = ResizeArray<byte[]>()
     let lookup = Dictionary<byte[], int>(byteArrayComparer)
     let mutable bytesCache: byte[] option = None
@@ -175,7 +175,7 @@ type private ByteArrayHeapBuilder(_baselineLength: int) =
             let mutable currentOffset = int ms.Length
             for i = 0 to entries.Count - 1 do
                 let entryIndex = i + 1
-                entryOffsets.[entryIndex] <- currentOffset
+                entryOffsets.[entryIndex] <- baselineLength + currentOffset
                 let value = entries.[i]
                 writeCompressedUnsigned writer value.Length
                 if value.Length > 0 then

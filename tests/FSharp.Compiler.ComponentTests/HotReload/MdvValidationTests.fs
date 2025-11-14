@@ -124,6 +124,30 @@ module MdvValidationTests =
                         sprintf "[Roslyn baseline] scenario '%s' exceeded %A: actual=%d baseline=%d" scenario tableIndex actual budget)
                 | None -> ()
 
+    module private HeapBudgets =
+        type Budget = { StringBytes: int; BlobBytes: int }
+
+        let private budgets : Map<string, Budget> =
+            Map.ofList
+                [ "Property", { StringBytes = 32; BlobBytes = 64 }
+                  "PropertyUpdate", { StringBytes = 32; BlobBytes = 64 }
+                  "Event", { StringBytes = 48; BlobBytes = 64 }
+                  "EventUpdate", { StringBytes = 48; BlobBytes = 64 } ]
+
+        let assertWithin (scenario: string) (metadata: byte[]) =
+            match Map.tryFind scenario budgets with
+            | None -> ()
+            | Some budget ->
+                withMetadataReader metadata (fun reader ->
+                    let stringSize = reader.GetHeapSize HeapIndex.String
+                    let blobSize = reader.GetHeapSize HeapIndex.Blob
+                    Assert.True(
+                        stringSize <= budget.StringBytes,
+                        sprintf "[%s] string heap grew to %d bytes (budget %d)" scenario stringSize budget.StringBytes)
+                    Assert.True(
+                        blobSize <= budget.BlobBytes,
+                        sprintf "[%s] blob heap grew to %d bytes (budget %d)" scenario blobSize budget.BlobBytes))
+
     let private methodRowIdFromToken (methodToken: int) = methodToken &&& 0x00FFFFFF
 
     let private assertMethodEncLog (delta: IlxDelta) (methodToken: int) =
@@ -1147,6 +1171,7 @@ type EventDemo() =
             File.WriteAllBytes(metadataPath, delta.Metadata)
             File.WriteAllBytes(ilPath, delta.IL)
             RoslynBaseline.assertWithin "Property" delta.Metadata
+            HeapBudgets.assertWithin "Property" delta.Metadata
 
             let expectedLiteral = Text.Encoding.Unicode.GetBytes("Property helper updated message")
             Assert.True(
@@ -1214,6 +1239,7 @@ type EventDemo() =
             File.WriteAllBytes(metadataPath, delta.Metadata)
             File.WriteAllBytes(ilPath, delta.IL)
             RoslynBaseline.assertWithin "Property" delta.Metadata
+            HeapBudgets.assertWithin "Property" delta.Metadata
 
             let expectedLiteral = Text.Encoding.Unicode.GetBytes "Property helper added message"
             Assert.True(containsSubsequence delta.Metadata expectedLiteral, "Expected metadata delta to contain added property literal.")
@@ -1285,6 +1311,7 @@ type EventDemo() =
             File.WriteAllBytes(metadataPath, delta.Metadata)
             File.WriteAllBytes(ilPath, delta.IL)
             RoslynBaseline.assertWithin "Event" delta.Metadata
+            HeapBudgets.assertWithin "Event" delta.Metadata
 
             let expectedLiteral = Text.Encoding.Unicode.GetBytes("Event helper updated payload")
             Assert.True(
@@ -1491,6 +1518,7 @@ type EventDemo() =
             File.WriteAllBytes(meta1Path, delta1.Metadata)
             File.WriteAllBytes(il1Path, delta1.IL)
             RoslynBaseline.assertWithin "Property" delta1.Metadata
+            HeapBudgets.assertWithin "Property" delta1.Metadata
 
             let expectedLiteral1 = Text.Encoding.Unicode.GetBytes "Property helper generation 1"
             Assert.True(
@@ -1537,6 +1565,7 @@ type EventDemo() =
             File.WriteAllBytes(meta2Path, delta2.Metadata)
             File.WriteAllBytes(il2Path, delta2.IL)
             RoslynBaseline.assertWithin "PropertyUpdate" delta2.Metadata
+            HeapBudgets.assertWithin "PropertyUpdate" delta2.Metadata
 
             let expectedLiteral2 = Text.Encoding.Unicode.GetBytes "Property helper generation 2"
             Assert.True(
@@ -1599,6 +1628,7 @@ type EventDemo() =
         File.WriteAllBytes(meta1Path, delta1.Metadata)
 
         RoslynBaseline.assertWithin "Event" delta1.Metadata
+        HeapBudgets.assertWithin "Event" delta1.Metadata
         match methodTokenOpt, methodRowIdOpt with
         | Some methodToken, Some methodRowId ->
             assertMethodEncLog delta1 methodToken
@@ -1627,6 +1657,7 @@ type EventDemo() =
         File.WriteAllBytes(meta2Path, delta2.Metadata)
 
         RoslynBaseline.assertWithin "EventUpdate" delta2.Metadata
+        HeapBudgets.assertWithin "EventUpdate" delta2.Metadata
         match methodTokenOpt, methodRowIdOpt with
         | Some methodToken, Some methodRowId ->
             assertMethodEncLog delta2 methodToken
