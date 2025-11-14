@@ -101,10 +101,19 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 
 > Current state: Reflection proxies are implemented with per-`TyconRef` caching, and `TcImports` exposes a shared builder; follow-up tasks cover broader surface implementation (events/indexers), debugger ergonomics, and performance measurements.
 
-**Recent progress update:** `ImportMap` now exposes `GetTypeReflectionBuilder`/`ReflectType`, and `TcStaticConstantParameter` consumes the helper. Remaining Phase 1 work:
-- Finish method/constructor parameter projection so `MethodInfo.GetParameters` etc. are accurate.
-- Implement TODOs for event/indexer parity and clean up `notRequired` fallbacks that providers hit during reflection.
-- Add targeted profiling/DebuggerDisplay as originally scoped.
+**Recent progress update:** `ImportMap` now exposes `GetTypeReflectionBuilder`/`ReflectType`, and `TcStaticConstantParameter` consumes the helper.
+
+**Next concrete actions before leaving Phase 1:**
+1. **Parity checklist sweep**
+   - Re-read `TastReflection.fs` and close the remaining TODOs called out in §1.1 (method/ctor parameter fidelity, `GetConstructorImpl`/`GetMethodImpl` fallbacks, indexer binding). Strike each item from this plan once we have code + tests.
+   - Extend `TypeProviderDependencyInvalidationTests` to cover any newly fixed behaviour (e.g., extra optional-arg cases, multi-parameter indexers) so we have regression evidence.
+2. **Event/indexer audit**
+   - Double-check that the new provided-event path (`tcaug_provided_events`) works for nested types, static events, and non-default BindingFlags. If we find gaps, fix them and record the tests in §5.1.
+   - Re-verify the indexer binder behaviour with `Type.GetProperty("Item", …)` + varied `types` arrays (null vs. explicit parameter list).
+3. **Debugger & profiling hooks**
+   - Finish the ergonomics perf pass originally promised here: add profiling toggles/measurements for TastReflection projections, and ensure the debugger view for the remaining proxy types is friendly (we only handled `ReflectModule` so far).
+4. **Doc + checklist update**
+   - Once the above items are green, mark Phase 1 as “Complete” in this document (not just “In progress”) and move the detailed parity checklist to an appendix for future reference.
 
 ### 1.1 Create projection module
 
@@ -346,6 +355,8 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
 > - `ReflectModule` picked up a `DebuggerDisplay`/`ToString` implementation that reports both the module name and parent assembly, so the debugger view now points back to the projected assembly identity.
 > - Broader verification: `timeout 600s dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Release --filter "FullyQualifiedName~TypeProviderDependencyInvalidationTests"` now passes end-to-end on `net10.0`, so every Fs1023 regression in that suite is green after the recent TastReflection changes.
 > - Next up for Phase 1: finish the lingering parity polish (the indexer/event edge cases called out earlier) and turn the `fs-1023` work into a PR using `docs/upcoming/fs-1023-pr-draft.md`, then begin Phase 8 partner dogfooding + telemetry once the PR is up.
+>
+> **Gate:** Do **not** begin Phase 8 (preview packaging / partner dogfooding) until the Phase 1 checklist above is fully closed and explicitly marked “Complete” in this plan.
 
 ---
 
