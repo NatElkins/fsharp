@@ -36,6 +36,15 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(metadataReader.GetHeapSize HeapIndex.Guid, baseline.GuidHeapSize)
         Assert.Equal(metadataReader.GetHeapSize HeapIndex.UserString, baseline.UserStringHeapSize)
 
+    let private assertBaselineHeapSnapshotMulti (artifacts: MetadataDeltaTestHelpers.MultiGenerationMetadataArtifacts) =
+        use peReader = new PEReader(new MemoryStream(artifacts.BaselineBytes, writable = false))
+        let metadataReader = peReader.GetMetadataReader()
+        let baseline = artifacts.BaselineHeapSizes
+        Assert.Equal(metadataReader.GetHeapSize HeapIndex.String, baseline.StringHeapSize)
+        Assert.Equal(metadataReader.GetHeapSize HeapIndex.Blob, baseline.BlobHeapSize)
+        Assert.Equal(metadataReader.GetHeapSize HeapIndex.Guid, baseline.GuidHeapSize)
+        Assert.Equal(metadataReader.GetHeapSize HeapIndex.UserString, baseline.UserStringHeapSize)
+
     let private readMetadataRoot metadata (reader: BinaryReader) =
         let readUInt32 () = reader.ReadUInt32()
         let readUInt16 () = reader.ReadUInt16()
@@ -363,9 +372,19 @@ module FSharpDeltaMetadataWriterTests =
         assertBaselineHeapSnapshot artifacts
 
     [<Fact>]
+    let ``property multi-generation artifacts capture baseline heap sizes`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
+        assertBaselineHeapSnapshotMulti artifacts
+
+    [<Fact>]
     let ``local signature delta artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitLocalSignatureDeltaArtifacts None ()
         assertBaselineHeapSnapshot artifacts
+
+    [<Fact>]
+    let ``local signature multi-generation artifacts capture baseline heap sizes`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitLocalSignatureMultiGenerationArtifacts ()
+        assertBaselineHeapSnapshotMulti artifacts
 
     [<Fact>]
     let ``async multi-generation uses ENC-sized indexes`` () =
@@ -429,6 +448,11 @@ module FSharpDeltaMetadataWriterTests =
     let ``async delta artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
         assertBaselineHeapSnapshot artifacts
+
+    [<Fact>]
+    let ``async multi-generation artifacts capture baseline heap sizes`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
+        assertBaselineHeapSnapshotMulti artifacts
 
     [<Fact>]
     let ``property multi-generation uses ENC-sized indexes`` () =
@@ -678,9 +702,19 @@ module FSharpDeltaMetadataWriterTests =
         assertBaselineHeapSnapshot artifacts
 
     [<Fact>]
+    let ``event multi-generation artifacts capture baseline heap sizes`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
+        assertBaselineHeapSnapshotMulti artifacts
+
+    [<Fact>]
     let ``closure delta artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitClosureDeltaArtifacts ()
         assertBaselineHeapSnapshot artifacts
+
+    [<Fact>]
+    let ``closure multi-generation artifacts capture baseline heap sizes`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitClosureMultiGenerationArtifacts ()
+        assertBaselineHeapSnapshotMulti artifacts
 
     [<Fact>]
     let ``event multi-generation uses ENC-sized indexes`` () =
