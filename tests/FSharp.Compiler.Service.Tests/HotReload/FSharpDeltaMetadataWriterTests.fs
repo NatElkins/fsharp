@@ -136,6 +136,25 @@ module FSharpDeltaMetadataWriterTests =
     let private getHeapSize (metadata: byte[]) (heap: HeapIndex) : int =
         withMetadataReader metadata (fun reader -> reader.GetHeapSize heap)
 
+    let private assertStringHeapGrowthWithin label (artifacts: MetadataDeltaTestHelpers.MetadataDeltaArtifacts) maxGrowthBytes =
+        assertBaselineHeapSnapshot artifacts
+        let growth = getHeapSize artifacts.Delta.Metadata HeapIndex.String
+        Assert.True(
+            growth <= maxGrowthBytes,
+            sprintf "[%s] string heap grew by %d bytes (limit %d)" label growth maxGrowthBytes)
+
+    let private assertStringHeapGrowthWithinMulti label (artifacts: MetadataDeltaTestHelpers.MultiGenerationMetadataArtifacts) maxGrowthBytes =
+        assertBaselineHeapSnapshotMulti artifacts
+
+        let assertDelta (delta: DeltaWriter.MetadataDelta) =
+            let growth = getHeapSize delta.Metadata HeapIndex.String
+            Assert.True(
+                growth <= maxGrowthBytes,
+                sprintf "[%s] string heap grew by %d bytes (limit %d)" label growth maxGrowthBytes)
+
+        assertDelta artifacts.Generation1
+        assertDelta artifacts.Generation2
+
     let private assertTableCountsMatch metadata (expected: int[]) =
         withMetadataReader metadata (fun reader ->
             for i = 0 to expected.Length - 1 do
@@ -377,6 +396,16 @@ module FSharpDeltaMetadataWriterTests =
         assertBaselineHeapSnapshotMulti artifacts
 
     [<Fact>]
+    let ``property delta string heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
+        assertStringHeapGrowthWithin "property-delta" artifacts 32
+
+    [<Fact>]
+    let ``property multi-generation string heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
+        assertStringHeapGrowthWithinMulti "property-multigen" artifacts 32
+
+    [<Fact>]
     let ``local signature delta artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitLocalSignatureDeltaArtifacts None ()
         assertBaselineHeapSnapshot artifacts
@@ -448,11 +477,20 @@ module FSharpDeltaMetadataWriterTests =
     let ``async delta artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
         assertBaselineHeapSnapshot artifacts
-
     [<Fact>]
     let ``async multi-generation artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
         assertBaselineHeapSnapshotMulti artifacts
+
+    [<Fact>]
+    let ``async delta string heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
+        assertStringHeapGrowthWithin "async-delta" artifacts 32
+
+    [<Fact>]
+    let ``async multi-generation string heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
+        assertStringHeapGrowthWithinMulti "async-multigen" artifacts 32
 
     [<Fact>]
     let ``property multi-generation uses ENC-sized indexes`` () =
@@ -705,6 +743,16 @@ module FSharpDeltaMetadataWriterTests =
     let ``event multi-generation artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
         assertBaselineHeapSnapshotMulti artifacts
+
+    [<Fact>]
+    let ``event delta string heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitEventDeltaArtifacts None ()
+        assertStringHeapGrowthWithin "event-delta" artifacts 48
+
+    [<Fact>]
+    let ``event multi-generation string heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
+        assertStringHeapGrowthWithinMulti "event-multigen" artifacts 48
 
     [<Fact>]
     let ``closure delta artifacts capture baseline heap sizes`` () =
