@@ -1154,6 +1154,17 @@ type EventDemo() =
                 "Expected metadata delta to contain updated property literal."
             )
 
+            let containsPropertyName =
+                delta.UserStringUpdates
+                |> List.exists (fun (_, _, text) -> String.Equals(text, accessorName, StringComparison.Ordinal))
+            Assert.False(containsPropertyName, "Property name should not be re-emitted into the user string heap.")
+
+            let hasUpdatedLiteral =
+                delta.UserStringUpdates
+                |> List.exists (fun (_, _, text) ->
+                    text.Contains("Property helper updated message", StringComparison.Ordinal))
+            Assert.True(hasUpdatedLiteral, "Expected user string updates to include the new property literal.")
+
             Assert.Contains(methodToken, delta.UpdatedMethodTokens)
             let hasMethodInfo =
                 delta.AddedOrChangedMethods
@@ -1270,6 +1281,17 @@ type EventDemo() =
                 containsSubsequence delta.Metadata expectedLiteral,
                 "Expected metadata delta to contain updated event literal."
             )
+
+            let containsEventName =
+                delta.UserStringUpdates
+                |> List.exists (fun (_, _, text) -> String.Equals(text, "OnChanged", StringComparison.Ordinal))
+            Assert.False(containsEventName, "Event name should not be re-emitted into the user string heap.")
+
+            let hasUpdatedLiteral =
+                delta.UserStringUpdates
+                |> List.exists (fun (_, _, text) ->
+                    text.Contains("Event helper updated payload", StringComparison.Ordinal))
+            Assert.True(hasUpdatedLiteral, "Expected user string updates to include the new event literal.")
 
             Assert.Contains(methodToken, delta.UpdatedMethodTokens)
             let hasMethodInfo =
