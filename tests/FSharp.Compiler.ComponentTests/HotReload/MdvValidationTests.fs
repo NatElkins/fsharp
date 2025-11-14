@@ -1597,6 +1597,11 @@ type EventDemo() =
 
         let delta1 = emitDelta request1
         File.WriteAllBytes(meta1Path, delta1.Metadata)
+
+        let hasUpdatedLiteralGen1 =
+            delta1.UserStringUpdates
+            |> List.exists (fun (_, _, text) -> text.Contains("Closure helper generation 1", StringComparison.Ordinal))
+        Assert.True(hasUpdatedLiteralGen1, "Expected Generation 1 user string updates to include the new closure literal.")
         RoslynBaseline.assertWithin "Event" delta1.Metadata
         match methodTokenOpt, methodRowIdOpt with
         | Some methodToken, Some methodRowId ->
@@ -1624,6 +1629,11 @@ type EventDemo() =
 
         let delta2 = emitDelta request2
         File.WriteAllBytes(meta2Path, delta2.Metadata)
+
+        let hasUpdatedLiteralGen2 =
+            delta2.UserStringUpdates
+            |> List.exists (fun (_, _, text) -> text.Contains("Closure helper generation 2", StringComparison.Ordinal))
+        Assert.True(hasUpdatedLiteralGen2, "Expected Generation 2 user string updates to include the new closure literal.")
         RoslynBaseline.assertWithin "EventUpdate" delta2.Metadata
         match methodTokenOpt, methodRowIdOpt with
         | Some methodToken, Some methodRowId ->
