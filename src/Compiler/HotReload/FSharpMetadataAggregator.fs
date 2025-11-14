@@ -115,6 +115,17 @@ type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
             let propertyDef = baseline.GetPropertyDefinition propertyHandle
             addHandle propertyDef.Signature baseline
 
+        let standaloneHandles =
+            let count = baseline.GetTableRowCount TableIndex.StandAloneSig
+            seq {
+                for row in 1 .. count do
+                    yield MetadataTokens.StandaloneSignatureHandle row
+            }
+
+        for standaloneHandle in standaloneHandles do
+            let standalone = baseline.GetStandaloneSignature standaloneHandle
+            addHandle standalone.Signature baseline
+
         dict
     let metadataAggregator =
         if deltas.Length = 0 then

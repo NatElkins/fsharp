@@ -333,6 +333,58 @@ module internal MetadataDeltaTestHelpers =
             (mkILExportedTypes [])
             "v4.0.30319"
 
+    let createLocalSignatureModule (messageLiteral: string option) () =
+        let ilg = ilGlobals
+        let stringType = ilg.typ_String
+        let typeName = "Sample.LocalSignatureHost"
+        let literal = defaultArg messageLiteral "local"
+
+        let locals = [ mkILLocal stringType None ]
+
+        let methodBody =
+            mkMethodBody(
+                false,
+                locals,
+                2,
+                nonBranchingInstrsToCode [ I_ldstr literal; I_stloc 0us; I_ldloc 0us; I_ret ],
+                None,
+                None)
+
+        let methodDef =
+            mkILNonGenericStaticMethod(
+                "FormatMessage",
+                ILMemberAccess.Public,
+                [],
+                mkILReturn stringType,
+                methodBody)
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    typeName,
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ methodDef ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
     let createEventModule (messageLiteral: string option) () =
         let ilg = ilGlobals
         let typeName = "Sample.EventHost"
@@ -756,6 +808,81 @@ module internal MetadataDeltaTestHelpers =
                 (srmReader.GetHeapSize HeapIndex.String)
                 (srmReader.GetHeapSize HeapIndex.Blob)
                 (srmReader.GetHeapSize HeapIndex.Guid)
+
+        { BaselineBytes = assemblyBytes
+          Delta = metadataDelta }
+
+    let private emitLocalSignatureDeltaCore
+        (metadataReader: MetadataReader)
+        (peReader: PEReader)
+        (builder: IlDeltaStreamBuilder)
+        (heapOffsets: MetadataHeapOffsets)
+        =
+        let stringType = ilGlobals.typ_String
+        let typeName = "Sample.LocalSignatureHost"
+        let methodName = "FormatMessage"
+
+        let methodHandle = findMethodHandle metadataReader "Sample.LocalSignatureHost" methodName
+        let methodDef = metadataReader.GetMethodDefinition methodHandle
+        let methodBody = peReader.GetMethodBody methodDef.RelativeVirtualAddress
+
+        let localSignatureToken =
+            if methodBody.LocalSignature.IsNil then
+                0
+            else
+                MetadataTokens.GetToken(EntityHandle.op_Implicit methodBody.LocalSignature)
+
+        let methodKey = methodKey typeName methodName stringType
+
+        let methodRows: DeltaWriter.MethodDefinitionRowInfo list =
+            [ { Key = methodKey
+                RowId = 1
+                IsAdded = true
+                Attributes = methodDef.Attributes
+                ImplAttributes = methodDef.ImplAttributes
+                Name = metadataReader.GetString methodDef.Name
+                NameHandle = if methodDef.Name.IsNil then None else Some methodDef.Name
+                Signature = metadataReader.GetBlobBytes methodDef.Signature
+                SignatureHandle = if methodDef.Signature.IsNil then None else Some methodDef.Signature
+                FirstParameterRowId = None } ]
+
+        let updates: DeltaWriter.MethodMetadataUpdate list =
+            [ { MethodKey = methodKey
+                MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle)
+                MethodHandle = methodHandle
+                Body =
+                    { MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle)
+                      LocalSignatureToken = localSignatureToken
+                      CodeOffset = 0
+                      CodeLength = 1 } } ]
+
+        let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
+
+        DeltaWriter.emit
+            builder.MetadataBuilder
+            moduleName
+            (System.Guid.NewGuid())
+            (System.Guid.NewGuid())
+            (System.Guid.NewGuid())
+            methodRows
+            []
+            []
+            []
+            []
+            []
+            []
+            updates
+            heapOffsets
+            (getRowCounts metadataReader)
+
+    let emitLocalSignatureDeltaArtifacts (messageLiteral: string option) () : MetadataDeltaArtifacts =
+        let moduleDef = createLocalSignatureModule messageLiteral ()
+        let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
+        use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+        let builder = IlDeltaStreamBuilder None
+        let heapOffsets = computeHeapOffsets metadataReader
+        let metadataDelta = emitLocalSignatureDeltaCore metadataReader peReader builder heapOffsets
 
         { BaselineBytes = assemblyBytes
           Delta = metadataDelta }

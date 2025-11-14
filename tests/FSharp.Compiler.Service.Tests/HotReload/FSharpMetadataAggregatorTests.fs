@@ -255,6 +255,33 @@ module FSharpMetadataAggregatorTests =
         Assert.Equal<byte>(baselineBytes, translatedBytes)
 
     [<Fact>]
+    let ``aggregator translates local signature handles to baseline generation`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitLocalSignatureDeltaArtifacts None ()
+        let baselineBytes = artifacts.BaselineBytes
+        let delta = artifacts.Delta
+
+        use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
+        let baselineReader = peReader.GetMetadataReader()
+        let baselineMethodHandle =
+            MetadataDeltaTestHelpers.findMethodHandle baselineReader "Sample.LocalSignatureHost" "FormatMessage"
+        let baselineMethodDef = baselineReader.GetMethodDefinition baselineMethodHandle
+        let baselineBody = peReader.GetMethodBody(baselineMethodDef.RelativeVirtualAddress)
+        let baselineLocalSignatureHandle = baselineBody.LocalSignature
+        Assert.False(baselineLocalSignatureHandle.IsNil)
+        let baselineLocalSignature = baselineReader.GetStandaloneSignature baselineLocalSignatureHandle
+
+        use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(delta.Metadata))
+        let deltaReader = deltaProvider.GetMetadataReader()
+
+        let aggregator = FSharpMetadataAggregator.Create([ baselineReader; deltaReader ])
+
+        let struct (generation, translatedHandle) =
+            aggregator.TranslateBlobHandle(deltaReader, baselineLocalSignature.Signature)
+
+        Assert.Equal(0, generation)
+        Assert.Equal(baselineLocalSignature.Signature, translatedHandle)
+
+    [<Fact>]
     let ``aggregator translates event method handles across generations`` () =
         let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
         let baselineBytes = artifacts.BaselineBytes
