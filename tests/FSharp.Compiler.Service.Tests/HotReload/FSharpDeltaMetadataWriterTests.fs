@@ -764,6 +764,17 @@ module FSharpDeltaMetadataWriterTests =
             Assert.Equal(expected, isTablePresent masks table)
 
     [<Fact>]
+    let ``local signature delta currently emits no standalone signature rows`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitLocalSignatureDeltaArtifacts None ()
+        use provider =
+            MetadataReaderProvider.FromMetadataImage(
+                ImmutableArray.CreateRange<byte>(artifacts.Delta.Metadata))
+        let reader = provider.GetMetadataReader()
+
+        let rowCount = reader.GetTableRowCount(TableIndex.StandAloneSig)
+        Assert.Equal(0, rowCount)
+
+    [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for property rows`` () =
         let moduleDef = createPropertyModule None ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
