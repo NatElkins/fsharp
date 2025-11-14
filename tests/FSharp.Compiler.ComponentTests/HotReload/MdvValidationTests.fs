@@ -1478,6 +1478,16 @@ type EventDemo() =
                 "Expected generation 1 metadata to contain updated property literal."
             )
 
+            let containsPropertyNameGen1 =
+                delta1.UserStringUpdates
+                |> List.exists (fun (_, _, text) -> String.Equals(text, accessorName, StringComparison.Ordinal))
+            Assert.False(containsPropertyNameGen1, "Generation 1 property name should not reappear in the user string heap.")
+
+            let hasUpdatedLiteralGen1 =
+                delta1.UserStringUpdates
+                |> List.exists (fun (_, _, text) -> text.Contains("Property helper generation 1", StringComparison.Ordinal))
+            Assert.True(hasUpdatedLiteralGen1, "Expected Generation 1 user string updates to include the new property literal.")
+
             assertMethodEncLog delta1 methodToken
 
             match runMdv baselineArtifacts.AssemblyPath meta1Path il1Path with
@@ -1513,6 +1523,16 @@ type EventDemo() =
                 containsSubsequence delta2.Metadata expectedLiteral2,
                 "Expected generation 2 metadata to contain updated property literal."
             )
+
+            let containsPropertyNameGen2 =
+                delta2.UserStringUpdates
+                |> List.exists (fun (_, _, text) -> String.Equals(text, accessorName, StringComparison.Ordinal))
+            Assert.False(containsPropertyNameGen2, "Generation 2 property name should not reappear in the user string heap.")
+
+            let hasUpdatedLiteralGen2 =
+                delta2.UserStringUpdates
+                |> List.exists (fun (_, _, text) -> text.Contains("Property helper generation 2", StringComparison.Ordinal))
+            Assert.True(hasUpdatedLiteralGen2, "Expected Generation 2 user string updates to include the new property literal.")
 
             assertMethodEncLog delta2 methodToken
             Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
@@ -1564,6 +1584,11 @@ type EventDemo() =
             assertEncMapContains delta1 TableIndex.MethodDef methodRowId
         | _ -> printfn "[hotreload-mdv] skipping method-token asserts for event delta; baseline token not found"
 
+        let containsEventNameGen1 =
+            delta1.UserStringUpdates
+            |> List.exists (fun (_, _, text) -> String.Equals(text, "OnChanged", StringComparison.Ordinal))
+        Assert.False(containsEventNameGen1, "Generation 1 event name should not reappear in the user string heap.")
+
         let baseline2 =
             match delta1.UpdatedBaseline with
             | Some b -> b
@@ -1585,6 +1610,11 @@ type EventDemo() =
             assertMethodEncLog delta2 methodToken
             assertEncMapContains delta2 TableIndex.MethodDef methodRowId
         | _ -> ()
+
+        let containsEventNameGen2 =
+            delta2.UserStringUpdates
+            |> List.exists (fun (_, _, text) -> String.Equals(text, "OnChanged", StringComparison.Ordinal))
+        Assert.False(containsEventNameGen2, "Generation 2 event name should not reappear in the user string heap.")
 
         if not (keepArtifacts ()) then
             try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
