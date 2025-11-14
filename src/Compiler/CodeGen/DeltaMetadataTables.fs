@@ -291,6 +291,8 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let rowElementULong (value: int) = rowElement RowElementTags.ULong value
     let rowElementString value = rowElement RowElementTags.String value
     let rowElementBlob value = rowElement RowElementTags.Blob value
+    let rowElementStringAbsolute value = rowElementAbsolute RowElementTags.String value
+    let rowElementBlobAbsolute value = rowElementAbsolute RowElementTags.Blob value
     let rowElementGuid value = rowElement RowElementTags.Guid value
     let rowElementSimpleIndex table value = rowElement (RowElementTags.SimpleIndex table) value
     let rowElementTypeDefOrRef tag value = rowElement (RowElementTags.TypeDefOrRefOrSpec tag) value
@@ -298,9 +300,12 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
 
     let addStringValue (value: string) = if String.IsNullOrEmpty value then 0 else strings.AddSharedEntry value
 
-    let addExistingStringHandle (_handle: StringHandle option) (value: string) : int * bool =
-        let idx = addStringValue value
-        idx, false
+    let addExistingStringHandle (handleOpt: StringHandle option) (value: string) : int * bool =
+        match handleOpt with
+        | Some handle when not handle.IsNil -> MetadataTokens.GetHeapOffset handle, true
+        | _ ->
+            let idx = addStringValue value
+            idx, false
 
     let addStringOption (value: string option) : int * bool =
         match value with
@@ -311,12 +316,18 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
 
     let addBlobBytes (bytes: byte[]) = if obj.ReferenceEquals(bytes, null) || bytes.Length = 0 then 0 else blobs.AddSharedEntry bytes
 
-    let addExistingBlobHandle (_handle: BlobHandle option) (value: byte[]) : int * bool =
-        let idx = addBlobBytes value
-        idx, false
+    let addExistingBlobHandle (handleOpt: BlobHandle option) (value: byte[]) : int * bool =
+        match handleOpt with
+        | Some handle when not handle.IsNil -> MetadataTokens.GetHeapOffset handle, true
+        | _ ->
+            let idx = addBlobBytes value
+            idx, false
 
     let addGuidValue (value: Guid) =
         if value = System.Guid.Empty then 0 else guids.AddSharedEntry(value.ToByteArray())
+
+    let stringElement (token, isAbsolute) = if isAbsolute then rowElementStringAbsolute token else rowElementString token
+    let blobElement (token, isAbsolute) = if isAbsolute then rowElementBlobAbsolute token else rowElementBlob token
 
     let encodeTypeDefOrRef (handle: EntityHandle) =
         if handle.IsNil then
@@ -360,17 +371,17 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             moduleRows.Add row
 
     member _.AddMethodRow(row: MethodDefinitionRowInfo, body: MethodBodyUpdate) =
-        let nameToken, _ = addExistingStringHandle row.NameHandle row.Name
+        let nameToken = addExistingStringHandle row.NameHandle row.Name
 
-        let signatureToken, _ = addExistingBlobHandle row.SignatureHandle row.Signature
+        let signatureToken = addExistingBlobHandle row.SignatureHandle row.Signature
 
         let rowElements =
             [|
                 rowElementULong body.CodeOffset
                 rowElementUShort (uint16 row.ImplAttributes)
                 rowElementUShort (uint16 row.Attributes)
-                rowElementString nameToken
-                rowElementBlob signatureToken
+                stringElement nameToken
+                blobElement signatureToken
                 rowElementSimpleIndex TableNames.Param (row.FirstParameterRowId |> Option.defaultValue 0)
             |]
         methodRows.Add rowElements
@@ -386,25 +397,25 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         paramRows.Add rowElements
 
     member _.AddPropertyRow(row: PropertyDefinitionRowInfo) =
-        let nameToken, _ = addExistingStringHandle row.NameHandle row.Name
+        let nameToken = addExistingStringHandle row.NameHandle row.Name
 
-        let signatureToken, _ = addExistingBlobHandle row.SignatureHandle row.Signature
+        let signatureToken = addExistingBlobHandle row.SignatureHandle row.Signature
 
         let rowElements =
             [|
                 rowElementUShort (uint16 row.Attributes)
-                rowElementString nameToken
-                rowElementBlob signatureToken
+                stringElement nameToken
+                blobElement signatureToken
             |]
         propertyRows.Add rowElements
 
     member _.AddEventRow(row: EventDefinitionRowInfo) =
         let tdorTag, tdorRow = encodeTypeDefOrRef row.EventType
-        let nameToken, _ = addExistingStringHandle row.NameHandle row.Name
+        let nameToken = addExistingStringHandle row.NameHandle row.Name
         let rowElements =
             [|
                 rowElementUShort (uint16 row.Attributes)
-                rowElementString nameToken
+                stringElement nameToken
                 rowElementTypeDefOrRef tdorTag tdorRow
             |]
         eventRows.Add rowElements

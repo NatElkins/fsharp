@@ -217,9 +217,9 @@ module FSharpDeltaMetadataWriterTests =
                 RowId = 1
                 IsAdded = true
                 Name = metadataReader.GetString propertyDef.Name
-                NameHandle = if propertyDef.Name.IsNil then None else Some propertyDef.Name
+                NameHandle = None
                 Signature = metadataReader.GetBlobBytes propertyDef.Signature
-                SignatureHandle = if propertyDef.Signature.IsNil then None else Some propertyDef.Signature
+                SignatureHandle = None
                 Attributes = propertyDef.Attributes } ]
 
         let propertyMapRows: DeltaWriter.PropertyMapRowInfo list =
@@ -432,7 +432,7 @@ module FSharpDeltaMetadataWriterTests =
                 RowId = 1
                 IsAdded = true
                 Name = metadataReader.GetString eventDef.Name
-                NameHandle = if eventDef.Name.IsNil then None else Some eventDef.Name
+                NameHandle = None
                 Attributes = eventDef.Attributes
                 EventType = eventDef.Type } ]
 
