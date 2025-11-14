@@ -371,6 +371,7 @@ this file.
               HighEntropyVA="$(HighEntropyVA)"
               KeyFile="$(KeyOriginatorFile)"
               LangVersion="$(LangVersion)"
+              Fs1023Telemetry="$(Fs1023Telemetry)"
               LCID="$(LCID)"
               NoFramework="true"
               NoInterfaceData="$(NoInterfaceData)"

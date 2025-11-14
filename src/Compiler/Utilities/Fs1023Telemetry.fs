@@ -24,3 +24,26 @@ module internal Fs1023Telemetry =
             try
                 Fs1023EventSource.Instance.Trace(message)
             with _ -> ()
+
+module internal Fs1023TraceControl =
+    let private parseEnvSetting () =
+        match Environment.GetEnvironmentVariable("FS1023_TRACE") with
+        | null
+        | "" -> None
+        | value when value.Trim().Equals("0", StringComparison.OrdinalIgnoreCase) -> Some false
+        | _ -> Some true
+
+    let mutable private commandLineOverride: bool option = None
+    let mutable private checkerOverride: bool option = None
+
+    let setCommandLineOverride setting = commandLineOverride <- setting
+
+    let setCheckerOverride setting = checkerOverride <- setting
+
+    let isEnabled () =
+        match checkerOverride with
+        | Some value -> value
+        | None ->
+            match commandLineOverride with
+            | Some value -> value
+            | None -> parseEnvSetting () |> Option.defaultValue false

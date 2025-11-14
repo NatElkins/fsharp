@@ -39,10 +39,7 @@ open FSharp.Compiler.BuildGraph
 
 module private Fs1023Trace =
     let isEnabled () =
-        match Environment.GetEnvironmentVariable("FS1023_TRACE") with
-        | null
-        | "" -> false
-        | value -> not (value.Trim().Equals("0", StringComparison.OrdinalIgnoreCase))
+        Fs1023TraceControl.isEnabled ()
 
     let trace format =
         Printf.kprintf
@@ -238,7 +235,8 @@ type FSharpChecker
             ?captureIdentifiersWhenParsing: bool,
             ?documentSource: DocumentSource,
             ?useTransparentCompiler: bool,
-            ?transparentCompilerCacheSizes: CacheSizes
+            ?transparentCompilerCacheSizes: CacheSizes,
+            ?enableFs1023Telemetry: bool
         ) =
 
         use _ = Activity.startNoTags "FSharpChecker.Create"
@@ -270,6 +268,9 @@ type FSharpChecker
             invalidArg "enablePartialTypeChecking" "'keepAssemblyContents' and 'enablePartialTypeChecking' cannot be both enabled."
 
         let parallelReferenceResolution = inferParallelReferenceResolution parallelReferenceResolution
+
+        enableFs1023Telemetry
+        |> Option.iter (fun flag -> Fs1023TraceControl.setCheckerOverride(Some flag))
 
         FSharpChecker(
             legacyReferenceResolver,

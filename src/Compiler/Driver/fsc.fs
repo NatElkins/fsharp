@@ -55,11 +55,7 @@ open FSharp.Compiler.TypedTreeOps
 open FSharp.Compiler.XmlDocFileWriter
 open FSharp.Compiler.CheckExpressionsOps
 
-let private fs1023TraceEnabled () =
-    match Environment.GetEnvironmentVariable("FS1023_TRACE") with
-    | null
-    | "" -> false
-    | value -> not (value.Trim().Equals("0", StringComparison.OrdinalIgnoreCase))
+let private fs1023TraceEnabled () = Fs1023TraceControl.isEnabled ()
 
 let private fs1023Trace format =
     Printf.kprintf

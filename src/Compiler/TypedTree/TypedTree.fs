@@ -18,6 +18,7 @@ open FSharp.Compiler
 open FSharp.Compiler.AbstractIL.IL 
 open FSharp.Compiler.AbstractIL.ILX.Types
 open FSharp.Compiler.CompilerGlobalState
+open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.DiagnosticsLogger
 open FSharp.Compiler.Syntax
 open FSharp.Compiler.Syntax.PrettyNaming
@@ -31,9 +32,7 @@ open FSharp.Compiler.Xml
 open FSharp.Compiler.TypeProviders
 open FSharp.Core.CompilerServices
 
-let private fs1023TraceEnabled () =
-    let value = Environment.GetEnvironmentVariable("FS1023_TRACE")
-    value = "1"
+let private fs1023TraceEnabled () = Fs1023TraceControl.isEnabled ()
 
 let private fs1023TracePath =
     let path = Environment.GetEnvironmentVariable("FS1023_TRACE_PATH")

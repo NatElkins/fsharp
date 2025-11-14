@@ -15,6 +15,7 @@ open System.Runtime.Serialization
 open System.Threading
 open FSharp.Compiler
 open FSharp.Compiler.CompilerGlobalState
+open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.AbstractIL.IL
 open Internal.Utilities.Library
 open Internal.Utilities.Collections
@@ -3038,15 +3039,17 @@ and TypeReflectionBuilder(g: TcGlobals) as this =
             ReflectAssembly(this, g, ccu, location)
 
         let isEnabled envVar =
-            match Environment.GetEnvironmentVariable(envVar) with
-            | null -> false
-            | value when String.IsNullOrWhiteSpace value -> false
-            | value when String.Equals(value.Trim(), "0", StringComparison.Ordinal) -> false
-            | _ -> true
+            if String.Equals(envVar, "FS1023_TRACE", StringComparison.OrdinalIgnoreCase) then
+                Fs1023TraceControl.isEnabled ()
+            else
+                match Environment.GetEnvironmentVariable(envVar) with
+                | null -> false
+                | value when String.IsNullOrWhiteSpace value -> false
+                | value when String.Equals(value.Trim(), "0", StringComparison.Ordinal) -> false
+                | _ -> true
 
         let fs1023TraceEnabled () =
-            isEnabled "FS1023_TRACE"
-            && isEnabled "FS1023_TRACE_TAST"
+            Fs1023TraceControl.isEnabled () && isEnabled "FS1023_TRACE_TAST"
 
         let fs1023Trace format =
             Printf.ksprintf

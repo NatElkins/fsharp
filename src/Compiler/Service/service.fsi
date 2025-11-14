@@ -57,7 +57,8 @@ type public FSharpChecker =
         [<Experimental "This parameter is experimental and likely to be removed in the future.">] ?useTransparentCompiler:
             bool *
         [<Experimental "This parameter is experimental and likely to be removed in the future.">] ?transparentCompilerCacheSizes:
-            CacheSizes ->
+            CacheSizes *
+        ?enableFs1023Telemetry: bool ->
             FSharpChecker
 
     [<Experimental("This FCS API is experimental and subject to change.")>]

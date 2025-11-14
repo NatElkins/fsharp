@@ -41,6 +41,7 @@ type public Fsc() as this =
     let mutable generateInterfaceFile: string MaybeNull = null
     let mutable highEntropyVA: bool = false
     let mutable keyFile: string MaybeNull = null
+    let mutable fs1023Telemetry: string MaybeNull = null
     let mutable langVersion: string MaybeNull = null
     let mutable noFramework = false
     let mutable noInterfaceData = false
@@ -151,6 +152,7 @@ type public Fsc() as this =
         builder.AppendSwitchIfNotNull("--sourcelink:", sourceLink)
 
         builder.AppendSwitchIfNotNull("--langversion:", langVersion)
+        builder.AppendSwitchIfNotNull("--fs1023telemetry:", fs1023Telemetry)
 
         // NoFramework
         if noFramework then
@@ -458,6 +460,15 @@ type public Fsc() as this =
     member _.KeyFile
         with get () = keyFile
         and set (s) = keyFile <- s
+
+    member _.Fs1023Telemetry
+        with get () = fs1023Telemetry
+        and set (value: string) =
+            fs1023Telemetry <-
+                match value with
+                | null
+                | "" -> null
+                | _ -> value
 
     member _.LangVersion
         with get () = langVersion

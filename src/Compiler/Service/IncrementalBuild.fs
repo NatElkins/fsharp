@@ -40,11 +40,7 @@ open FSharp.Compiler.TypedTreeOps
 open FSharp.Compiler.BuildGraph
 
 module private IncrementalBuilderFs1023Trace =
-    let private isEnabled () =
-        match Environment.GetEnvironmentVariable("FS1023_TRACE") with
-        | null
-        | "" -> false
-        | value -> not (String.Equals(value.Trim(), "0", StringComparison.Ordinal))
+    let private isEnabled () = Fs1023TraceControl.isEnabled ()
 
     let trace format =
         Printf.kprintf

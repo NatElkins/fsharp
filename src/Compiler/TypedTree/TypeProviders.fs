@@ -17,6 +17,7 @@ open Internal.Utilities.FSharpEnvironment
 open FSharp.Core.CompilerServices
 open FSharp.Quotations
 open FSharp.Compiler.AbstractIL.IL
+open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.DiagnosticsLogger
 open FSharp.Compiler.Syntax
 open FSharp.Compiler.Text
@@ -50,9 +51,7 @@ exception ProvidedTypeResolutionNoRange of exn
 
 let toolingCompatiblePaths() = Internal.Utilities.FSharpEnvironment.toolingCompatiblePaths ()
 
-let private fs1023TraceEnabled () =
-    let value = Environment.GetEnvironmentVariable("FS1023_TRACE")
-    not (String.IsNullOrWhiteSpace value) && not (String.Equals(value.Trim(), "0", StringComparison.Ordinal))
+let private fs1023TraceEnabled () = Fs1023TraceControl.isEnabled ()
 
 let private fs1023Trace format =
     Printf.kprintf

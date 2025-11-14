@@ -1027,9 +1027,19 @@
         <target state="new">Compress interface and optimization data files ({0} by default)</target>
         <note />
       </trans-unit>
+      <trans-unit id="optsFs1023Telemetry">
+        <source>Enable or disable FS-1023 telemetry tracing (values: enable|disable|auto).</source>
+        <target state="new">Enable or disable FS-1023 telemetry tracing (values: enable|disable|auto).</target>
+        <note />
+      </trans-unit>
       <trans-unit id="optsGetLangVersions">
         <source>Display the allowed values for language version.</source>
         <target state="translated">Visualizzare i valori consentiti per la versione della lingua.</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="optsInvalidFs1023TelemetryValue">
+        <source>Invalid value '{0}' for '--fs1023telemetry'. Use 'enable', 'disable', or 'auto'.</source>
+        <target state="new">Invalid value '{0}' for '--fs1023telemetry'. Use 'enable', 'disable', or 'auto'.</target>
         <note />
       </trans-unit>
       <trans-unit id="optsInvalidRefAssembly">

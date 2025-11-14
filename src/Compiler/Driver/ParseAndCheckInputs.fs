@@ -42,11 +42,7 @@ open FSharp.Compiler.TypedTree
 open FSharp.Compiler.TypedTreeOps
 open FSharp.Compiler.TcGlobals
 
-let private fs1023TraceEnabled () =
-    match Environment.GetEnvironmentVariable("FS1023_TRACE") with
-    | null
-    | "" -> false
-    | value -> not (String.Equals(value.Trim(), "0", StringComparison.Ordinal))
+let private fs1023TraceEnabled () = Fs1023TraceControl.isEnabled ()
 
 let private fs1023Trace format =
     Printf.kprintf

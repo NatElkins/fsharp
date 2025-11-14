@@ -37,8 +37,7 @@ open FSharp.Compiler.TypeRelations
 open FSharp.Compiler.TypeProviders
 #endif
 
-let private fs1023TraceEnabled () =
-    System.Environment.GetEnvironmentVariable("FS1023_TRACE") = "1"
+let private fs1023TraceEnabled () = Fs1023TraceControl.isEnabled ()
 
 let private fs1023Trace format =
     Printf.kprintf (fun message ->

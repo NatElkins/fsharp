@@ -52,9 +52,7 @@ open FSharp.Compiler.TypeProviders
 
 type cenv = TcFileState
 
-let private fs1023Enabled () =
-    let value = System.Environment.GetEnvironmentVariable("FS1023_TRACE")
-    value = "1"
+let private fs1023Enabled () = Fs1023TraceControl.isEnabled ()
 
 let private fs1023TracePath =
     let path = System.Environment.GetEnvironmentVariable("FS1023_TRACE_PATH")

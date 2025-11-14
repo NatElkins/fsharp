@@ -54,12 +54,7 @@ open FSharp.Core.CompilerServices
 
 let (++) x s = x @ [ s ]
 
-let private fs1023TraceEnabled () =
-    match Environment.GetEnvironmentVariable("FS1023_TRACE") with
-    | null -> false
-    | value when String.IsNullOrWhiteSpace value -> false
-    | value when String.Equals(value.Trim(), "0", StringComparison.Ordinal) -> false
-    | _ -> true
+let private fs1023TraceEnabled () = Fs1023TraceControl.isEnabled ()
 
 let private fs1023Trace format =
     Printf.ksprintf

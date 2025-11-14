@@ -2147,6 +2147,28 @@ let GetHelpFsc tcConfigB (blocks: CompilerOptionBlock list) =
 let GetVersion tcConfigB =
     $"{tcConfigB.productNameForBannerText}{nl}"
 
+let private parseFs1023TelemetrySwitch (switch: string) =
+    let raw =
+        if isNull switch then
+            ""
+        else
+            switch
+
+    let normalized = raw.Trim().ToLowerInvariant()
+
+    match normalized with
+    | "" -> Some true
+    | "enable"
+    | "on"
+    | "true"
+    | "1" -> Some true
+    | "disable"
+    | "off"
+    | "false"
+    | "0" -> Some false
+    | "auto" -> None
+    | _ -> error (Error(FSComp.SR.optsInvalidFs1023TelemetryValue raw, rangeCmdArgs))
+
 let miscFlagsBoth tcConfigB =
     [
         CompilerOption("nologo", tagNone, OptionUnit(fun () -> tcConfigB.showBanner <- false), None, Some(FSComp.SR.optsNologo ()))
@@ -2158,6 +2180,15 @@ let miscFlagsBoth tcConfigB =
                 tcConfigB.exiter.Exit 0),
             None,
             Some(FSComp.SR.optsVersion ())
+        )
+        CompilerOption(
+            "fs1023telemetry",
+            tagString,
+            OptionString(fun switch ->
+                let setting = parseFs1023TelemetrySwitch switch
+                Fs1023TraceControl.setCommandLineOverride setting),
+            None,
+            Some(FSComp.SR.optsFs1023Telemetry ())
         )
     ]
 
