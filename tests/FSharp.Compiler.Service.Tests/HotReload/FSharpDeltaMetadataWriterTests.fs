@@ -637,6 +637,23 @@ module FSharpDeltaMetadataWriterTests =
         Assert.True(indexSizes.SimpleIndexBig[int TableIndex.Param])
 
     [<Fact>]
+    let ``closure multi-generation uses ENC-sized indexes`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitClosureMultiGenerationArtifacts ()
+
+        let assertIndexes (delta: DeltaWriter.MetadataDelta) =
+            let indexSizes = delta.IndexSizes
+
+            Assert.True(indexSizes.StringsBig)
+            Assert.True(indexSizes.BlobsBig)
+            Assert.True(indexSizes.TypeOrMethodDefBig)
+            Assert.True(indexSizes.MethodDefOrRefBig)
+            Assert.True(indexSizes.SimpleIndexBig[int TableIndex.MethodDef])
+            Assert.True(indexSizes.SimpleIndexBig[int TableIndex.Param])
+
+        assertIndexes artifacts.Generation1
+        assertIndexes artifacts.Generation2
+
+    [<Fact>]
     let ``metadata writer reports small index sizes for property delta`` () =
         let delta = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
         let indexSizes = delta.Delta.IndexSizes
