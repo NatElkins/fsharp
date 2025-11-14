@@ -749,6 +749,7 @@ module internal MetadataDeltaTestHelpers =
             propertyMapRows
             []
             []
+            builder.StandaloneSignatures
             updates
             heapOffsets
             (getRowCounts metadataReader)
@@ -830,7 +831,9 @@ module internal MetadataDeltaTestHelpers =
             if methodBody.LocalSignature.IsNil then
                 0
             else
-                MetadataTokens.GetToken(EntityHandle.op_Implicit methodBody.LocalSignature)
+                let standalone = metadataReader.GetStandaloneSignature methodBody.LocalSignature
+                let signatureBytes = metadataReader.GetBlobBytes standalone.Signature
+                builder.AddStandaloneSignature(signatureBytes)
 
         let methodKey = methodKey typeName methodName stringType
 
@@ -865,12 +868,13 @@ module internal MetadataDeltaTestHelpers =
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())
             methodRows
-            []
-            []
-            []
-            []
-            []
-            []
+            [] // parameter rows
+            [] // property rows
+            [] // event rows
+            [] // property map rows
+            [] // event map rows
+            [] // method semantics rows
+            builder.StandaloneSignatures
             updates
             heapOffsets
             (getRowCounts metadataReader)
@@ -886,6 +890,27 @@ module internal MetadataDeltaTestHelpers =
 
         { BaselineBytes = assemblyBytes
           Delta = metadataDelta }
+
+    let private emitLocalSignatureDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) =
+        use peReader = new PEReader(new MemoryStream(baselineBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+        let builder = IlDeltaStreamBuilder None
+        emitLocalSignatureDeltaCore metadataReader peReader builder heapOffsets
+
+    let emitLocalSignatureMultiGenerationArtifacts () : MultiGenerationMetadataArtifacts =
+        let generation1 = emitLocalSignatureDeltaArtifacts None ()
+
+        let nextOffsets =
+            use peReader = new PEReader(new MemoryStream(generation1.BaselineBytes, false))
+            let metadataReader = peReader.GetMetadataReader()
+            let baseOffsets = computeHeapOffsets metadataReader
+            advanceHeapOffsets baseOffsets generation1.Delta
+
+        let generation2 = emitLocalSignatureDeltaFromBaseline generation1.BaselineBytes nextOffsets
+
+        { BaselineBytes = generation1.BaselineBytes
+          Generation1 = generation1.Delta
+          Generation2 = generation2 }
 
     let private emitAsyncDeltaCore
         (metadataReader: MetadataReader)
@@ -929,12 +954,13 @@ module internal MetadataDeltaTestHelpers =
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())
             methodDefinitionRows
-            []
-            []
-            []
-            []
-            []
-            []
+            [] // parameter rows
+            [] // property rows
+            [] // event rows
+            [] // property map rows
+            [] // event map rows
+            [] // method semantics rows
+            builder.StandaloneSignatures
             updates
             heapOffsets
             (getRowCounts metadataReader)
@@ -1103,6 +1129,7 @@ module internal MetadataDeltaTestHelpers =
             []
             eventMapRows
             methodSemanticsRows
+            builder.StandaloneSignatures
             updates
             heapOffsets
             (getRowCounts metadataReader)
@@ -1248,6 +1275,7 @@ module internal MetadataDeltaTestHelpers =
             []
             []
             []
+            builder.StandaloneSignatures
             updates
             heapOffsets
             (getRowCounts metadataReader)

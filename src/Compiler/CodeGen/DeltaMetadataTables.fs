@@ -269,6 +269,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let moduleRows = RowTableBuilder()
     let methodRows = RowTableBuilder()
     let paramRows = RowTableBuilder()
+    let standAloneSigRows = RowTableBuilder()
     let propertyRows = RowTableBuilder()
     let eventRows = RowTableBuilder()
     let propertyMapRows = RowTableBuilder()
@@ -395,6 +396,15 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
                 rowElementString nameIdx
             |]
         paramRows.Add rowElements
+
+    member _.AddStandaloneSignatureRow(signatureBytes: byte[]) =
+        if not (isNull (box signatureBytes)) && signatureBytes.Length > 0 then
+            let blobIndex = addBlobBytes signatureBytes
+            let rowElements =
+                [|
+                    blobElement (blobIndex, false)
+                |]
+            standAloneSigRows.Add rowElements
 
     member _.AddPropertyRow(row: PropertyDefinitionRowInfo) =
         let nameToken = addExistingStringHandle row.NameHandle row.Name
@@ -535,6 +545,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         { Module = moduleRows.Entries
           MethodDef = methodRows.Entries
           Param = paramRows.Entries
+          StandAloneSig = standAloneSigRows.Entries
           Property = propertyRows.Entries
           Event = eventRows.Entries
           PropertyMap = propertyMapRows.Entries
@@ -550,6 +561,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         counts[int TableIndex.Module] <- moduleRows.Count
         counts[int TableIndex.MethodDef] <- methodRows.Count
         counts[int TableIndex.Param] <- paramRows.Count
+        counts[int TableIndex.StandAloneSig] <- standAloneSigRows.Count
         counts[int TableIndex.Property] <- propertyRows.Count
         counts[int TableIndex.Event] <- eventRows.Count
         counts[int TableIndex.PropertyMap] <- propertyMapRows.Count

@@ -55,6 +55,7 @@ type PropertyMapRowInfo = DeltaMetadataTypes.PropertyMapRowInfo
 type EventMapRowInfo = DeltaMetadataTypes.EventMapRowInfo
 
 type MethodSemanticsMetadataUpdate = DeltaMetadataTypes.MethodSemanticsMetadataUpdate
+type StandaloneSignatureUpdate = FSharp.Compiler.IlxDeltaStreams.StandaloneSignatureUpdate
 
 type MetadataDelta =
     {
@@ -86,6 +87,7 @@ let emitWithUserStrings
     (propertyMapRows: PropertyMapRowInfo list)
     (eventMapRows: EventMapRowInfo list)
     (methodSemanticsRows: MethodSemanticsMetadataUpdate list)
+    (standaloneSignatureRows: StandaloneSignatureUpdate list)
     (userStringUpdates: (int * int * string) list)
     (updates: MethodMetadataUpdate list)
     (heapOffsets: MetadataHeapOffsets)
@@ -134,6 +136,7 @@ let emitWithUserStrings
         // Ensure tables not emitted in the current delta remain empty to satisfy metadata writer invariants.
         let methodUpdateCount = methodDefinitionRows |> List.length
         let parameterUpdateCount = parameterDefinitionRows |> List.length
+        let standaloneSigCount = standaloneSignatureRows |> List.length
         let propertyUpdateCount = propertyDefinitionRows |> List.length
         let eventUpdateCount = eventDefinitionRows |> List.length
         let propertyMapLogCount = propertyMapRows |> List.length
@@ -174,6 +177,7 @@ let emitWithUserStrings
             1
             + methodUpdateCount
             + parameterUpdateCount
+            + standaloneSigCount
             + propertyUpdateCount
             + eventUpdateCount
             + propertyMapLogCount
@@ -260,6 +264,16 @@ let emitWithUserStrings
             metadataBuilder.AddEncMapEntry(parameterHandle) |> ignore
             encLog.Add(struct (TableIndex.Param, row.RowId, operation))
             encMap.Add(struct (TableIndex.Param, row.RowId))
+
+        for signature in standaloneSignatureRows do
+            let rowId = MetadataTokens.GetRowNumber signature.Handle
+            tableMirror.AddStandaloneSignatureRow(signature.Blob)
+
+            let operation = EditAndContinueOperation.Default
+            metadataBuilder.AddEncLogEntry(signature.Handle, operation) |> ignore
+            metadataBuilder.AddEncMapEntry(signature.Handle) |> ignore
+            encLog.Add(struct (TableIndex.StandAloneSig, rowId, operation))
+            encMap.Add(struct (TableIndex.StandAloneSig, rowId))
 
         for row in propertyDefinitionRows do
             if row.IsAdded then
@@ -352,6 +366,7 @@ let emitWithUserStrings
                 [ TableIndex.Module
                   TableIndex.MethodDef
                   TableIndex.Param
+                  TableIndex.StandAloneSig
                   TableIndex.Property
                   TableIndex.Event
                   TableIndex.PropertyMap
@@ -438,6 +453,7 @@ let emit
     (propertyMapRows: PropertyMapRowInfo list)
     (eventMapRows: EventMapRowInfo list)
     (methodSemanticsRows: MethodSemanticsMetadataUpdate list)
+    (standaloneSignatureRows: StandaloneSignatureUpdate list)
     (updates: MethodMetadataUpdate list)
     (heapOffsets: MetadataHeapOffsets)
     (externalRowCounts: int[])
@@ -455,6 +471,7 @@ let emit
         propertyMapRows
         eventMapRows
         methodSemanticsRows
+        standaloneSignatureRows
         ([] : (int * int * string) list)
         updates
         heapOffsets

@@ -78,6 +78,7 @@ type TableRows =
     { Module: RowElementData[][]
       MethodDef: RowElementData[][]
       Param: RowElementData[][]
+      StandAloneSig: RowElementData[][]
       Property: RowElementData[][]
       Event: RowElementData[][]
       PropertyMap: RowElementData[][]

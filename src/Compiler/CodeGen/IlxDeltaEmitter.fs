@@ -957,8 +957,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     if body.LocalSignature.IsNil then
                         0
                     else
-                        let handle = EntityHandle.op_Implicit body.LocalSignature
-                        MetadataTokens.GetToken(handle)
+                        let standalone = metadataReader.GetStandaloneSignature body.LocalSignature
+                        let signatureBytes = metadataReader.GetBlobBytes standalone.Signature
+                        builder.AddStandaloneSignature(signatureBytes)
 
                 let bodyUpdate =
                     builder.AddMethodBody(
@@ -1314,6 +1315,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             userStringUpdates
             |> Seq.toList
 
+        let streams = builder.Build()
+
         let metadataDelta =
             MetadataWriter.emitWithUserStrings
                 metadataBuilder
@@ -1328,12 +1331,11 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 propertyMapRowsSnapshot
                 eventMapRowsSnapshot
                 methodSemanticsRowsSnapshot
+                streams.StandaloneSignatures
                 userStringEntries
                 methodUpdates
                 baselineHeapOffsets
                 request.Baseline.Metadata.TableRowCounts
-
-        let streams = builder.Build()
 
         let addedOrChangedMethods =
             streams.MethodBodies

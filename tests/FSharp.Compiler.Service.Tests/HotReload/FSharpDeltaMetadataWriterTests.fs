@@ -248,6 +248,7 @@ module FSharpDeltaMetadataWriterTests =
                 propertyMapRows
                 []
                 []
+                builder.StandaloneSignatures
                 updates
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
@@ -524,6 +525,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 eventMapRows
                 methodSemanticsRows
+                builder.StandaloneSignatures
                 updates
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
@@ -764,7 +766,7 @@ module FSharpDeltaMetadataWriterTests =
             Assert.Equal(expected, isTablePresent masks table)
 
     [<Fact>]
-    let ``local signature delta currently emits no standalone signature rows`` () =
+    let ``local signature delta emits standalone signature rows`` () =
         let artifacts = MetadataDeltaTestHelpers.emitLocalSignatureDeltaArtifacts None ()
         use provider =
             MetadataReaderProvider.FromMetadataImage(
@@ -772,7 +774,10 @@ module FSharpDeltaMetadataWriterTests =
         let reader = provider.GetMetadataReader()
 
         let rowCount = reader.GetTableRowCount(TableIndex.StandAloneSig)
-        Assert.Equal(0, rowCount)
+        Assert.Equal(1, rowCount)
+
+        let encLog = readEncLogEntriesFromMetadata artifacts.Delta.Metadata
+        Assert.Contains((TableIndex.StandAloneSig, 1, EditAndContinueOperation.Default), encLog)
 
     [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for property rows`` () =
@@ -861,6 +866,7 @@ module FSharpDeltaMetadataWriterTests =
                 propertyMapRows
                 []
                 []
+                builder.StandaloneSignatures
                 updates
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
@@ -901,6 +907,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 []
                 []
+                builder.StandaloneSignatures
                 updates
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
@@ -961,6 +968,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 []
                 []
+                builder.StandaloneSignatures
                 updates
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
@@ -1056,6 +1064,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 []
                 []
+                builder.StandaloneSignatures
                 updates
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)

@@ -122,6 +122,7 @@ let private tableRowsByIndex (tables: TableRows) =
     rows[int TableIndex.Module] <- tables.Module
     rows[int TableIndex.MethodDef] <- tables.MethodDef
     rows[int TableIndex.Param] <- tables.Param
+    rows[int TableIndex.StandAloneSig] <- tables.StandAloneSig
     rows[int TableIndex.Property] <- tables.Property
     rows[int TableIndex.Event] <- tables.Event
     rows[int TableIndex.PropertyMap] <- tables.PropertyMap

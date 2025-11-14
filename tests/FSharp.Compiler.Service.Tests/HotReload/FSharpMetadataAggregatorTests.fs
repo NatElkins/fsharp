@@ -352,8 +352,54 @@ module FSharpMetadataAggregatorTests =
 
         let aggregator = FSharpMetadataAggregator.Create([ baselineReader; deltaReader ])
 
+        let deltaSignatureHandle =
+            let count = deltaReader.GetTableRowCount(TableIndex.StandAloneSig)
+            Assert.True(count > 0)
+            MetadataTokens.StandaloneSignatureHandle 1
+        let deltaSignature = deltaReader.GetStandaloneSignature deltaSignatureHandle
+
         let struct (generation, translatedHandle) =
-            aggregator.TranslateBlobHandle(deltaReader, baselineLocalSignature.Signature)
+            aggregator.TranslateBlobHandle(deltaReader, deltaSignature.Signature)
+
+        Assert.Equal(0, generation)
+        Assert.Equal(baselineLocalSignature.Signature, translatedHandle)
+
+    [<Fact>]
+    let ``aggregator translates local signature handles across generations`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitLocalSignatureMultiGenerationArtifacts ()
+        let baselineBytes = artifacts.BaselineBytes
+        let deltaGen1 = artifacts.Generation1
+        let deltaGen2 = artifacts.Generation2
+
+        use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
+        let baselineReader = peReader.GetMetadataReader()
+        let baselineMethodHandle =
+            MetadataDeltaTestHelpers.findMethodHandle baselineReader "Sample.LocalSignatureHost" "FormatMessage"
+        let baselineMethodDef = baselineReader.GetMethodDefinition baselineMethodHandle
+        let baselineBody = peReader.GetMethodBody(baselineMethodDef.RelativeVirtualAddress)
+        let baselineLocalSignatureHandle = baselineBody.LocalSignature
+        let baselineLocalSignature = baselineReader.GetStandaloneSignature baselineLocalSignatureHandle
+
+        use deltaProvider1 = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(deltaGen1.Metadata))
+        let deltaReader1 = deltaProvider1.GetMetadataReader()
+
+        use deltaProvider2 = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(deltaGen2.Metadata))
+        let deltaReader2 = deltaProvider2.GetMetadataReader()
+
+        let aggregator =
+            FSharpMetadataAggregator.Create(
+                [ baselineReader
+                  deltaReader1
+                  deltaReader2 ])
+
+        let deltaSignatureHandle =
+            let count = deltaReader2.GetTableRowCount(TableIndex.StandAloneSig)
+            Assert.True(count > 0)
+            MetadataTokens.StandaloneSignatureHandle 1
+        let deltaSignature = deltaReader2.GetStandaloneSignature deltaSignatureHandle
+
+        let struct (generation, translatedHandle) =
+            aggregator.TranslateBlobHandle(deltaReader2, deltaSignature.Signature)
 
         Assert.Equal(0, generation)
         Assert.Equal(baselineLocalSignature.Signature, translatedHandle)

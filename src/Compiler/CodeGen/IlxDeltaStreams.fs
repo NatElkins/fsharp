@@ -59,6 +59,7 @@ type IlDeltaStreamBuilder(baselineMetadata: MetadataSnapshot option) =
     let methodBodyStream = BlobBuilder()
     let methodBodies = ResizeArray<MethodBodyUpdate>()
     let standaloneSigs = ResizeArray<StandaloneSignatureUpdate>()
+    let standaloneSigCache = Dictionary<int, StandaloneSignatureHandle>()
     let mutable isBuilt = false
 
     let alignMethodStream () =
@@ -179,10 +180,15 @@ type IlDeltaStreamBuilder(baselineMetadata: MetadataSnapshot option) =
             0
         else
             let blobHandle = metadataBuilder.GetOrAddBlob(signature)
-            let handle = metadataBuilder.AddStandaloneSignature(blobHandle)
-            let token = MetadataTokens.GetToken(EntityHandle.op_Implicit handle)
-            standaloneSigs.Add({ Handle = handle; Blob = Array.copy signature })
-            token
+            let blobOffset = MetadataTokens.GetHeapOffset blobHandle
+            match standaloneSigCache.TryGetValue blobOffset with
+            | true, existing -> MetadataTokens.GetToken(EntityHandle.op_Implicit existing)
+            | _ ->
+                let handle = metadataBuilder.AddStandaloneSignature(blobHandle)
+                standaloneSigCache[blobOffset] <- handle
+                let token = MetadataTokens.GetToken(EntityHandle.op_Implicit handle)
+                standaloneSigs.Add({ Handle = handle; Blob = Array.copy signature })
+                token
 
     /// <summary>
     /// Finalise the builder and emit the metadata and IL blobs. The builder can only be consumed once; subsequent
