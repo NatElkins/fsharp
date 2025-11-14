@@ -293,6 +293,45 @@ module FSharpMetadataAggregatorTests =
         Assert.Equal(baselineMethodDef.Signature, translatedHandle)
 
     [<Fact>]
+    let ``aggregator translates property signature handles across generations`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
+        let baselineBytes = artifacts.BaselineBytes
+        let deltaGen1 = artifacts.Generation1
+        let deltaGen2 = artifacts.Generation2
+
+        use peReader = new PEReader(new MemoryStream(baselineBytes, writable = false))
+        let baselineReader = peReader.GetMetadataReader()
+
+        use deltaProvider1 = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(deltaGen1.Metadata))
+        let deltaReader1 = deltaProvider1.GetMetadataReader()
+
+        use deltaProvider2 = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(deltaGen2.Metadata))
+        let deltaReader2 = deltaProvider2.GetMetadataReader()
+
+        let aggregator =
+            FSharpMetadataAggregator.Create(
+                [ baselineReader
+                  deltaReader1
+                  deltaReader2 ])
+
+        let findProperty (reader: MetadataReader) aggregatorOpt =
+            reader.PropertyDefinitions
+            |> Seq.find (fun handle ->
+                propertyNameForReader aggregatorOpt baselineReader reader handle = "Message")
+
+        let baselinePropertyHandle = findProperty baselineReader None
+        let baselineProperty = baselineReader.GetPropertyDefinition baselinePropertyHandle
+
+        let deltaPropertyHandle = findProperty deltaReader2 (Some aggregator)
+        let deltaProperty = deltaReader2.GetPropertyDefinition deltaPropertyHandle
+
+        let struct (generation, translatedHandle) =
+            aggregator.TranslateBlobHandle(deltaReader2, deltaProperty.Signature)
+
+        Assert.Equal(0, generation)
+        Assert.Equal(baselineProperty.Signature, translatedHandle)
+
+    [<Fact>]
     let ``aggregator translates local signature handles to baseline generation`` () =
         let artifacts = MetadataDeltaTestHelpers.emitLocalSignatureDeltaArtifacts None ()
         let baselineBytes = artifacts.BaselineBytes
