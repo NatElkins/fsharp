@@ -36,6 +36,7 @@ type FSharpHotReloadDelta =
       UpdatedTypes: int list
       UpdatedMethods: int list
       AddedOrChangedMethods: FSharpAddedOrChangedMethodInfo list
+      UserStringUpdates: (int * int * string) list
       GenerationId: Guid
       BaseGenerationId: Guid }
 

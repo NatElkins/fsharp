@@ -85,6 +85,7 @@ type FSharpHotReloadDelta =
       UpdatedTypes: int list
       UpdatedMethods: int list
       AddedOrChangedMethods: FSharpAddedOrChangedMethodInfo list
+      UserStringUpdates: (int * int * string) list
       GenerationId: Guid
       BaseGenerationId: Guid }
 
@@ -401,6 +402,7 @@ type FSharpChecker
                     LocalSignatureToken = info.LocalSignatureToken
                     CodeOffset = info.CodeOffset
                     CodeLength = info.CodeLength })
+          UserStringUpdates = delta.UserStringUpdates
           GenerationId = delta.GenerationId
           BaseGenerationId = delta.BaseGenerationId }
 

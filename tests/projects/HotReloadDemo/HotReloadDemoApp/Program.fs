@@ -45,6 +45,10 @@ module private ConsoleHelpers =
                     info.LocalSignatureToken
                     info.CodeOffset
                     info.CodeLength)
+        if delta.UserStringUpdates.Length > 0 then
+            printfn "  Updated user strings:"
+            delta.UserStringUpdates
+            |> List.iter (fun (_, _, literal) -> printfn "    \"%s\"" literal)
         if delta.UpdatedTypes.Length > 0 then
             printfn "  Updated types: %A" delta.UpdatedTypes
         printfn "  Session generation counter: %d" generation
