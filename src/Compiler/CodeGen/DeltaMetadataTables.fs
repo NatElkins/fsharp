@@ -86,7 +86,7 @@ type private RowTableBuilder() =
     member _.Entries = rows.ToArray()
     member _.Count = rows.Count
 
-type private StringHeapBuilder(baselineStart: int) =
+type private StringHeapBuilder(_baselineLength: int) =
     let entries = ResizeArray<string>()
     let lookup = Dictionary<string, int>(StringComparer.Ordinal)
     let utf8 = Encoding.UTF8
@@ -118,7 +118,7 @@ type private StringHeapBuilder(baselineStart: int) =
             let mutable currentOffset = int ms.Length
             for i = 0 to entries.Count - 1 do
                 let entryIndex = i + 1
-                entryOffsets.[entryIndex] <- baselineStart + currentOffset
+                entryOffsets.[entryIndex] <- currentOffset
                 let bytes = utf8.GetBytes entries.[i]
                 writer.Write(bytes)
                 writer.Write(byte 0)
