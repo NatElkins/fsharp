@@ -1911,6 +1911,22 @@ module UseProvided =
                 Assert.True(ctorSet.Add ctorProvided)
                 Assert.True(ctorSet.Add ctorShape)
 
+                let hiddenMethodPublic =
+                    providedType.GetMethod("HiddenSummary", BindingFlags.Public ||| BindingFlags.Instance)
+                Assert.Null(hiddenMethodPublic)
+
+                let hiddenMethodNonPublic =
+                    providedType.GetMethod("HiddenSummary", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                Assert.NotNull(hiddenMethodNonPublic)
+
+                let hiddenPropertyPublic =
+                    providedType.GetProperty("HiddenResult", BindingFlags.Public ||| BindingFlags.Instance)
+                Assert.Null(hiddenPropertyPublic)
+
+                let hiddenPropertyNonPublic =
+                    providedType.GetProperty("HiddenResult", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                Assert.NotNull(hiddenPropertyNonPublic)
+
             compile projectArgs
             assertProperties outputDll
 

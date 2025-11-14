@@ -110,6 +110,7 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 2. **Event/indexer audit**
    - Double-check that the new provided-event path (`tcaug_provided_events`) works for nested types, static events, and non-default BindingFlags. If we find gaps, fix them and record the tests in §5.1.
    - Re-verify the indexer binder behaviour with `Type.GetProperty("Item", …)` + varied `types` arrays (null vs. explicit parameter list).
+   - **2025-11-14 binding-flags note:** The `record input compiles generated summaries` regression now explicitly probes `GetMethod/GetProperty` with both public and non-public flags. The hidden members (`HiddenSummary`, `HiddenResult`) only surface when `BindingFlags.NonPublic` is specified, matching CLR behaviour.
 3. **Debugger & profiling hooks**
    - Finish the ergonomics perf pass originally promised here: add profiling toggles/measurements for TastReflection projections, and ensure the debugger view for the remaining proxy types is friendly (we only handled `ReflectModule` so far).
 4. **Doc + checklist update**
