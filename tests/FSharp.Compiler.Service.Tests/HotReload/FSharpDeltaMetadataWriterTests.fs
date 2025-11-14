@@ -317,6 +317,23 @@ module FSharpDeltaMetadataWriterTests =
         assertDelta artifacts.Generation2
 
     [<Fact>]
+    let ``property multi-generation uses ENC-sized indexes`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
+
+        let assertIndexes (delta: DeltaWriter.MetadataDelta) =
+            let indexSizes = delta.IndexSizes
+
+            Assert.True(indexSizes.StringsBig)
+            Assert.True(indexSizes.BlobsBig)
+            Assert.True(indexSizes.HasSemanticsBig)
+            Assert.True(indexSizes.MemberRefParentBig)
+            Assert.True(indexSizes.SimpleIndexBig[int TableIndex.Property])
+            Assert.True(indexSizes.SimpleIndexBig[int TableIndex.PropertyMap])
+
+        assertIndexes artifacts.Generation1
+        assertIndexes artifacts.Generation2
+
+    [<Fact>]
     let ``metadata root omits #JTD when no ENC tables are present`` () =
         let mirror = DeltaMetadataTables MetadataHeapOffsets.Zero
         mirror.AddModuleRow("Empty.dll", System.Guid.NewGuid(), System.Guid.NewGuid(), System.Guid.NewGuid())
@@ -511,6 +528,23 @@ module FSharpDeltaMetadataWriterTests =
 
         assertDelta artifacts.Generation1
         assertDelta artifacts.Generation2
+
+    [<Fact>]
+    let ``event multi-generation uses ENC-sized indexes`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
+
+        let assertIndexes (delta: DeltaWriter.MetadataDelta) =
+            let indexSizes = delta.IndexSizes
+
+            Assert.True(indexSizes.StringsBig)
+            Assert.True(indexSizes.BlobsBig)
+            Assert.True(indexSizes.HasSemanticsBig)
+            Assert.True(indexSizes.MemberRefParentBig)
+            Assert.True(indexSizes.SimpleIndexBig[int TableIndex.Event])
+            Assert.True(indexSizes.SimpleIndexBig[int TableIndex.EventMap])
+
+        assertIndexes artifacts.Generation1
+        assertIndexes artifacts.Generation2
 
     [<Fact>]
     let ``metadata writer emits async method rows`` () =
