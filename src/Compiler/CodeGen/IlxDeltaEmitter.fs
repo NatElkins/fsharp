@@ -1021,9 +1021,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                           NameHandle = resolvedHandle }
                 | _ -> None)
 
-        let methodDefinitionRowsSnapshot =
-            methodDefinitionRowsRaw
-            |> List.choose (fun struct (rowId, key, isAdded) ->
+        let tryBuildMethodRow rowId key isAdded =
                 match methodMetadataLookup.TryGetValue key with
                 | true, struct (attrs, implAttrs, name, signature, emittedNameHandle, emittedSignatureHandle) ->
                     let baselineHandles = baselineMethodHandles |> Map.tryFind key
@@ -1053,7 +1051,34 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                           Signature = signature
                           SignatureHandle = resolvedSignatureHandle
                           FirstParameterRowId = firstParam }
-                | _ -> None)
+                | _ -> None
+
+        let methodDefinitionRowsSnapshot =
+            let initialRows =
+                methodDefinitionRowsRaw
+                |> List.choose (fun struct (rowId, key, isAdded) -> tryBuildMethodRow rowId key isAdded)
+
+            let existingKeys = HashSet<MethodDefinitionKey>(initialRows |> Seq.map (fun row -> row.Key), HashIdentity.Structural)
+
+            let missingRows =
+                methodUpdatesWithDefs
+                |> List.choose (fun (update, _) ->
+                    if existingKeys.Contains update.MethodKey then
+                        None
+                    else
+                        let rowId =
+                            match request.Baseline.MethodTokens |> Map.tryFind update.MethodKey with
+                            | Some token -> token &&& 0x00FFFFFF
+                            | None -> methodDefinitionIndex.GetRowId update.MethodKey
+
+                        tryBuildMethodRow rowId update.MethodKey false)
+
+            let rows = initialRows @ missingRows
+
+            if traceMethodUpdates.Value then
+                printfn "[fsharp-hotreload][method-rows] count=%d (missing=%d)" rows.Length missingRows.Length
+
+            rows
 
         let propertyDefinitionRowsSnapshot =
             propertyDefinitionIndex.Rows

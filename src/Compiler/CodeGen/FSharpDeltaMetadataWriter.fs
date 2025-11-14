@@ -41,6 +41,13 @@ let private shouldTraceHeaps () =
     | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
     | _ -> false
 
+let private shouldTraceMethodRows () =
+    match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METHODS") with
+    | null -> false
+    | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+    | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+    | _ -> false
+
 type MethodDefinitionRowInfo = DeltaMetadataTypes.MethodDefinitionRowInfo
 
 type ParameterDefinitionRowInfo = DeltaMetadataTypes.ParameterDefinitionRowInfo
@@ -252,7 +259,14 @@ let emitWithUserStrings
                             ParameterHandle()
                         )
                         |> ignore
-                    tableMirror.AddMethodRow(row, update.Body)
+                tableMirror.AddMethodRow(row, update.Body)
+                if shouldTraceMethodRows () then
+                    printfn
+                        "[fsharp-hotreload][writer] method-row key=%s::%s rowId=%d isAdded=%b"
+                        row.Key.DeclaringType
+                        row.Key.Name
+                        row.RowId
+                        row.IsAdded
 
                 let methodHandle = MetadataTokens.MethodDefinitionHandle row.RowId
                 let operation = if row.IsAdded then EditAndContinueOperation.AddMethod else EditAndContinueOperation.Default
