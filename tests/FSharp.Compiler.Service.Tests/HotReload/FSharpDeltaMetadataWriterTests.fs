@@ -824,6 +824,16 @@ module FSharpDeltaMetadataWriterTests =
         assertBaselineHeapSnapshotMulti artifacts
 
     [<Fact>]
+    let ``closure delta string heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitClosureDeltaArtifacts ()
+        assertStringHeapGrowthWithin "closure-delta" artifacts 64
+
+    [<Fact>]
+    let ``closure multi-generation string heap growth stays bounded`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitClosureMultiGenerationArtifacts ()
+        assertStringHeapGrowthWithinMulti "closure-multigen" artifacts 64
+
+    [<Fact>]
     let ``closure delta blob heap growth stays bounded`` () =
         let artifacts = MetadataDeltaTestHelpers.emitClosureDeltaArtifacts ()
         assertBlobHeapGrowthWithin "closure-delta" artifacts 64
