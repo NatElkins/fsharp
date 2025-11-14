@@ -1927,6 +1927,26 @@ module UseProvided =
                     providedType.GetProperty("HiddenResult", BindingFlags.NonPublic ||| BindingFlags.Instance)
                 Assert.NotNull(hiddenPropertyNonPublic)
 
+                let indexerExplicit =
+                    providedType.GetProperty(
+                        "Item",
+                        BindingFlags.Public ||| BindingFlags.Instance,
+                        null,
+                        typeof<int>,
+                        [| typeof<int> |],
+                        null)
+                Assert.NotNull(indexerExplicit)
+
+                let indexerNullTypes =
+                    providedType.GetProperty(
+                        "Item",
+                        BindingFlags.Public ||| BindingFlags.Instance,
+                        null,
+                        null,
+                        null,
+                        null)
+                Assert.NotNull(indexerNullTypes)
+
             compile projectArgs
             assertProperties outputDll
 
