@@ -2351,7 +2351,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
     //        }
              
 
-and [<DebuggerDisplay("{FullName}")>] ReflectAssembly(builder: TypeReflectionBuilder, g: TcGlobals, ccu: CcuThunk, location:string) as asm =
+and [<DebuggerDisplay("{DebuggerDisplay,nq}")>] ReflectAssembly(builder: TypeReflectionBuilder, g: TcGlobals, ccu: CcuThunk, location:string) as asm =
     inherit Assembly()
 
     // A table tracking how type definition objects are translated.
@@ -2473,6 +2473,11 @@ and [<DebuggerDisplay("{FullName}")>] ReflectAssembly(builder: TypeReflectionBui
 
     override x.ReflectionOnly = true
 
+    member private _.DebuggerDisplay =
+        sprintf "TastReflectionAssembly (%s @ %s)" fullName.Value location
+
+    override x.ToString() = x.DebuggerDisplay
+
     /// Makes a field definition read from a binary available as a FieldInfo. Not all methods are implemented.
     member asm.TxTType (typ: TType) =
         // TODO: may need something special for "System.Void"
@@ -2555,8 +2560,6 @@ and [<DebuggerDisplay("{FullName}")>] ReflectAssembly(builder: TypeReflectionBui
                      | Some ns -> t.Namespace = ns
                      | None -> true)
                     && t.Name = nm)
-
-    override x.ToString() = "ctxt assembly " + x.FullName
 
     member __.TxTypeDef declTyOpt inp = txTypeDef declTyOpt inp
     member internal _.Builder = builder

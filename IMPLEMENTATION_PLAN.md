@@ -116,6 +116,7 @@ Assuming the binding abstraction lands, revisit these FS‑1023 tasks:
 3. **Debugger & profiling hooks**
    - Finish the ergonomics perf pass originally promised here: add profiling toggles/measurements for TastReflection projections, and ensure the debugger view for the remaining proxy types is friendly (we only handled `ReflectModule` so far).
    - **2025-11-14 profiling note:** Type projections now log `[tastreflection] type-begin/type-end` (name, nested flag, ctor/method counts, elapsed ticks) whenever `FS1023_TRACE_TAST` is enabled, and `TypeReflectionBuilder.NotifyTypeCreated` records timings even outside the profiling mode.
+   - **2025-11-14 debugger note:** `ReflectAssembly` now has a `DebuggerDisplay`/`ToString` that surfaces the assembly name + traced location, matching the ergonomics improvement we applied to `ReflectModule`.
 4. **Doc + checklist update**
    - Once the above items are green, mark Phase 1 as “Complete” in this document (not just “In progress”) and move the detailed parity checklist to an appendix for future reference.
    - **2025-11-14 parity note:** `TxMethodDef`/`TxConstructorDef` now implement real equality/hash/metadata-token logic (declaring type + parameter types + generic arity). The `record input compiles generated summaries` regression asserts that both `MapParameters` **and** the parameterless constructors from `Fs1023Consumer.{Provided,ShapeProvided}` remain distinct when added to a `HashSet`, so duplicate identities no longer collapse.
