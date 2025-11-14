@@ -874,6 +874,24 @@ module FSharpDeltaMetadataWriterTests =
         assertTableStreamMatches metadataDelta
 
     [<Fact>]
+    let ``property delta reports baseline heap offsets`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
+        use peReader = new PEReader(new MemoryStream(artifacts.BaselineBytes, writable = false))
+        let baselineReader = peReader.GetMetadataReader()
+
+        let baselineStringSize = baselineReader.GetHeapSize HeapIndex.String
+        let baselineBlobSize = baselineReader.GetHeapSize HeapIndex.Blob
+        let baselineGuidSize = baselineReader.GetHeapSize HeapIndex.Guid
+        let baselineUserStringSize = baselineReader.GetHeapSize HeapIndex.UserString
+
+        let delta = artifacts.Delta
+
+        Assert.Equal(baselineStringSize, delta.HeapOffsets.StringHeapStart)
+        Assert.Equal(baselineBlobSize, delta.HeapOffsets.BlobHeapStart)
+        Assert.Equal(baselineGuidSize, delta.HeapOffsets.GuidHeapStart)
+        Assert.Equal(baselineUserStringSize, delta.HeapOffsets.UserStringHeapStart)
+
+    [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for method rows`` () =
         let moduleDef = createMethodModule ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
