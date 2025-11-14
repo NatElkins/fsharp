@@ -127,12 +127,19 @@ module MdvValidationTests =
     module private HeapBudgets =
         type Budget = { StringBytes: int; BlobBytes: int }
 
+        let private metadataStringBytes = 14
+        let private metadataBlobBytes = 1
+
         let private budgets : Map<string, Budget> =
             Map.ofList
-                [ "Property", { StringBytes = 32; BlobBytes = 64 }
-                  "PropertyUpdate", { StringBytes = 32; BlobBytes = 64 }
-                  "Event", { StringBytes = 48; BlobBytes = 64 }
-                  "EventUpdate", { StringBytes = 48; BlobBytes = 64 } ]
+                [ "Property", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes }
+                  "PropertyUpdate", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes }
+                  "Event", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes }
+                  "EventUpdate", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes }
+                  "Async", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes }
+                  "AsyncUpdate", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes }
+                  "Closure", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes }
+                  "ClosureUpdate", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes } ]
 
         let assertWithin (scenario: string) (metadata: byte[]) =
             match Map.tryFind scenario budgets with
@@ -1698,6 +1705,7 @@ type EventDemo() =
 
         let delta1 = emitDelta request1
         File.WriteAllBytes(meta1Path, delta1.Metadata)
+        HeapBudgets.assertWithin "Closure" delta1.Metadata
 
         let baseline2 =
             match delta1.UpdatedBaseline with
@@ -1713,6 +1721,7 @@ type EventDemo() =
 
         let delta2 = emitDelta request2
         File.WriteAllBytes(meta2Path, delta2.Metadata)
+        HeapBudgets.assertWithin "ClosureUpdate" delta2.Metadata
 
         let methodToken = baselineArtifacts.Baseline.MethodTokens[methodKey]
         let methodRowId = methodRowIdFromToken methodToken
@@ -1756,6 +1765,7 @@ type EventDemo() =
 
         let delta1 = emitDelta request1
         File.WriteAllBytes(meta1Path, delta1.Metadata)
+        HeapBudgets.assertWithin "Async" delta1.Metadata
 
         let baseline2 =
             match delta1.UpdatedBaseline with
@@ -1771,6 +1781,7 @@ type EventDemo() =
 
         let delta2 = emitDelta request2
         File.WriteAllBytes(meta2Path, delta2.Metadata)
+        HeapBudgets.assertWithin "AsyncUpdate" delta2.Metadata
 
         let methodToken = baselineArtifacts.Baseline.MethodTokens[methodKey]
         let methodRowId = methodRowIdFromToken methodToken
