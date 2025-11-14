@@ -369,11 +369,11 @@ With the relocation smoke-tests green, Fs1023 consumers now build/run successful
 3. **Observability & telemetry**
    - ✅ Introduced `FSharp.Compiler.Diagnostics.Fs1023Telemetry` and taught every `fs1023Trace` helper (service layer, background compiler, incremental builder, IlxGen, MethodCalls, CompilerImports) to emit the same payload to both the legacy file log and the EventSource. Validated via `timeout 120s dotnet-trace collect --process-id <pid> --providers FSharpCompiler-FS1023` while running `dotnet test … TypeProviderDependencyInvalidationTests`, which shows `[fs1023]` events flowing without requiring `/tmp` access.
    - ✅ Host-facing toggles: MSBuild now accepts `<Fs1023Telemetry>` (forwarded as `--fs1023telemetry:<enable|disable|auto>`), and `FSharpChecker.Create(?enableFs1023Telemetry = ...)` sets the same override for IDE callers. Both flow through `Fs1023TraceControl`, so the EventSource/file pipeline respects CLI/MSBuild/IDE intent instead of relying solely on `FS1023_TRACE`.
-   - ➡️ Replace the raw string payload with structured event IDs (e.g., `Fs1023Telemetry.ProvidedMemberEmitted` with counters for methods/properties/events) once the toggles exist, keeping a compatibility shim for the textual log.
-   - ➡️ Extend `docs/upcoming/fs-1023.md` with a telemetry playbook: how to collect traces, expected file/event outputs, and how to correlate them with MSBuild binlogs and `fs1023` temp directories (include the new `--fs1023telemetry`/`FSharpChecker.Create` knobs).
+   - ✅ Structured payloads: IlxGen raises a `ProvidedTypeEmitted` EventSource entry (type name + method/property/event counts) alongside the textual summary so telemetry dashboards no longer have to parse log strings.
+   - ✅ Extended `docs/upcoming/fs-1023.md` with a telemetry playbook plus release-notes draft covering the CLI/MSBuild/FCS knobs and trace-collection workflow.
 
 4. **Release sign-off**
-   - Produce release notes outlining new diagnostics, supported scenarios, and known limitations.
+   - ✅ Drafted preliminary release notes inside `docs/upcoming/fs-1023.md` (scope, requirements, validation snapshot, known issues). Update again before GA to reflect any partner feedback.
    - Coordinate with .NET release management to align compiler and SDK publishing timelines.
 
 ---
