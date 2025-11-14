@@ -18,10 +18,12 @@ export FSHARP_HOTRELOAD_DUMP_DELTA=1
 runtime_apply_args=()
 if [[ "${HOTRELOAD_SMOKE_RUNTIME_APPLY:-}" == "1" ]]; then
   export FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY=1
+  export COMPlus_ForceEnc=1
   runtime_apply_args+=(--runtime-apply)
   echo "HOTRELOAD_SMOKE_RUNTIME_APPLY=1 (MetadataUpdater.ApplyUpdate will be exercised)" >&2
 else
   unset FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY
+  unset COMPlus_ForceEnc
   echo "hint: set HOTRELOAD_SMOKE_RUNTIME_APPLY=1 to enable MetadataUpdater.ApplyUpdate during the smoke test." >&2
 fi
 

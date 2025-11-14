@@ -697,6 +697,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let parameterRowLookup = Dictionary<ParameterDefinitionKey, int>()
     let parameterHandleLookup = Dictionary<ParameterDefinitionKey, ParameterHandle>()
+    let syntheticParameterInfo = Dictionary<ParameterDefinitionKey, ParameterAttributes>(HashIdentity.Structural)
     let lastParamRowId = baselineTableRowCounts.[int TableIndex.Param]
     let parameterDefinitionIndex =
         let tryExisting key =
@@ -847,7 +848,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let enqueueParameters key methodHandle =
         let methodDef = metadataReader.GetMethodDefinition methodHandle
         let parameters = methodDef.GetParameters()
+        let mutable sawParameter = false
         for parameterHandle in parameters do
+            sawParameter <- true
             let parameter = metadataReader.GetParameter parameterHandle
             let paramKey =
                 { ParameterDefinitionKey.Method = key
@@ -866,6 +869,14 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     parameterRowLookup[paramKey] <- rowId
                     parameterHandleLookup[paramKey] <- parameterHandle
                     parameterDefinitionIndex.AddExisting paramKey
+        if not sawParameter then
+            let paramKey =
+                { ParameterDefinitionKey.Method = key
+                  SequenceNumber = 0 }
+            if not (parameterRowLookup.ContainsKey paramKey) then
+                let rowId = parameterDefinitionIndex.Add paramKey
+                parameterRowLookup[paramKey] <- rowId
+                syntheticParameterInfo[paramKey] <- ParameterAttributes.None
 
     orderedMethodInputs
     |> List.iter (fun struct (key, _, methodHandle, _, _) -> enqueueParameters key methodHandle)
@@ -995,18 +1006,30 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         let parameterDefinitionRowsSnapshot =
             parameterDefinitionIndex.Rows
             |> List.choose (fun struct (rowId, key, isAdded) ->
-                match parameterHandleLookup.TryGetValue key with
-                | true, handle when not handle.IsNil ->
-                    let parameter = metadataReader.GetParameter handle
-                    let name =
-                        if parameter.Name.IsNil then
-                            None
-                        else
-                            metadataReader.GetString parameter.Name |> Some
-                    let resolvedHandle =
-                        match baselineParameterHandles |> Map.tryFind key |> Option.bind (fun info -> info.NameHandle) with
-                        | Some handle -> Some handle
-                        | None -> if parameter.Name.IsNil then None else Some parameter.Name
+                if rowId = 0 then
+                    None
+                else
+                    let attrs, sequence, nameOpt, resolvedHandleOpt =
+                        match parameterHandleLookup.TryGetValue key with
+                        | true, handle when not handle.IsNil ->
+                            let parameter = metadataReader.GetParameter handle
+                            let name =
+                                if parameter.Name.IsNil then
+                                    None
+                                else
+                                    metadataReader.GetString parameter.Name |> Some
+                            let resolvedHandle =
+                                match baselineParameterHandles |> Map.tryFind key |> Option.bind (fun info -> info.NameHandle) with
+                                | Some handle -> Some handle
+                                | None -> if parameter.Name.IsNil then None else Some parameter.Name
+                            parameter.Attributes, int parameter.SequenceNumber, name, resolvedHandle
+                        | _ ->
+                            let attrs =
+                                match syntheticParameterInfo.TryGetValue key with
+                                | true, value -> value
+                                | _ -> ParameterAttributes.None
+                            attrs, key.SequenceNumber, None, None
+
                     match firstParamRowByMethod.TryGetValue key.Method with
                     | true, existing when existing <= rowId -> ()
                     | _ -> firstParamRowByMethod[key.Method] <- rowId
@@ -1015,11 +1038,12 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         { ParameterDefinitionRowInfo.Key = key
                           RowId = rowId
                           IsAdded = isAdded
-                          Attributes = parameter.Attributes
-                          SequenceNumber = int parameter.SequenceNumber
-                          Name = name
-                          NameHandle = resolvedHandle }
-                | _ -> None)
+                          Attributes = attrs
+                          SequenceNumber = sequence
+                          Name = nameOpt
+                          NameHandle = resolvedHandleOpt })
+        if traceMethodUpdates.Value then
+            printfn "[fsharp-hotreload][param-rows] count=%d" parameterDefinitionRowsSnapshot.Length
 
         let tryBuildMethodRow rowId key isAdded =
                 match methodMetadataLookup.TryGetValue key with
