@@ -343,6 +343,12 @@ module FSharpDeltaMetadataWriterTests =
         assertIndexes artifacts.Generation2
 
     [<Fact>]
+    let ``async string heap omits updated literal`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts (Some "async generation 2") ()
+        let heapText = Encoding.UTF8.GetString(artifacts.Delta.StringHeap)
+        Assert.DoesNotContain("async generation", heapText)
+
+    [<Fact>]
     let ``property multi-generation uses ENC-sized indexes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
 
