@@ -86,7 +86,7 @@ type private RowTableBuilder() =
     member _.Entries = rows.ToArray()
     member _.Count = rows.Count
 
-type private StringHeapBuilder(baselineLength: int) =
+type private StringHeapBuilder() =
     let entries = ResizeArray<string>()
     let lookup = Dictionary<string, int>(StringComparer.Ordinal)
     let utf8 = Encoding.UTF8
@@ -118,7 +118,7 @@ type private StringHeapBuilder(baselineLength: int) =
             let mutable currentOffset = int ms.Length
             for i = 0 to entries.Count - 1 do
                 let entryIndex = i + 1
-                entryOffsets.[entryIndex] <- baselineLength + currentOffset
+                entryOffsets.[entryIndex] <- currentOffset
                 let bytes = utf8.GetBytes entries.[i]
                 writer.Write(bytes)
                 writer.Write(byte 0)
@@ -137,7 +137,7 @@ type private StringHeapBuilder(baselineLength: int) =
             this.BuildIfNeeded()
             offsetsCache.Value
 
-type private ByteArrayHeapBuilder(baselineLength: int) =
+type private ByteArrayHeapBuilder() =
     let entries = ResizeArray<byte[]>()
     let lookup = Dictionary<byte[], int>(byteArrayComparer)
     let mutable bytesCache: byte[] option = None
@@ -175,7 +175,7 @@ type private ByteArrayHeapBuilder(baselineLength: int) =
             let mutable currentOffset = int ms.Length
             for i = 0 to entries.Count - 1 do
                 let entryIndex = i + 1
-                entryOffsets.[entryIndex] <- baselineLength + currentOffset
+                entryOffsets.[entryIndex] <- currentOffset
                 let value = entries.[i]
                 writeCompressedUnsigned writer value.Length
                 if value.Length > 0 then
@@ -255,11 +255,12 @@ type private UserStringHeapBuilder() =
                 let minimal = Array.zeroCreate<byte> 1
                 minimal[0] <- 0uy
                 minimal
+
 type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let heapOffsets = defaultArg heapOffsets MetadataHeapOffsets.Zero
-    let strings = StringHeapBuilder(heapOffsets.StringHeapStart)
-    let blobs = ByteArrayHeapBuilder(heapOffsets.BlobHeapStart)
-    let guids = ByteArrayHeapBuilder(heapOffsets.GuidHeapStart)
+    let strings = StringHeapBuilder()
+    let blobs = ByteArrayHeapBuilder()
+    let guids = ByteArrayHeapBuilder()
     let userStrings = UserStringHeapBuilder()
     let mutable stringHeapBytesCache: byte[] option = None
     let mutable blobHeapBytesCache: byte[] option = None
