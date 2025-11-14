@@ -294,6 +294,9 @@ let main argv =
         printfn "==============================================="
         printfn ""
         printfn "This sample compiles a small library using the F# compiler's hot reload APIs."
+        printfn "Tip: set FSHARP_HOTRELOAD_TRACE_STRINGS=1 to log user-string updates, and"
+        printfn "     FSHARP_HOTRELOAD_KEEP_WORKDIR=1 if you want to keep the temporary working directory."
+        printfn ""
 
         match mode with
         | RunMode.Interactive ->
