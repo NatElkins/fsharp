@@ -2044,6 +2044,7 @@ and [<DebuggerDisplay("{FullName}")>] ReflectTypeDefinition (asm: ReflectAssembl
         let defaultFlags = BindingFlags.Public ||| BindingFlags.NonPublic ||| BindingFlags.Instance ||| BindingFlags.Static
         let flags = normalizeBindingFlags bindingAttr defaultFlags
         [| for x in this.GetMethods(flags) do yield (x :> MemberInfo)
+           for x in this.GetConstructors(flags) do yield (x :> MemberInfo)
            for x in this.GetFields(flags) do yield (x :> MemberInfo)
            for x in this.GetProperties(flags) do yield (x :> MemberInfo)
            for x in this.GetEvents(flags) do yield (x :> MemberInfo)
