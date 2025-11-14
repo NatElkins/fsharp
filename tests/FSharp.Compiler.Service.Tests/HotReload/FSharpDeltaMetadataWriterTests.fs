@@ -540,6 +540,17 @@ module FSharpDeltaMetadataWriterTests =
         assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap
 
     [<Fact>]
+    let ``async delta uses ENC-sized indexes`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
+        let indexSizes = artifacts.Delta.IndexSizes
+
+        Assert.True(indexSizes.StringsBig)
+        Assert.True(indexSizes.BlobsBig)
+        Assert.True(indexSizes.TypeOrMethodDefBig)
+        Assert.True(indexSizes.MethodDefOrRefBig)
+        Assert.True(indexSizes.SimpleIndexBig[int TableIndex.MethodDef])
+
+    [<Fact>]
     let ``async multi-generation deltas preserve EncLog ordering`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
 
