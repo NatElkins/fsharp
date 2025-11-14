@@ -363,6 +363,11 @@ module FSharpDeltaMetadataWriterTests =
         assertBaselineHeapSnapshot artifacts
 
     [<Fact>]
+    let ``local signature delta artifacts capture baseline heap sizes`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitLocalSignatureDeltaArtifacts None ()
+        assertBaselineHeapSnapshot artifacts
+
+    [<Fact>]
     let ``async multi-generation uses ENC-sized indexes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
 
@@ -670,6 +675,11 @@ module FSharpDeltaMetadataWriterTests =
     [<Fact>]
     let ``event delta artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitEventDeltaArtifacts None ()
+        assertBaselineHeapSnapshot artifacts
+
+    [<Fact>]
+    let ``closure delta artifacts capture baseline heap sizes`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitClosureDeltaArtifacts ()
         assertBaselineHeapSnapshot artifacts
 
     [<Fact>]
