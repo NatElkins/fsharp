@@ -579,14 +579,30 @@ module internal MetadataDeltaTestHelpers =
         let boolType = ilg.typ_Bool
         let literal = defaultArg messageLiteral "async"
 
+        let stateMachineTypeRef = mkILTyRef(ILScopeRef.Local, "Sample.AsyncHostStateMachine")
+        let stateMachineLocalType = ILType.Value(mkILNonGenericTySpec stateMachineTypeRef)
+
         let runBody =
             mkMethodBody(
                 false,
-                [],
+                [ mkILLocal stateMachineLocalType None ],
                 2,
                 nonBranchingInstrsToCode [ I_ldstr literal; I_ret ],
                 None,
                 None)
+
+        let asyncStateMachineAttributeRef =
+            ILTypeRef.Create(
+                ILScopeRef.Assembly mscorlibRef,
+                [ "System"; "Runtime"; "CompilerServices" ],
+                "AsyncStateMachineAttribute")
+
+        let asyncAttribute =
+            mkILCustomAttribute(
+                asyncStateMachineAttributeRef,
+                [ ilGlobals.typ_Type ],
+                [ ILAttribElem.TypeRef(Some stateMachineTypeRef) ],
+                [])
 
         let runMethod =
             mkILNonGenericStaticMethod(
@@ -595,6 +611,7 @@ module internal MetadataDeltaTestHelpers =
                 [ mkILParamNamed("token", ilg.typ_Int32) ],
                 mkILReturn stringType,
                 runBody)
+            |> fun m -> m.With(customAttrs = mkILCustomAttrsFromArray [| asyncAttribute |])
 
         let moveNextBody =
             mkMethodBody(
