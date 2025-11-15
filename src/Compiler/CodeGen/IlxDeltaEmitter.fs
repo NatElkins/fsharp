@@ -672,9 +672,13 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                   Version = row.Version
                   Flags = row.Flags
                   PublicKeyOrToken = getBlob row.PublicKeyOrToken
+                  PublicKeyOrTokenHandle = if row.PublicKeyOrToken.IsNil then None else Some row.PublicKeyOrToken
                   Name = metadataReader.GetString row.Name
+                  NameHandle = if row.Name.IsNil then None else Some row.Name
                   Culture = if row.Culture.IsNil then None else Some(metadataReader.GetString row.Culture)
-                  HashValue = getBlob row.HashValue }
+                  CultureHandle = if row.Culture.IsNil then None else Some row.Culture
+                  HashValue = getBlob row.HashValue
+                  HashValueHandle = if row.HashValue.IsNil then None else Some row.HashValue }
             assemblyReferenceRows.Add info
             let deltaToken = 0x23000000 ||| nextRowId
             assemblyRefTokenMap[token] <- deltaToken
@@ -707,13 +711,17 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     | _ -> struct (HandleKind.ModuleDefinition, 1)
             let name = if row.Name.IsNil then "" else metadataReader.GetString row.Name
             let namespaceName = if row.Namespace.IsNil then "" else metadataReader.GetString row.Namespace
+            let nameHandle = if row.Name.IsNil then None else Some row.Name
+            let namespaceHandle = if row.Namespace.IsNil then None else Some row.Namespace
             let nextRowId = nextTypeRefRowId + 1
             nextTypeRefRowId <- nextRowId
             typeReferenceRows.Add(
                 { RowId = nextRowId
                   ResolutionScope = resolutionScope
                   Name = name
-                  Namespace = namespaceName })
+                  NameHandle = nameHandle
+                  Namespace = namespaceName
+                  NamespaceHandle = namespaceHandle })
             let deltaToken = 0x01000000 ||| nextRowId
             typeRefTokenMap[token] <- deltaToken
             deltaToken
@@ -748,13 +756,17 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 else
                     metadataReader.GetBlobBytes row.Signature
             let name = metadataReader.GetString row.Name
+            let nameHandle = if row.Name.IsNil then None else Some row.Name
+            let signatureHandle = if row.Signature.IsNil then None else Some row.Signature
             let nextRowId = nextMemberRefRowId + 1
             nextMemberRefRowId <- nextRowId
             memberReferenceRows.Add(
                 { RowId = nextRowId
                   Parent = parentInfo
                   Name = name
-                  Signature = signature })
+                  NameHandle = nameHandle
+                  Signature = signature
+                  SignatureHandle = signatureHandle })
             let deltaToken = 0x0A000000 ||| nextRowId
             memberRefTokenMap[token] <- deltaToken
             deltaToken
@@ -1478,6 +1490,48 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             userStringUpdates
             |> Seq.toList
 
+        let customAttributeRowList : CustomAttributeRowInfo list =
+            let rows = ResizeArray<CustomAttributeRowInfo>()
+            let mutable nextRowId = baselineTableRowCounts.[int TableIndex.CustomAttribute]
+
+            let isAsyncStateMachineAttribute (attribute: CustomAttribute) =
+                match attribute.Constructor.Kind with
+                | HandleKind.MemberReference ->
+                    let memberRef = metadataReader.GetMemberReference(MemberReferenceHandle.op_Explicit attribute.Constructor)
+                    match memberRef.Parent.Kind with
+                    | HandleKind.TypeReference ->
+                        let typeRef = metadataReader.GetTypeReference(TypeReferenceHandle.op_Explicit memberRef.Parent)
+                        let name = metadataReader.GetString typeRef.Name
+                        let ns = if typeRef.Namespace.IsNil then "" else metadataReader.GetString typeRef.Namespace
+                        ns = "System.Runtime.CompilerServices"
+                        && name.EndsWith("StateMachineAttribute", StringComparison.Ordinal)
+                    | _ -> false
+                | _ -> false
+
+            for struct (key, _, _, methodDef, _) in methodUpdateInputs do
+                if methodDefinitionIndex.Contains key then
+                    let parentRowId = methodDefinitionIndex.GetRowId key
+                    for attributeHandle in methodDef.GetCustomAttributes() do
+                        let attribute = metadataReader.GetCustomAttribute attributeHandle
+                        if isAsyncStateMachineAttribute attribute then
+                            let constructorToken = MetadataTokens.GetToken attribute.Constructor
+                            let remappedConstructorToken = remapEntityToken constructorToken
+                            let ctorRowId = remappedConstructorToken &&& 0x00FFFFFF
+                            nextRowId <- nextRowId + 1
+                            let valueBytes =
+                                if attribute.Value.IsNil then
+                                    Array.empty
+                                else
+                                    metadataReader.GetBlobBytes attribute.Value
+                            rows.Add(
+                                { RowId = nextRowId
+                                  Parent = struct (HandleKind.MethodDefinition, parentRowId)
+                                  Constructor = struct (attribute.Constructor.Kind, ctorRowId)
+                                  Value = valueBytes
+                                  ValueHandle = if attribute.Value.IsNil then None else Some attribute.Value })
+
+            rows |> Seq.toList
+
         let typeReferenceRowList =
             typeReferenceRows
             |> Seq.sortBy (fun row -> row.RowId)
@@ -1514,6 +1568,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 eventMapRowsSnapshot
                 methodSemanticsRowsSnapshot
                 streams.StandaloneSignatures
+                customAttributeRowList
                 userStringEntries
                 methodUpdates
                 baselineHeapOffsets

@@ -318,6 +318,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 []
                 builder.StandaloneSignatures
+                []
                 updates
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
@@ -713,6 +714,7 @@ module FSharpDeltaMetadataWriterTests =
                 eventMapRows
                 methodSemanticsRows
                 builder.StandaloneSignatures
+                []
                 updates
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
@@ -1115,6 +1117,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 []
                 builder.StandaloneSignatures
+                []
                 updates
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
@@ -1211,6 +1214,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 []
                 builder.StandaloneSignatures
+                []
                 updates
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
@@ -1273,6 +1277,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 []
                 builder.StandaloneSignatures
+                []
                 updates
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
@@ -1370,6 +1375,7 @@ module FSharpDeltaMetadataWriterTests =
                 []
                 []
                 builder.StandaloneSignatures
+                []
                 updates
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)

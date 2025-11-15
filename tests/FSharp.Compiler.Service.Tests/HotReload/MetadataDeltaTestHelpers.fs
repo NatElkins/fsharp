@@ -753,6 +753,7 @@ module internal MetadataDeltaTestHelpers =
             []
             []
             builder.StandaloneSignatures
+            []
             updates
             heapOffsets
             (getRowCounts metadataReader)
@@ -881,6 +882,7 @@ module internal MetadataDeltaTestHelpers =
             [] // event map rows
             [] // method semantics rows
             builder.StandaloneSignatures
+            []
             updates
             heapOffsets
             (getRowCounts metadataReader)
@@ -971,6 +973,7 @@ module internal MetadataDeltaTestHelpers =
             [] // event map rows
             [] // method semantics rows
             builder.StandaloneSignatures
+            []
             updates
             heapOffsets
             (getRowCounts metadataReader)
@@ -1145,6 +1148,7 @@ module internal MetadataDeltaTestHelpers =
             eventMapRows
             methodSemanticsRows
             builder.StandaloneSignatures
+            []
             updates
             heapOffsets
             (getRowCounts metadataReader)
@@ -1295,6 +1299,7 @@ module internal MetadataDeltaTestHelpers =
             []
             []
             builder.StandaloneSignatures
+            []
             updates
             heapOffsets
             (getRowCounts metadataReader)
