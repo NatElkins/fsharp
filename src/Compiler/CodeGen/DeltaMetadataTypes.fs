@@ -1,5 +1,6 @@
 module internal FSharp.Compiler.CodeGen.DeltaMetadataTypes
 
+open System
 open System.Reflection
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
@@ -32,6 +33,27 @@ type ParameterDefinitionRowInfo =
       SequenceNumber: int
       Name: string option
       NameHandle: StringHandle option }
+
+type TypeReferenceRowInfo =
+    { RowId: int
+      ResolutionScope: struct (HandleKind * int)
+      Name: string
+      Namespace: string }
+
+type MemberReferenceRowInfo =
+    { RowId: int
+      Parent: struct (HandleKind * int)
+      Name: string
+      Signature: byte[] }
+
+type AssemblyReferenceRowInfo =
+    { RowId: int
+      Version: Version
+      Flags: AssemblyFlags
+      PublicKeyOrToken: byte[]
+      Name: string
+      Culture: string option
+      HashValue: byte[] }
 
 type PropertyDefinitionRowInfo =
     { Key: PropertyDefinitionKey
@@ -78,6 +100,9 @@ type TableRows =
     { Module: RowElementData[][]
       MethodDef: RowElementData[][]
       Param: RowElementData[][]
+      TypeRef: RowElementData[][]
+      MemberRef: RowElementData[][]
+      AssemblyRef: RowElementData[][]
       StandAloneSig: RowElementData[][]
       Property: RowElementData[][]
       Event: RowElementData[][]

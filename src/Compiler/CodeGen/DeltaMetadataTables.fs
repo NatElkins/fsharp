@@ -270,6 +270,9 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let moduleRows = RowTableBuilder()
     let methodRows = RowTableBuilder()
     let paramRows = RowTableBuilder()
+    let typeRefRows = RowTableBuilder()
+    let memberRefRows = RowTableBuilder()
+    let assemblyRefRows = RowTableBuilder()
     let standAloneSigRows = RowTableBuilder()
     let propertyRows = RowTableBuilder()
     let eventRows = RowTableBuilder()
@@ -299,6 +302,26 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let rowElementSimpleIndex table value = rowElement (RowElementTags.SimpleIndex table) value
     let rowElementTypeDefOrRef tag value = rowElement (RowElementTags.TypeDefOrRefOrSpec tag) value
     let rowElementHasSemantics tag value = rowElement (RowElementTags.HasSemantics tag) value
+    let rowElementResolutionScope kind rowId =
+        let tagValue =
+            match kind with
+            | HandleKind.ModuleDefinition -> 0
+            | HandleKind.ModuleReference -> 1
+            | HandleKind.AssemblyReference -> 2
+            | HandleKind.TypeReference -> 3
+            | _ -> invalidArg (nameof kind) "Unsupported resolution scope"
+        rowElement (RowElementTags.ResolutionScopeMin + tagValue) rowId
+
+    let rowElementMemberRefParent kind rowId =
+        let tagValue =
+            match kind with
+            | HandleKind.TypeDefinition -> 0
+            | HandleKind.TypeReference -> 1
+            | HandleKind.ModuleReference -> 2
+            | HandleKind.MethodDefinition -> 3
+            | HandleKind.TypeSpecification -> 4
+            | _ -> invalidArg (nameof kind) "Unsupported member ref parent"
+        rowElement (RowElementTags.MemberRefParentMin + tagValue) rowId
 
     let addStringValue (value: string) = if String.IsNullOrEmpty value then 0 else strings.AddSharedEntry value
 
@@ -409,6 +432,51 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
                 stringElement nameToken
             |]
         paramRows.Add rowElements
+
+    member _.AddTypeReferenceRow(row: TypeReferenceRowInfo) =
+        let struct (scopeKind, scopeRowId) = row.ResolutionScope
+        let nameToken = addStringValue row.Name, false
+        let namespaceToken = addStringValue row.Namespace, false
+        let rowElements =
+            [|
+                rowElementResolutionScope scopeKind scopeRowId
+                stringElement nameToken
+                stringElement namespaceToken
+            |]
+        typeRefRows.Add rowElements
+
+    member _.AddMemberReferenceRow(row: MemberReferenceRowInfo) =
+        let struct (parentKind, parentRowId) = row.Parent
+        let nameToken = addStringValue row.Name, false
+        let signatureToken = addBlobBytes row.Signature, false
+        let rowElements =
+            [|
+                rowElementMemberRefParent parentKind parentRowId
+                stringElement nameToken
+                blobElement signatureToken
+            |]
+        memberRefRows.Add rowElements
+
+    member _.AddAssemblyReferenceRow(row: AssemblyReferenceRowInfo) =
+        let publicKeyToken = addBlobBytes row.PublicKeyOrToken, false
+        let nameToken = addStringValue row.Name, false
+        let cultureToken = addStringOption row.Culture
+        let hashToken = addBlobBytes row.HashValue, false
+        let versionComponent value =
+            if value >= 0s then uint16 value else 0us
+        let rowElements =
+            [|
+                rowElementUShort (versionComponent (int16 row.Version.Major))
+                rowElementUShort (versionComponent (int16 row.Version.Minor))
+                rowElementUShort (versionComponent (int16 row.Version.Build))
+                rowElementUShort (versionComponent (int16 row.Version.Revision))
+                rowElementULong (int row.Flags)
+                blobElement publicKeyToken
+                stringElement nameToken
+                stringElement cultureToken
+                blobElement hashToken
+            |]
+        assemblyRefRows.Add rowElements
 
     member _.AddStandaloneSignatureRow(signatureBytes: byte[]) =
         if not (isNull (box signatureBytes)) && signatureBytes.Length > 0 then
@@ -558,6 +626,9 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         { Module = moduleRows.Entries
           MethodDef = methodRows.Entries
           Param = paramRows.Entries
+          TypeRef = typeRefRows.Entries
+          MemberRef = memberRefRows.Entries
+          AssemblyRef = assemblyRefRows.Entries
           StandAloneSig = standAloneSigRows.Entries
           Property = propertyRows.Entries
           Event = eventRows.Entries
@@ -574,6 +645,9 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         counts[int TableIndex.Module] <- moduleRows.Count
         counts[int TableIndex.MethodDef] <- methodRows.Count
         counts[int TableIndex.Param] <- paramRows.Count
+        counts[int TableIndex.TypeRef] <- typeRefRows.Count
+        counts[int TableIndex.MemberRef] <- memberRefRows.Count
+        counts[int TableIndex.AssemblyRef] <- assemblyRefRows.Count
         counts[int TableIndex.StandAloneSig] <- standAloneSigRows.Count
         counts[int TableIndex.Property] <- propertyRows.Count
         counts[int TableIndex.Event] <- eventRows.Count

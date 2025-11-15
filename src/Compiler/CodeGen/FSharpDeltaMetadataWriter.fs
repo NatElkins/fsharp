@@ -97,6 +97,9 @@ let emitWithUserStrings
     (moduleId: Guid)
     (methodDefinitionRows: MethodDefinitionRowInfo list)
     (parameterDefinitionRows: ParameterDefinitionRowInfo list)
+    (typeReferenceRows: TypeReferenceRowInfo list)
+    (memberReferenceRows: MemberReferenceRowInfo list)
+    (assemblyReferenceRows: AssemblyReferenceRowInfo list)
     (propertyDefinitionRows: PropertyDefinitionRowInfo list)
     (eventDefinitionRows: EventDefinitionRowInfo list)
     (propertyMapRows: PropertyMapRowInfo list)
@@ -152,6 +155,9 @@ let emitWithUserStrings
         let methodUpdateCount = methodDefinitionRows |> List.length
         let parameterUpdateCount = parameterDefinitionRows |> List.length
         let standaloneSigCount = standaloneSignatureRows |> List.length
+        let typeRefCount = typeReferenceRows |> List.length
+        let memberRefCount = memberReferenceRows |> List.length
+        let assemblyRefCount = assemblyReferenceRows |> List.length
         let propertyUpdateCount = propertyDefinitionRows |> List.length
         let eventUpdateCount = eventDefinitionRows |> List.length
         let propertyMapLogCount = propertyMapRows |> List.length
@@ -164,20 +170,20 @@ let emitWithUserStrings
 
         if emitSrmTables then
             metadataBuilder.SetCapacity(TableIndex.Module, 1)
-            metadataBuilder.SetCapacity(TableIndex.TypeRef, 0)
+            metadataBuilder.SetCapacity(TableIndex.TypeRef, typeRefCount)
             metadataBuilder.SetCapacity(TableIndex.TypeDef, 0)
             metadataBuilder.SetCapacity(TableIndex.Field, 0)
             metadataBuilder.SetCapacity(TableIndex.MethodDef, methodUpdateCount)
             metadataBuilder.SetCapacity(TableIndex.Param, parameterUpdateCount)
             metadataBuilder.SetCapacity(TableIndex.InterfaceImpl, 0)
-            metadataBuilder.SetCapacity(TableIndex.MemberRef, 0)
+            metadataBuilder.SetCapacity(TableIndex.MemberRef, memberRefCount)
             metadataBuilder.SetCapacity(TableIndex.Constant, 0)
             metadataBuilder.SetCapacity(TableIndex.CustomAttribute, 0)
             metadataBuilder.SetCapacity(TableIndex.FieldMarshal, 0)
             metadataBuilder.SetCapacity(TableIndex.DeclSecurity, 0)
             metadataBuilder.SetCapacity(TableIndex.ClassLayout, 0)
             metadataBuilder.SetCapacity(TableIndex.FieldLayout, 0)
-            metadataBuilder.SetCapacity(TableIndex.StandAloneSig, 0)
+            metadataBuilder.SetCapacity(TableIndex.StandAloneSig, standaloneSigCount)
             metadataBuilder.SetCapacity(TableIndex.EventMap, eventMapAddCount)
             metadataBuilder.SetCapacity(TableIndex.Event, eventUpdateCount)
             metadataBuilder.SetCapacity(TableIndex.PropertyMap, propertyMapAddCount)
@@ -193,6 +199,9 @@ let emitWithUserStrings
             + methodUpdateCount
             + parameterUpdateCount
             + standaloneSigCount
+            + typeRefCount
+            + memberRefCount
+            + assemblyRefCount
             + propertyUpdateCount
             + eventUpdateCount
             + propertyMapLogCount
@@ -203,7 +212,7 @@ let emitWithUserStrings
         metadataBuilder.SetCapacity(TableIndex.Assembly, 0)
         metadataBuilder.SetCapacity(TableIndex.AssemblyProcessor, 0)
         metadataBuilder.SetCapacity(TableIndex.AssemblyOS, 0)
-        metadataBuilder.SetCapacity(TableIndex.AssemblyRef, 0)
+        metadataBuilder.SetCapacity(TableIndex.AssemblyRef, assemblyRefCount)
         metadataBuilder.SetCapacity(TableIndex.AssemblyRefProcessor, 0)
         metadataBuilder.SetCapacity(TableIndex.AssemblyRefOS, 0)
         metadataBuilder.SetCapacity(TableIndex.File, 0)
@@ -228,6 +237,27 @@ let emitWithUserStrings
         let moduleHandle = metadataBuilder.AddModule(0, moduleNameHandleOrAdded, mvidHandle, encIdHandle, encBaseHandle)
         let tableMirror = DeltaMetadataTables(heapOffsets)
         tableMirror.AddModuleRow(moduleName, moduleNameTokenOpt, moduleId, encId, encBaseId)
+
+        let entityHandleFromTable tableIndex rowId =
+            MetadataTokens.Handle(tableIndex, rowId)
+            |> EntityHandle.op_Explicit
+
+        let resolutionScopeHandle struct (kind, rowId) =
+            match kind with
+            | HandleKind.ModuleDefinition -> entityHandleFromTable TableIndex.Module rowId
+            | HandleKind.ModuleReference -> entityHandleFromTable TableIndex.ModuleRef rowId
+            | HandleKind.AssemblyReference -> entityHandleFromTable TableIndex.AssemblyRef rowId
+            | HandleKind.TypeReference -> entityHandleFromTable TableIndex.TypeRef rowId
+            | _ -> EntityHandle()
+
+        let memberRefParentHandle struct (kind, rowId) =
+            match kind with
+            | HandleKind.TypeDefinition -> entityHandleFromTable TableIndex.TypeDef rowId
+            | HandleKind.TypeReference -> entityHandleFromTable TableIndex.TypeRef rowId
+            | HandleKind.ModuleReference -> entityHandleFromTable TableIndex.ModuleRef rowId
+            | HandleKind.MethodDefinition -> entityHandleFromTable TableIndex.MethodDef rowId
+            | HandleKind.TypeSpecification -> entityHandleFromTable TableIndex.TypeSpec rowId
+            | _ -> EntityHandle()
 
         let updatesByKey = Dictionary<MethodDefinitionKey, MethodMetadataUpdate>(HashIdentity.Structural)
         for update in updates do
@@ -293,6 +323,69 @@ let emitWithUserStrings
             metadataBuilder.AddEncMapEntry(parameterHandle) |> ignore
             encLog.Add(struct (TableIndex.Param, row.RowId, operation))
             encMap.Add(struct (TableIndex.Param, row.RowId))
+
+        for row in typeReferenceRows do
+            if emitSrmTables then
+                let scopeHandle = resolutionScopeHandle row.ResolutionScope
+                let namespaceHandle =
+                    if String.IsNullOrEmpty row.Namespace then
+                        StringHandle()
+                    else
+                        metadataBuilder.GetOrAddString row.Namespace
+                let nameHandle = metadataBuilder.GetOrAddString row.Name
+                metadataBuilder.AddTypeReference(scopeHandle, namespaceHandle, nameHandle) |> ignore
+            tableMirror.AddTypeReferenceRow row
+
+            let handle = entityHandleFromTable TableIndex.TypeRef row.RowId
+            metadataBuilder.AddEncLogEntry(handle, EditAndContinueOperation.Default) |> ignore
+            metadataBuilder.AddEncMapEntry(handle) |> ignore
+            encLog.Add(struct (TableIndex.TypeRef, row.RowId, EditAndContinueOperation.Default))
+            encMap.Add(struct (TableIndex.TypeRef, row.RowId))
+
+        for row in memberReferenceRows do
+            if emitSrmTables then
+                let parentHandle = memberRefParentHandle row.Parent
+                let nameHandle = metadataBuilder.GetOrAddString row.Name
+                let signatureHandle =
+                    if isNull (box row.Signature) || row.Signature.Length = 0 then
+                        BlobHandle()
+                    else
+                        metadataBuilder.GetOrAddBlob row.Signature
+                metadataBuilder.AddMemberReference(parentHandle, nameHandle, signatureHandle) |> ignore
+            tableMirror.AddMemberReferenceRow row
+
+            let handle = entityHandleFromTable TableIndex.MemberRef row.RowId
+            metadataBuilder.AddEncLogEntry(handle, EditAndContinueOperation.Default) |> ignore
+            metadataBuilder.AddEncMapEntry(handle) |> ignore
+            encLog.Add(struct (TableIndex.MemberRef, row.RowId, EditAndContinueOperation.Default))
+            encMap.Add(struct (TableIndex.MemberRef, row.RowId))
+
+        for row in assemblyReferenceRows do
+            if emitSrmTables then
+                let nameHandle = metadataBuilder.GetOrAddString row.Name
+                let cultureHandle =
+                    match row.Culture with
+                    | Some culture when not (String.IsNullOrEmpty culture) -> metadataBuilder.GetOrAddString culture
+                    | _ -> StringHandle()
+                let publicKeyHandle =
+                    if isNull (box row.PublicKeyOrToken) || row.PublicKeyOrToken.Length = 0 then
+                        BlobHandle()
+                    else
+                        metadataBuilder.GetOrAddBlob row.PublicKeyOrToken
+                let hashHandle =
+                    if isNull (box row.HashValue) || row.HashValue.Length = 0 then
+                        BlobHandle()
+                    else
+                        metadataBuilder.GetOrAddBlob row.HashValue
+                metadataBuilder.AddAssemblyReference(nameHandle, row.Version, cultureHandle, publicKeyHandle, row.Flags, hashHandle)
+                |> ignore
+            tableMirror.AddAssemblyReferenceRow row
+
+            let handle = entityHandleFromTable TableIndex.AssemblyRef row.RowId
+            metadataBuilder.AddEncLogEntry(handle, EditAndContinueOperation.Default) |> ignore
+            metadataBuilder.AddEncMapEntry(handle) |> ignore
+            encLog.Add(struct (TableIndex.AssemblyRef, row.RowId, EditAndContinueOperation.Default))
+            encMap.Add(struct (TableIndex.AssemblyRef, row.RowId))
 
         for signature in standaloneSignatureRows do
             let rowId = MetadataTokens.GetRowNumber signature.Handle
@@ -480,6 +573,52 @@ let emitWithUserStrings
           IndexSizes = indexSizes
           TableStream = tableStream }
 
+let emitWithReferences
+    (metadataBuilder: MetadataBuilder)
+    (moduleName: string)
+    (moduleNameHandle: StringHandle option)
+    (encId: Guid)
+    (encBaseId: Guid)
+    (moduleId: Guid)
+    (methodDefinitionRows: MethodDefinitionRowInfo list)
+    (parameterDefinitionRows: ParameterDefinitionRowInfo list)
+    (typeReferenceRows: TypeReferenceRowInfo list)
+    (memberReferenceRows: MemberReferenceRowInfo list)
+    (assemblyReferenceRows: AssemblyReferenceRowInfo list)
+    (propertyDefinitionRows: PropertyDefinitionRowInfo list)
+    (eventDefinitionRows: EventDefinitionRowInfo list)
+    (propertyMapRows: PropertyMapRowInfo list)
+    (eventMapRows: EventMapRowInfo list)
+    (methodSemanticsRows: MethodSemanticsMetadataUpdate list)
+    (standaloneSignatureRows: StandaloneSignatureUpdate list)
+    (userStringUpdates: (int * int * string) list)
+    (updates: MethodMetadataUpdate list)
+    (heapOffsets: MetadataHeapOffsets)
+    (externalRowCounts: int[])
+    : MetadataDelta =
+    emitWithUserStrings
+        metadataBuilder
+        moduleName
+        moduleNameHandle
+        encId
+        encBaseId
+        moduleId
+        methodDefinitionRows
+        parameterDefinitionRows
+        typeReferenceRows
+        memberReferenceRows
+        assemblyReferenceRows
+        propertyDefinitionRows
+        eventDefinitionRows
+        propertyMapRows
+        eventMapRows
+        methodSemanticsRows
+        standaloneSignatureRows
+        userStringUpdates
+        updates
+        heapOffsets
+        externalRowCounts
+
 let emit
     (metadataBuilder: MetadataBuilder)
     (moduleName: string)
@@ -499,7 +638,7 @@ let emit
     (heapOffsets: MetadataHeapOffsets)
     (externalRowCounts: int[])
     : MetadataDelta =
-    emitWithUserStrings
+    emitWithReferences
         metadataBuilder
         moduleName
         moduleNameHandle
@@ -508,6 +647,9 @@ let emit
         moduleId
         methodDefinitionRows
         parameterDefinitionRows
+        []
+        []
+        []
         propertyDefinitionRows
         eventDefinitionRows
         propertyMapRows
