@@ -274,6 +274,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let memberRefRows = RowTableBuilder()
     let assemblyRefRows = RowTableBuilder()
     let standAloneSigRows = RowTableBuilder()
+    let customAttributeRows = RowTableBuilder()
     let propertyRows = RowTableBuilder()
     let eventRows = RowTableBuilder()
     let propertyMapRows = RowTableBuilder()
@@ -322,6 +323,21 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             | HandleKind.TypeSpecification -> 4
             | _ -> invalidArg (nameof kind) "Unsupported member ref parent"
         rowElement (RowElementTags.MemberRefParentMin + tagValue) rowId
+
+    let rowElementHasCustomAttribute kind rowId =
+        let tagValue =
+            match kind with
+            | HandleKind.MethodDefinition -> 0
+            | _ -> invalidArg (nameof kind) "Unsupported custom attribute parent"
+        rowElement (RowElementTags.HasCustomAttributeMin + tagValue) rowId
+
+    let rowElementCustomAttributeType kind rowId =
+        let tag =
+            match kind with
+            | HandleKind.MethodDefinition -> cat_MethodDef
+            | HandleKind.MemberReference -> cat_MemberRef
+            | _ -> invalidArg (nameof kind) "Unsupported custom attribute constructor"
+        rowElement (RowElementTags.CustomAttributeType tag) rowId
 
     let addStringValue (value: string) = if String.IsNullOrEmpty value then 0 else strings.AddSharedEntry value
 
@@ -435,8 +451,8 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
 
     member _.AddTypeReferenceRow(row: TypeReferenceRowInfo) =
         let struct (scopeKind, scopeRowId) = row.ResolutionScope
-        let nameToken = addStringValue row.Name, false
-        let namespaceToken = addStringValue row.Namespace, false
+        let nameToken = addExistingStringHandle row.NameHandle row.Name
+        let namespaceToken = addExistingStringHandle row.NamespaceHandle row.Namespace
         let rowElements =
             [|
                 rowElementResolutionScope scopeKind scopeRowId
@@ -447,8 +463,8 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
 
     member _.AddMemberReferenceRow(row: MemberReferenceRowInfo) =
         let struct (parentKind, parentRowId) = row.Parent
-        let nameToken = addStringValue row.Name, false
-        let signatureToken = addBlobBytes row.Signature, false
+        let nameToken = addExistingStringHandle row.NameHandle row.Name
+        let signatureToken = addExistingBlobHandle row.SignatureHandle row.Signature
         let rowElements =
             [|
                 rowElementMemberRefParent parentKind parentRowId
@@ -458,10 +474,10 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         memberRefRows.Add rowElements
 
     member _.AddAssemblyReferenceRow(row: AssemblyReferenceRowInfo) =
-        let publicKeyToken = addBlobBytes row.PublicKeyOrToken, false
-        let nameToken = addStringValue row.Name, false
-        let cultureToken = addStringOption row.Culture
-        let hashToken = addBlobBytes row.HashValue, false
+        let publicKeyToken = addExistingBlobHandle row.PublicKeyOrTokenHandle row.PublicKeyOrToken
+        let nameToken = addExistingStringHandle row.NameHandle row.Name
+        let cultureToken = addExistingStringOptionHandle row.CultureHandle row.Culture
+        let hashToken = addExistingBlobHandle row.HashValueHandle row.HashValue
         let versionComponent value =
             if value >= 0s then uint16 value else 0us
         let rowElements =
@@ -486,6 +502,26 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
                     blobElement (blobIndex, false)
                 |]
             standAloneSigRows.Add rowElements
+
+    member _.AddCustomAttributeRow(row: CustomAttributeRowInfo) =
+        let parentElement =
+            let struct (kind, rowId) = row.Parent
+            rowElementHasCustomAttribute kind rowId
+
+        let ctorElement =
+            let struct (kind, rowId) = row.Constructor
+            rowElementCustomAttributeType kind rowId
+
+        let valueToken = addExistingBlobHandle row.ValueHandle row.Value
+
+        let rowElements =
+            [|
+                parentElement
+                ctorElement
+                blobElement valueToken
+            |]
+
+        customAttributeRows.Add rowElements
 
     member _.AddPropertyRow(row: PropertyDefinitionRowInfo) =
         let nameToken = addExistingStringHandle row.NameHandle row.Name
@@ -630,6 +666,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
           MemberRef = memberRefRows.Entries
           AssemblyRef = assemblyRefRows.Entries
           StandAloneSig = standAloneSigRows.Entries
+          CustomAttribute = customAttributeRows.Entries
           Property = propertyRows.Entries
           Event = eventRows.Entries
           PropertyMap = propertyMapRows.Entries
@@ -649,6 +686,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         counts[int TableIndex.MemberRef] <- memberRefRows.Count
         counts[int TableIndex.AssemblyRef] <- assemblyRefRows.Count
         counts[int TableIndex.StandAloneSig] <- standAloneSigRows.Count
+        counts[int TableIndex.CustomAttribute] <- customAttributeRows.Count
         counts[int TableIndex.Property] <- propertyRows.Count
         counts[int TableIndex.Event] <- eventRows.Count
         counts[int TableIndex.PropertyMap] <- propertyMapRows.Count

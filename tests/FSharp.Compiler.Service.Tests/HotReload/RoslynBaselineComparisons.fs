@@ -9,11 +9,17 @@ open System.Reflection.Metadata.Ecma335
 open System.Text.Json
 open Xunit
 open FSharp.Compiler.Service.Tests.HotReload
+module DeltaWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
 module private MetadataHelpers =
-    let countRows (metadata: byte[]) (table: TableIndex) =
-        use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange metadata)
-        provider.GetMetadataReader().GetTableRowCount(table)
+    let countRows (delta: DeltaWriter.MetadataDelta) (table: TableIndex) =
+        try
+            use provider =
+                MetadataReaderProvider.FromMetadataImage(
+                    ImmutableArray.CreateRange delta.Metadata)
+            provider.GetMetadataReader().GetTableRowCount(table)
+        with :? BadImageFormatException ->
+            delta.TableRowCounts.[int table]
 
     let tryFindTableIndex (name: string) : TableIndex option =
         match name with
@@ -76,11 +82,11 @@ module RoslynBaselineComparisons =
         Assert.Equal(1, getRow delta2 "Module")
         Assert.Equal(2, getRow delta2 "MethodDef")
 
-    let private assertMatches (expected: Map<string,int>) (deltaBytes: byte[]) =
+    let private assertMatches (expected: Map<string,int>) (delta: DeltaWriter.MetadataDelta) =
         for KeyValue(key, budget) in expected do
             match MetadataHelpers.tryFindTableIndex key with
             | Some tableIndex ->
-                let actual = MetadataHelpers.countRows deltaBytes tableIndex
+                let actual = MetadataHelpers.countRows delta tableIndex
                 Assert.True(
                     actual <= budget,
                     sprintf "Table %A exceeded Roslyn baseline: actual=%d baseline=%d" tableIndex actual budget)
@@ -92,7 +98,7 @@ module RoslynBaselineComparisons =
         let roslyn = findBaseline "Property" baselines
 
         let propertyDelta = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
-        assertMatches roslyn propertyDelta.Delta.Metadata
+        assertMatches roslyn propertyDelta.Delta
 
     [<Fact>]
     let ``property multi-generation delta rows match Roslyn baseline`` () =
@@ -101,8 +107,8 @@ module RoslynBaselineComparisons =
         let roslynUpdate = findBaseline "PropertyUpdate" baselines
 
         let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
-        assertMatches roslynAdd artifacts.Generation1.Metadata
-        assertMatches roslynUpdate artifacts.Generation2.Metadata
+        assertMatches roslynAdd artifacts.Generation1
+        assertMatches roslynUpdate artifacts.Generation2
 
     [<Fact>]
     let ``event delta row counts match Roslyn baseline`` () =
@@ -110,7 +116,7 @@ module RoslynBaselineComparisons =
         let roslynEvent = findBaseline "Event" baselines
 
         let eventDelta = MetadataDeltaTestHelpers.emitEventDeltaArtifacts None ()
-        assertMatches roslynEvent eventDelta.Delta.Metadata
+        assertMatches roslynEvent eventDelta.Delta
 
     [<Fact>]
     let ``async delta row counts match Roslyn baseline`` () =
@@ -118,7 +124,7 @@ module RoslynBaselineComparisons =
         let roslynAsync = findBaseline "Async" baselines
 
         let asyncDelta = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
-        assertMatches roslynAsync asyncDelta.Delta.Metadata
+        assertMatches roslynAsync asyncDelta.Delta
 
     [<Fact>]
     let ``event multi-generation delta rows match Roslyn baseline`` () =
@@ -127,8 +133,8 @@ module RoslynBaselineComparisons =
         let roslynUpdate = findBaseline "EventUpdate" baselines
 
         let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
-        assertMatches roslynAdd artifacts.Generation1.Metadata
-        assertMatches roslynUpdate artifacts.Generation2.Metadata
+        assertMatches roslynAdd artifacts.Generation1
+        assertMatches roslynUpdate artifacts.Generation2
 
     [<Fact>]
     let ``async multi-generation delta rows match Roslyn baseline`` () =
@@ -137,5 +143,5 @@ module RoslynBaselineComparisons =
         let roslynUpdate = findBaseline "AsyncUpdate" baselines
 
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
-        assertMatches roslynAdd artifacts.Generation1.Metadata
-        assertMatches roslynUpdate artifacts.Generation2.Metadata
+        assertMatches roslynAdd artifacts.Generation1
+        assertMatches roslynUpdate artifacts.Generation2

@@ -35,6 +35,7 @@ open Internal.Utilities
 open FSharp.Compiler.ComponentTests.HotReload.TestHelpers
 
 module ILWriter = FSharp.Compiler.AbstractIL.ILBinaryWriter
+module DeltaWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
 [<Collection(nameof NotThreadSafeResourceCollection)>]
 module MdvValidationTests =
@@ -181,9 +182,24 @@ module MdvValidationTests =
     let private createTempProject () =
         let root = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-tests", System.Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(root) |> ignore
+        if keepArtifacts () then
+            printfn "[hotreload-mdv] keeping artifacts under %s" root
         let fsPath = Path.Combine(root, "Library.fs")
         let dllPath = Path.Combine(root, "Library.dll")
         root, fsPath, dllPath
+
+    let private captureDeltaArtifacts label (baseline: byte[]) (generation1: FSharpHotReloadDelta) (generation2: FSharpHotReloadDelta) =
+        if keepArtifacts () then
+            let root = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-captures")
+            Directory.CreateDirectory(root) |> ignore
+            let target = Path.Combine(root, $"{label}-{System.Guid.NewGuid():N}")
+            Directory.CreateDirectory(target) |> ignore
+            File.WriteAllBytes(Path.Combine(target, "baseline.dll"), baseline)
+            File.WriteAllBytes(Path.Combine(target, "gen1.meta"), generation1.Metadata)
+            File.WriteAllBytes(Path.Combine(target, "gen1.il"), generation1.IL)
+            File.WriteAllBytes(Path.Combine(target, "gen2.meta"), generation2.Metadata)
+            File.WriteAllBytes(Path.Combine(target, "gen2.il"), generation2.IL)
+            printfn "[hotreload-mdv] captured artifacts in %s" target
 
     let private readIlModule path =
         let options : ILReaderOptions =
@@ -2097,11 +2113,14 @@ module Demo =
                 assertGenerationContains output 1 "Integration async updated v3"
             | None ->
                 printfn "mdv not available; skipping async Generation 2 verification."
+
+            captureDeltaArtifacts "async-multigen" (File.ReadAllBytes(baselineCopy)) delta1 delta2
         finally
             try checker.InvalidateAll() with _ -> ()
             try checker.EndHotReloadSession() with _ -> ()
-            try Directory.Delete(deltaDir, true) with _ -> ()
-            try Directory.Delete(projectDir, true) with _ -> ()
+            if not (keepArtifacts ()) then
+                try Directory.Delete(deltaDir, true) with _ -> ()
+                try Directory.Delete(projectDir, true) with _ -> ()
 
     [<Fact>]
     let ``mdv validates method-body edit with async state machine`` () =

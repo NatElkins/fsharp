@@ -3,6 +3,7 @@ namespace FSharp.Compiler.Service.Tests.HotReload
 open System
 open System.IO
 open System.Reflection
+open System.Collections.Generic
 open System.Collections.Immutable
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
@@ -17,6 +18,7 @@ open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.CodeGen
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
+open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 
 module internal MetadataDeltaTestHelpers =
     module ILWriter = FSharp.Compiler.AbstractIL.ILBinaryWriter
@@ -778,7 +780,8 @@ module internal MetadataDeltaTestHelpers =
     let private emitPropertyDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) =
         use peReader = new PEReader(new MemoryStream(baselineBytes, false))
         let metadataReader = peReader.GetMetadataReader()
-        let builder = IlDeltaStreamBuilder None
+        let metadataSnapshot = metadataSnapshotFromReader metadataReader
+        let builder = IlDeltaStreamBuilder(Some metadataSnapshot)
         emitPropertyDeltaCore metadataReader builder heapOffsets
 
     let emitPropertyDeltaArtifacts (messageLiteral: string option) () : MetadataDeltaArtifacts =
@@ -942,6 +945,7 @@ module internal MetadataDeltaTestHelpers =
 
     let private emitAsyncDeltaCore
         (metadataReader: MetadataReader)
+        (peReader: PEReader)
         (builder: IlDeltaStreamBuilder)
         (heapOffsets: MetadataHeapOffsets)
         : DeltaWriter.MetadataDelta =
@@ -951,6 +955,30 @@ module internal MetadataDeltaTestHelpers =
             methodKeyWithParameters "Sample.AsyncHost" "RunAsync" [ ilGlobals.typ_Int32 ] ilGlobals.typ_String
 
         let methodDef = metadataReader.GetMethodDefinition methodHandle
+
+        if shouldTraceMetadata () then
+            metadataReader.CustomAttributes
+            |> Seq.iter (fun handle ->
+                let attribute = metadataReader.GetCustomAttribute handle
+                let parentToken = MetadataTokens.GetToken attribute.Parent
+                let ctorToken = MetadataTokens.GetToken attribute.Constructor
+                printfn
+                    "[hotreload-metadata] custom attribute parent=%A parentToken=0x%08X ctor=%A ctorToken=0x%08X"
+                    attribute.Parent.Kind
+                    parentToken
+                    attribute.Constructor.Kind
+                    ctorToken)
+
+        let methodBody = peReader.GetMethodBody methodDef.RelativeVirtualAddress
+
+        let localSignatureToken =
+            if methodBody.LocalSignature.IsNil then
+                0
+            else
+                let standalone = metadataReader.GetStandaloneSignature methodBody.LocalSignature
+                let signatureBytes = metadataReader.GetBlobBytes standalone.Signature
+                builder.AddStandaloneSignature(signatureBytes)
+
         let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
             [ { Key = methodKey
                 RowId = 1
@@ -969,31 +997,279 @@ module internal MetadataDeltaTestHelpers =
                 MethodHandle = methodHandle
                 Body =
                     { MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle)
-                      LocalSignatureToken = 0
+                      LocalSignatureToken = localSignatureToken
                       CodeOffset = 0
                       CodeLength = 4 } } ]
 
+        let assemblyReferenceRows = ResizeArray<AssemblyReferenceRowInfo>()
+        let typeReferenceRows = ResizeArray<TypeReferenceRowInfo>()
+        let memberReferenceRows = ResizeArray<MemberReferenceRowInfo>()
+        let assemblyRefMap = Dictionary<AssemblyReferenceHandle, int>()
+        let typeRefMap = Dictionary<TypeReferenceHandle, int>()
+        let memberRefMap = Dictionary<MemberReferenceHandle, int>()
+
+        let getBlobBytes (handle: BlobHandle) =
+            if handle.IsNil then
+                Array.empty
+            else
+                metadataReader.GetBlobBytes handle
+
+        let rec addAssemblyReference (handle: AssemblyReferenceHandle) =
+            match assemblyRefMap.TryGetValue handle with
+            | true, rowId -> rowId
+            | _ ->
+                let rowId = assemblyReferenceRows.Count + 1
+                let row = metadataReader.GetAssemblyReference handle
+                assemblyReferenceRows.Add(
+                    { RowId = rowId
+                      Version = row.Version
+                      Flags = row.Flags
+                      PublicKeyOrToken = getBlobBytes row.PublicKeyOrToken
+                      PublicKeyOrTokenHandle = if row.PublicKeyOrToken.IsNil then None else Some row.PublicKeyOrToken
+                      Name = metadataReader.GetString row.Name
+                      NameHandle = if row.Name.IsNil then None else Some row.Name
+                      Culture =
+                        if row.Culture.IsNil then
+                            None
+                        else
+                            metadataReader.GetString row.Culture |> Some
+                      CultureHandle = if row.Culture.IsNil then None else Some row.Culture
+                      HashValue = getBlobBytes row.HashValue
+                      HashValueHandle = if row.HashValue.IsNil then None else Some row.HashValue })
+                assemblyRefMap[handle] <- rowId
+                rowId
+
+        let buildTypeReferenceInfo (handle: TypeReferenceHandle) =
+            let rec loop current segments =
+                let row = metadataReader.GetTypeReference current
+                let updated = metadataReader.GetString row.Name :: segments
+                if row.ResolutionScope.Kind = HandleKind.TypeReference then
+                    loop (TypeReferenceHandle.op_Explicit row.ResolutionScope) updated
+                else
+                    row.ResolutionScope, updated, row
+            loop handle []
+
+        let rec addTypeReference (handle: TypeReferenceHandle) =
+            match typeRefMap.TryGetValue handle with
+            | true, rowId -> rowId
+            | _ ->
+                let resolutionScopeHandle, segments, innermostRow = buildTypeReferenceInfo handle
+                let segmentsRev = List.rev segments
+                let typeName = segmentsRev |> List.last
+                let namespaceSegments =
+                    segmentsRev
+                    |> List.take (segmentsRev.Length - 1)
+                let namespaceName =
+                    if List.isEmpty namespaceSegments then
+                        ""
+                    else
+                        String.Join(".", namespaceSegments)
+
+                let resolutionScope =
+                    match resolutionScopeHandle.Kind with
+                    | HandleKind.AssemblyReference ->
+                        let parent =
+                            addAssemblyReference(AssemblyReferenceHandle.op_Explicit resolutionScopeHandle)
+                        struct (HandleKind.AssemblyReference, parent)
+                    | HandleKind.ModuleDefinition ->
+                        let parent = MetadataTokens.GetRowNumber resolutionScopeHandle
+                        struct (HandleKind.ModuleDefinition, parent)
+                    | HandleKind.ModuleReference ->
+                        let parent = MetadataTokens.GetRowNumber resolutionScopeHandle
+                        struct (HandleKind.ModuleReference, parent)
+                    | _ -> struct (HandleKind.ModuleDefinition, 1)
+
+                let rowId = typeReferenceRows.Count + 1
+                if shouldTraceMetadata () then
+                    printfn "[hotreload-metadata] add TypeRef rowId=%d name=%s scope=%A" rowId typeName resolutionScope
+
+                typeReferenceRows.Add(
+                    { RowId = rowId
+                      ResolutionScope = resolutionScope
+                      Name = typeName
+                      NameHandle = if innermostRow.Name.IsNil then None else Some innermostRow.Name
+                      Namespace = namespaceName
+                      NamespaceHandle = None })
+                typeRefMap[handle] <- rowId
+                rowId
+
+        let addMemberReference (handle: MemberReferenceHandle) =
+            match memberRefMap.TryGetValue handle with
+            | true, rowId -> rowId
+            | _ ->
+                let row = metadataReader.GetMemberReference handle
+                let parent =
+                    match row.Parent.Kind with
+                    | HandleKind.TypeReference ->
+                        let parentRow = addTypeReference(TypeReferenceHandle.op_Explicit row.Parent)
+                        struct (HandleKind.TypeReference, parentRow)
+                    | HandleKind.TypeDefinition ->
+                        let parentRow = MetadataTokens.GetRowNumber row.Parent
+                        struct (HandleKind.TypeDefinition, parentRow)
+                    | HandleKind.ModuleReference ->
+                        let parentRow = MetadataTokens.GetRowNumber row.Parent
+                        struct (HandleKind.ModuleReference, parentRow)
+                    | HandleKind.MethodDefinition ->
+                        let parentRow = MetadataTokens.GetRowNumber row.Parent
+                        struct (HandleKind.MethodDefinition, parentRow)
+                    | HandleKind.TypeSpecification ->
+                        let parentRow = MetadataTokens.GetRowNumber row.Parent
+                        struct (HandleKind.TypeSpecification, parentRow)
+                    | _ -> struct (HandleKind.TypeReference, 0)
+
+                let rowId = memberReferenceRows.Count + 1
+                memberReferenceRows.Add(
+                    { RowId = rowId
+                      Parent = parent
+                      Name = metadataReader.GetString row.Name
+                      NameHandle = if row.Name.IsNil then None else Some row.Name
+                      Signature = getBlobBytes row.Signature
+                      SignatureHandle = if row.Signature.IsNil then None else Some row.Signature })
+                memberRefMap[handle] <- rowId
+                rowId
+
+        let isAsyncStateMachineAttribute (attribute: CustomAttribute) =
+            match attribute.Constructor.Kind with
+            | HandleKind.MemberReference ->
+                let memberRef = metadataReader.GetMemberReference(MemberReferenceHandle.op_Explicit attribute.Constructor)
+                match memberRef.Parent.Kind with
+                | HandleKind.TypeReference ->
+                    let typeRef = metadataReader.GetTypeReference(TypeReferenceHandle.op_Explicit memberRef.Parent)
+                    let name = metadataReader.GetString typeRef.Name
+                    let ns =
+                        if typeRef.Namespace.IsNil then
+                            ""
+                        else
+                            metadataReader.GetString typeRef.Namespace
+                    if shouldTraceMetadata () then
+                        printfn "[hotreload-metadata] attribute type parentKind=%A ns=%s name=%s" memberRef.Parent.Kind ns name
+                    name.EndsWith("StateMachineAttribute", StringComparison.OrdinalIgnoreCase)
+                | kind ->
+                    if shouldTraceMetadata () then
+                        printfn "[hotreload-metadata] attribute parent kind=%A not handled" kind
+                    false
+            | _ -> false
+
+        let customAttributeRows : CustomAttributeRowInfo list =
+            let tryFindAsyncAttribute () =
+                metadataReader.CustomAttributes
+                |> Seq.tryFind (fun handle ->
+                    let attribute = metadataReader.GetCustomAttribute handle
+                    match attribute.Parent.Kind with
+                    | HandleKind.MethodDefinition ->
+                        let parentToken = MetadataTokens.GetToken attribute.Parent
+                        let methodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle)
+
+                        if shouldTraceMetadata () then
+                            printfn
+                                "[hotreload-metadata] async attribute candidate parent=0x%08X target=0x%08X match=%b"
+                                parentToken
+                                methodToken
+                                (parentToken = methodToken)
+
+                        parentToken = methodToken
+                        && isAsyncStateMachineAttribute attribute
+                    | _ -> false)
+
+            let attributeOpt = tryFindAsyncAttribute ()
+
+            if shouldTraceMetadata () then
+                printfn "[hotreload-metadata] async attribute found=%b" (attributeOpt.IsSome)
+
+            match attributeOpt with
+            | Some attributeHandle ->
+                let attribute = metadataReader.GetCustomAttribute attributeHandle
+
+                let ctorKind, ctorRowId =
+                    match attribute.Constructor.Kind with
+                    | HandleKind.MemberReference ->
+                        let rowId =
+                            addMemberReference(MemberReferenceHandle.op_Explicit attribute.Constructor)
+                        HandleKind.MemberReference, rowId
+                    | kind ->
+                        kind, MetadataTokens.GetRowNumber attribute.Constructor
+
+                let valueBytes, valueHandle =
+                    if attribute.Value.IsNil then
+                        Array.empty<byte>, None
+                    else
+                        metadataReader.GetBlobBytes attribute.Value, Some attribute.Value
+
+                [ { RowId = 1
+                    Parent = struct (HandleKind.MethodDefinition, 1)
+                    Constructor = struct (ctorKind, ctorRowId)
+                    Value = valueBytes
+                    ValueHandle = valueHandle } ]
+            | None -> []
+
+        // Include IAsyncStateMachine references to align with Roslyn parity expectations.
+        let tryFindAssemblyReferenceByName name =
+            metadataReader.AssemblyReferences
+            |> Seq.tryFind (fun handle ->
+                let row = metadataReader.GetAssemblyReference handle
+                metadataReader.GetString row.Name = name)
+
+        metadataReader.TypeReferences
+        |> Seq.tryFind (fun handle ->
+            let _, segments, _ = buildTypeReferenceInfo handle
+            let segmentsRev = List.rev segments
+            match segmentsRev with
+            | [] -> false
+            | name :: namespaceParts ->
+                let namespaceName = String.Join(".", namespaceParts)
+                namespaceName = "System.Runtime.CompilerServices" && name = "IAsyncStateMachine")
+        |> function
+            | Some handle -> addTypeReference handle |> ignore
+            | None ->
+                match tryFindAssemblyReferenceByName "mscorlib" with
+                | Some asmHandle ->
+                    let asmRowId = addAssemblyReference asmHandle
+                    let rowId = typeReferenceRows.Count + 1
+                    typeReferenceRows.Add(
+                        { RowId = rowId
+                          ResolutionScope = struct (HandleKind.AssemblyReference, asmRowId)
+                          Name = "IAsyncStateMachine"
+                          NameHandle = None
+                          Namespace = "System.Runtime.CompilerServices"
+                          NamespaceHandle = None })
+                | None -> ()
+
         let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
 
-        DeltaWriter.emit
-            builder.MetadataBuilder
-            moduleName
-            None
-            (System.Guid.NewGuid())
-            (System.Guid.NewGuid())
-            (System.Guid.NewGuid())
-            methodDefinitionRows
-            [] // parameter rows
-            [] // property rows
-            [] // event rows
-            [] // property map rows
-            [] // event map rows
-            [] // method semantics rows
-            builder.StandaloneSignatures
-            []
-            updates
-            heapOffsets
-            (getRowCounts metadataReader)
+        let metadataDelta =
+            DeltaWriter.emitWithReferences
+                builder.MetadataBuilder
+                moduleName
+                None
+                (System.Guid.NewGuid())
+                (System.Guid.NewGuid())
+                (System.Guid.NewGuid())
+                methodDefinitionRows
+                [] // parameter rows
+                (typeReferenceRows |> Seq.toList)
+                (memberReferenceRows |> Seq.toList)
+                (assemblyReferenceRows |> Seq.toList)
+                [] // property rows
+                [] // event rows
+                [] // property map rows
+                [] // event map rows
+                [] // method semantics rows
+                builder.StandaloneSignatures
+                customAttributeRows
+                []
+                updates
+                heapOffsets
+                (getRowCounts metadataReader)
+
+        if shouldTraceMetadata () then
+            printfn
+                "[hotreload-metadata] async table counts typeRef=%d memberRef=%d assemblyRef=%d customAttr=%d"
+                metadataDelta.TableRowCounts.[int TableIndex.TypeRef]
+                metadataDelta.TableRowCounts.[int TableIndex.MemberRef]
+                metadataDelta.TableRowCounts.[int TableIndex.AssemblyRef]
+                metadataDelta.TableRowCounts.[int TableIndex.CustomAttribute]
+
+        metadataDelta
 
     let emitAsyncDeltaArtifacts (messageLiteral: string option) () : MetadataDeltaArtifacts =
         let moduleDef = createAsyncModule messageLiteral ()
@@ -1003,7 +1279,7 @@ module internal MetadataDeltaTestHelpers =
         let baselineHeapSizes = getHeapSizes metadataReader
         let builder = IlDeltaStreamBuilder None
         let heapOffsets = computeHeapOffsets metadataReader
-        let metadataDelta = emitAsyncDeltaCore metadataReader builder heapOffsets
+        let metadataDelta = emitAsyncDeltaCore metadataReader peReader builder heapOffsets
 
         assertTableStreamMatches metadataDelta
 
@@ -1014,8 +1290,9 @@ module internal MetadataDeltaTestHelpers =
     let private emitAsyncDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) =
         use peReader = new PEReader(new MemoryStream(baselineBytes, false))
         let metadataReader = peReader.GetMetadataReader()
-        let builder = IlDeltaStreamBuilder None
-        emitAsyncDeltaCore metadataReader builder heapOffsets
+        let metadataSnapshot = metadataSnapshotFromReader metadataReader
+        let builder = IlDeltaStreamBuilder(Some metadataSnapshot)
+        emitAsyncDeltaCore metadataReader peReader builder heapOffsets
 
     let emitAsyncMultiGenerationArtifacts () : MultiGenerationMetadataArtifacts =
         let generation1 = emitAsyncDeltaArtifacts None ()

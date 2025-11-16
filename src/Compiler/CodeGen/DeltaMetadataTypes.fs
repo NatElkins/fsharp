@@ -38,22 +38,37 @@ type TypeReferenceRowInfo =
     { RowId: int
       ResolutionScope: struct (HandleKind * int)
       Name: string
-      Namespace: string }
+      NameHandle: StringHandle option
+      Namespace: string
+      NamespaceHandle: StringHandle option }
 
 type MemberReferenceRowInfo =
     { RowId: int
       Parent: struct (HandleKind * int)
       Name: string
-      Signature: byte[] }
+      NameHandle: StringHandle option
+      Signature: byte[]
+      SignatureHandle: BlobHandle option }
 
 type AssemblyReferenceRowInfo =
     { RowId: int
       Version: Version
       Flags: AssemblyFlags
       PublicKeyOrToken: byte[]
+      PublicKeyOrTokenHandle: BlobHandle option
       Name: string
+      NameHandle: StringHandle option
       Culture: string option
-      HashValue: byte[] }
+      CultureHandle: StringHandle option
+      HashValue: byte[]
+      HashValueHandle: BlobHandle option }
+
+type CustomAttributeRowInfo =
+    { RowId: int
+      Parent: struct (HandleKind * int)
+      Constructor: struct (HandleKind * int)
+      Value: byte[]
+      ValueHandle: BlobHandle option }
 
 type PropertyDefinitionRowInfo =
     { Key: PropertyDefinitionKey
@@ -104,6 +119,7 @@ type TableRows =
       MemberRef: RowElementData[][]
       AssemblyRef: RowElementData[][]
       StandAloneSig: RowElementData[][]
+      CustomAttribute: RowElementData[][]
       Property: RowElementData[][]
       Event: RowElementData[][]
       PropertyMap: RowElementData[][]

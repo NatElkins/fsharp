@@ -106,6 +106,7 @@ let emitWithUserStrings
     (eventMapRows: EventMapRowInfo list)
     (methodSemanticsRows: MethodSemanticsMetadataUpdate list)
     (standaloneSignatureRows: StandaloneSignatureUpdate list)
+    (customAttributeRows: CustomAttributeRowInfo list)
     (userStringUpdates: (int * int * string) list)
     (updates: MethodMetadataUpdate list)
     (heapOffsets: MetadataHeapOffsets)
@@ -155,6 +156,7 @@ let emitWithUserStrings
         let methodUpdateCount = methodDefinitionRows |> List.length
         let parameterUpdateCount = parameterDefinitionRows |> List.length
         let standaloneSigCount = standaloneSignatureRows |> List.length
+        let customAttributeCount = customAttributeRows |> List.length
         let typeRefCount = typeReferenceRows |> List.length
         let memberRefCount = memberReferenceRows |> List.length
         let assemblyRefCount = assemblyReferenceRows |> List.length
@@ -178,7 +180,7 @@ let emitWithUserStrings
             metadataBuilder.SetCapacity(TableIndex.InterfaceImpl, 0)
             metadataBuilder.SetCapacity(TableIndex.MemberRef, memberRefCount)
             metadataBuilder.SetCapacity(TableIndex.Constant, 0)
-            metadataBuilder.SetCapacity(TableIndex.CustomAttribute, 0)
+            metadataBuilder.SetCapacity(TableIndex.CustomAttribute, customAttributeCount)
             metadataBuilder.SetCapacity(TableIndex.FieldMarshal, 0)
             metadataBuilder.SetCapacity(TableIndex.DeclSecurity, 0)
             metadataBuilder.SetCapacity(TableIndex.ClassLayout, 0)
@@ -195,8 +197,7 @@ let emitWithUserStrings
             metadataBuilder.SetCapacity(TableIndex.ImplMap, 0)
             metadataBuilder.SetCapacity(TableIndex.FieldRva, 0)
         let encEntryCount =
-            1
-            + methodUpdateCount
+            methodUpdateCount
             + parameterUpdateCount
             + standaloneSigCount
             + typeRefCount
@@ -207,6 +208,7 @@ let emitWithUserStrings
             + propertyMapLogCount
             + eventMapLogCount
             + methodSemanticsUpdateCount
+            + customAttributeCount
         metadataBuilder.SetCapacity(TableIndex.EncLog, encEntryCount)
         metadataBuilder.SetCapacity(TableIndex.EncMap, encEntryCount)
         metadataBuilder.SetCapacity(TableIndex.Assembly, 0)
@@ -234,7 +236,7 @@ let emitWithUserStrings
         let mvidHandle = metadataBuilder.GetOrAddGuid(moduleId)
         let encIdHandle = metadataBuilder.GetOrAddGuid(encId)
         let encBaseHandle = metadataBuilder.GetOrAddGuid(encBaseId)
-        let moduleHandle = metadataBuilder.AddModule(0, moduleNameHandleOrAdded, mvidHandle, encIdHandle, encBaseHandle)
+        let _ = metadataBuilder.AddModule(0, moduleNameHandleOrAdded, mvidHandle, encIdHandle, encBaseHandle)
         let tableMirror = DeltaMetadataTables(heapOffsets)
         tableMirror.AddModuleRow(moduleName, moduleNameTokenOpt, moduleId, encId, encBaseId)
 
@@ -266,12 +268,6 @@ let emitWithUserStrings
         let mutable encLog = ResizeArray()
         let mutable encMap = ResizeArray()
 
-        metadataBuilder.AddEncLogEntry(moduleHandle, EditAndContinueOperation.Default) |> ignore
-        metadataBuilder.AddEncMapEntry(moduleHandle) |> ignore
-        let moduleRowId = MetadataTokens.GetRowNumber moduleHandle
-        encLog.Add(struct (TableIndex.Module, moduleRowId, EditAndContinueOperation.Default))
-        encMap.Add(struct (TableIndex.Module, moduleRowId))
-
         for row in methodDefinitionRows do
             match updatesByKey.TryGetValue row.Key with
             | true, update ->
@@ -298,10 +294,7 @@ let emitWithUserStrings
                         row.RowId
                         row.IsAdded
 
-                let methodHandle = MetadataTokens.MethodDefinitionHandle row.RowId
                 let operation = if row.IsAdded then EditAndContinueOperation.AddMethod else EditAndContinueOperation.Default
-                metadataBuilder.AddEncLogEntry(methodHandle, operation) |> ignore
-                metadataBuilder.AddEncMapEntry(methodHandle) |> ignore
                 encLog.Add(struct (TableIndex.MethodDef, row.RowId, operation))
                 encMap.Add(struct (TableIndex.MethodDef, row.RowId))
             | _ ->
@@ -317,10 +310,7 @@ let emitWithUserStrings
                 metadataBuilder.AddParameter(row.Attributes, nameHandle, row.SequenceNumber) |> ignore
             tableMirror.AddParameterRow row
 
-            let parameterHandle = MetadataTokens.ParameterHandle row.RowId
             let operation = if row.IsAdded then EditAndContinueOperation.AddParameter else EditAndContinueOperation.Default
-            metadataBuilder.AddEncLogEntry(parameterHandle, operation) |> ignore
-            metadataBuilder.AddEncMapEntry(parameterHandle) |> ignore
             encLog.Add(struct (TableIndex.Param, row.RowId, operation))
             encMap.Add(struct (TableIndex.Param, row.RowId))
 
@@ -336,9 +326,6 @@ let emitWithUserStrings
                 metadataBuilder.AddTypeReference(scopeHandle, namespaceHandle, nameHandle) |> ignore
             tableMirror.AddTypeReferenceRow row
 
-            let handle = entityHandleFromTable TableIndex.TypeRef row.RowId
-            metadataBuilder.AddEncLogEntry(handle, EditAndContinueOperation.Default) |> ignore
-            metadataBuilder.AddEncMapEntry(handle) |> ignore
             encLog.Add(struct (TableIndex.TypeRef, row.RowId, EditAndContinueOperation.Default))
             encMap.Add(struct (TableIndex.TypeRef, row.RowId))
 
@@ -354,9 +341,6 @@ let emitWithUserStrings
                 metadataBuilder.AddMemberReference(parentHandle, nameHandle, signatureHandle) |> ignore
             tableMirror.AddMemberReferenceRow row
 
-            let handle = entityHandleFromTable TableIndex.MemberRef row.RowId
-            metadataBuilder.AddEncLogEntry(handle, EditAndContinueOperation.Default) |> ignore
-            metadataBuilder.AddEncMapEntry(handle) |> ignore
             encLog.Add(struct (TableIndex.MemberRef, row.RowId, EditAndContinueOperation.Default))
             encMap.Add(struct (TableIndex.MemberRef, row.RowId))
 
@@ -381,9 +365,6 @@ let emitWithUserStrings
                 |> ignore
             tableMirror.AddAssemblyReferenceRow row
 
-            let handle = entityHandleFromTable TableIndex.AssemblyRef row.RowId
-            metadataBuilder.AddEncLogEntry(handle, EditAndContinueOperation.Default) |> ignore
-            metadataBuilder.AddEncMapEntry(handle) |> ignore
             encLog.Add(struct (TableIndex.AssemblyRef, row.RowId, EditAndContinueOperation.Default))
             encMap.Add(struct (TableIndex.AssemblyRef, row.RowId))
 
@@ -392,10 +373,47 @@ let emitWithUserStrings
             tableMirror.AddStandaloneSignatureRow(signature.Blob)
 
             let operation = EditAndContinueOperation.Default
-            metadataBuilder.AddEncLogEntry(signature.Handle, operation) |> ignore
-            metadataBuilder.AddEncMapEntry(signature.Handle) |> ignore
             encLog.Add(struct (TableIndex.StandAloneSig, rowId, operation))
             encMap.Add(struct (TableIndex.StandAloneSig, rowId))
+
+        let entityHandleOf kind rowId =
+            match kind with
+            | HandleKind.MethodDefinition -> entityHandleFromTable TableIndex.MethodDef rowId
+            | HandleKind.PropertyDefinition -> entityHandleFromTable TableIndex.Property rowId
+            | HandleKind.EventDefinition -> entityHandleFromTable TableIndex.Event rowId
+            | HandleKind.MemberReference -> entityHandleFromTable TableIndex.MemberRef rowId
+            | HandleKind.TypeReference -> entityHandleFromTable TableIndex.TypeRef rowId
+            | HandleKind.TypeDefinition -> entityHandleFromTable TableIndex.TypeDef rowId
+            | HandleKind.TypeSpecification -> entityHandleFromTable TableIndex.TypeSpec rowId
+            | HandleKind.FieldDefinition -> entityHandleFromTable TableIndex.Field rowId
+            | HandleKind.Parameter -> entityHandleFromTable TableIndex.Param rowId
+            | HandleKind.ModuleDefinition -> entityHandleFromTable TableIndex.Module rowId
+            | HandleKind.StandaloneSignature -> entityHandleFromTable TableIndex.StandAloneSig rowId
+            | HandleKind.InterfaceImplementation -> entityHandleFromTable TableIndex.InterfaceImpl rowId
+            | HandleKind.ModuleReference -> entityHandleFromTable TableIndex.ModuleRef rowId
+            | HandleKind.AssemblyDefinition -> entityHandleFromTable TableIndex.Assembly rowId
+            | HandleKind.GenericParameter -> entityHandleFromTable TableIndex.GenericParam rowId
+            | HandleKind.GenericParameterConstraint -> entityHandleFromTable TableIndex.GenericParamConstraint rowId
+            | HandleKind.MethodSpecification -> entityHandleFromTable TableIndex.MethodSpec rowId
+            | _ -> invalidArg (nameof kind) "Unsupported custom attribute reference"
+
+        for row in customAttributeRows do
+            tableMirror.AddCustomAttributeRow row
+
+            let parentHandle =
+                let struct (kind, rowId) = row.Parent
+                entityHandleOf kind rowId
+
+            let ctorHandle =
+                let struct (kind, rowId) = row.Constructor
+                entityHandleOf kind rowId
+
+            if emitSrmTables then
+                let blobHandle = metadataBuilder.GetOrAddBlob row.Value
+                metadataBuilder.AddCustomAttribute(parentHandle, ctorHandle, blobHandle) |> ignore
+
+            encLog.Add(struct (TableIndex.CustomAttribute, row.RowId, EditAndContinueOperation.Default))
+            encMap.Add(struct (TableIndex.CustomAttribute, row.RowId))
 
         for row in propertyDefinitionRows do
             if row.IsAdded then
@@ -405,9 +423,6 @@ let emitWithUserStrings
                     metadataBuilder.AddProperty(row.Attributes, nameHandle, signatureHandle) |> ignore
                 tableMirror.AddPropertyRow row
 
-                let propertyHandle = MetadataTokens.PropertyDefinitionHandle row.RowId
-                metadataBuilder.AddEncLogEntry(propertyHandle, EditAndContinueOperation.AddProperty) |> ignore
-                metadataBuilder.AddEncMapEntry(propertyHandle) |> ignore
                 encLog.Add(struct (TableIndex.Property, row.RowId, EditAndContinueOperation.AddProperty))
                 encMap.Add(struct (TableIndex.Property, row.RowId))
 
@@ -419,15 +434,11 @@ let emitWithUserStrings
                     metadataBuilder.AddEvent(row.Attributes, nameHandle, typeHandle) |> ignore
                 tableMirror.AddEventRow row
 
-                let eventHandle = MetadataTokens.EventDefinitionHandle row.RowId
-                metadataBuilder.AddEncLogEntry(eventHandle, EditAndContinueOperation.AddEvent) |> ignore
-                metadataBuilder.AddEncMapEntry(eventHandle) |> ignore
                 encLog.Add(struct (TableIndex.Event, row.RowId, EditAndContinueOperation.AddEvent))
                 encMap.Add(struct (TableIndex.Event, row.RowId))
 
         for row in propertyMapRows do
             if row.IsAdded then
-                let handle = MetadataTokens.EntityHandle(TableIndex.PropertyMap, row.RowId)
                 if emitSrmTables then
                     let parentHandle = MetadataTokens.TypeDefinitionHandle row.TypeDefRowId
                     let propertyListHandle =
@@ -436,15 +447,12 @@ let emitWithUserStrings
                         | None -> invalidOp "Property map rows marked as added require a property list pointer."
                     metadataBuilder.AddPropertyMap(parentHandle, propertyListHandle) |> ignore
 
-                metadataBuilder.AddEncLogEntry(handle, EditAndContinueOperation.AddProperty) |> ignore
-                metadataBuilder.AddEncMapEntry(handle) |> ignore
                 encLog.Add(struct (TableIndex.PropertyMap, row.RowId, EditAndContinueOperation.AddProperty))
                 encMap.Add(struct (TableIndex.PropertyMap, row.RowId))
                 tableMirror.AddPropertyMapRow row
 
         for row in eventMapRows do
             if row.IsAdded then
-                let handle = MetadataTokens.EntityHandle(TableIndex.EventMap, row.RowId)
                 if emitSrmTables then
                     let parentHandle = MetadataTokens.TypeDefinitionHandle row.TypeDefRowId
                     let eventListHandle =
@@ -453,8 +461,6 @@ let emitWithUserStrings
                         | None -> invalidOp "Event map rows marked as added require an event list pointer."
                     metadataBuilder.AddEventMap(parentHandle, eventListHandle) |> ignore
 
-                metadataBuilder.AddEncLogEntry(handle, EditAndContinueOperation.AddEvent) |> ignore
-                metadataBuilder.AddEncMapEntry(handle) |> ignore
                 encLog.Add(struct (TableIndex.EventMap, row.RowId, EditAndContinueOperation.AddEvent))
                 encMap.Add(struct (TableIndex.EventMap, row.RowId))
                 tableMirror.AddEventMapRow row
@@ -466,16 +472,11 @@ let emitWithUserStrings
                 metadataBuilder.AddMethodSemantics(row.Association, row.Attributes, methodHandle) |> ignore
                 tableMirror.AddMethodSemanticsRow row
 
-                let semanticsHandle =
-                    MetadataTokens.Handle(TableIndex.MethodSemantics, row.RowId)
-                    |> EntityHandle.op_Explicit
-                metadataBuilder.AddEncLogEntry(semanticsHandle, EditAndContinueOperation.AddMethod) |> ignore
-                metadataBuilder.AddEncMapEntry(semanticsHandle) |> ignore
                 encLog.Add(struct (TableIndex.MethodSemantics, row.RowId, EditAndContinueOperation.AddMethod))
                 encMap.Add(struct (TableIndex.MethodSemantics, row.RowId))
 
-        for originalToken, _, literal in userStringUpdates do
-            let offset = originalToken &&& 0x00FFFFFF
+        for _, newToken, literal in userStringUpdates do
+            let offset = newToken &&& 0x00FFFFFF
             tableMirror.AddUserStringLiteral(offset, literal)
 
         let debugRows =
@@ -488,6 +489,10 @@ let emitWithUserStrings
                 [ TableIndex.Module
                   TableIndex.MethodDef
                   TableIndex.Param
+                  TableIndex.TypeRef
+                  TableIndex.MemberRef
+                  TableIndex.AssemblyRef
+                  TableIndex.CustomAttribute
                   TableIndex.StandAloneSig
                   TableIndex.Property
                   TableIndex.Event
@@ -508,10 +513,56 @@ let emitWithUserStrings
                 |> String.concat ", "
             failwithf "Unexpected rows in delta metadata: %s" details
 
-        for struct (tableIndex, rowId, operation) in encLog do
+        let encLogEntries =
+            let snapshot = encLog |> Seq.toArray
+            let orderedTables =
+                [| TableIndex.Module
+                   TableIndex.MethodDef
+                   TableIndex.Param
+                   TableIndex.TypeRef
+                   TableIndex.MemberRef
+                   TableIndex.AssemblyRef
+                   TableIndex.StandAloneSig
+                   TableIndex.CustomAttribute
+                   TableIndex.Property
+                   TableIndex.Event
+                   TableIndex.PropertyMap
+                   TableIndex.EventMap
+                   TableIndex.MethodSemantics |]
+
+            let orderedTableSet = orderedTables |> Set.ofArray
+            let builder = ResizeArray()
+
+            let appendEntries tableIndex =
+                snapshot
+                |> Array.filter (fun struct (table, _, _) -> table = tableIndex)
+                |> Array.sortBy (fun struct (_, rowId, _) -> rowId)
+                |> Array.iter builder.Add
+
+            orderedTables |> Array.iter appendEntries
+
+            snapshot
+            |> Array.filter (fun struct (table, _, _) -> not (orderedTableSet.Contains table))
+            |> Array.sortBy (fun struct (tableIndex, rowId, _) ->
+                ((int tableIndex) <<< 24) ||| (rowId &&& 0x00FFFFFF))
+            |> Array.iter builder.Add
+
+            builder.ToArray()
+
+        let encMapEntries =
+            encMap
+            |> Seq.sortBy (fun struct (tableIndex, rowId) ->
+                ((int tableIndex) <<< 24) ||| (rowId &&& 0x00FFFFFF))
+            |> Seq.toArray
+
+        for struct (tableIndex, rowId, operation) in encLogEntries do
+            let handle = MetadataTokens.Handle(tableIndex, rowId)
+            metadataBuilder.AddEncLogEntry(handle, operation) |> ignore
             tableMirror.AddEncLogRow(tableIndex, rowId, operation)
 
-        for struct (tableIndex, rowId) in encMap do
+        for struct (tableIndex, rowId) in encMapEntries do
+            let handle = MetadataTokens.Handle(tableIndex, rowId)
+            metadataBuilder.AddEncMapEntry(handle) |> ignore
             tableMirror.AddEncMapRow(tableIndex, rowId)
 
         let metadataSizes = DeltaMetadataSerializer.computeMetadataSizes tableMirror normalizedExternalRowCounts
@@ -563,8 +614,8 @@ let emitWithUserStrings
           StringHeap = heapStreams.Strings
           BlobHeap = heapStreams.Blobs
           GuidHeap = heapStreams.Guids
-          EncLog = encLog |> Seq.toArray |> Array.map (fun struct (a, b, c) -> (a, b, c))
-          EncMap = encMap |> Seq.toArray |> Array.map (fun struct (a, b) -> (a, b))
+          EncLog = encLogEntries |> Array.map (fun struct (a, b, c) -> (a, b, c))
+          EncMap = encMapEntries |> Array.map (fun struct (a, b) -> (a, b))
           TableRowCounts = tableRowCounts
           HeapSizes = heapSizes
           HeapOffsets = heapOffsets
@@ -591,6 +642,7 @@ let emitWithReferences
     (eventMapRows: EventMapRowInfo list)
     (methodSemanticsRows: MethodSemanticsMetadataUpdate list)
     (standaloneSignatureRows: StandaloneSignatureUpdate list)
+    (customAttributeRows: CustomAttributeRowInfo list)
     (userStringUpdates: (int * int * string) list)
     (updates: MethodMetadataUpdate list)
     (heapOffsets: MetadataHeapOffsets)
@@ -614,6 +666,7 @@ let emitWithReferences
         eventMapRows
         methodSemanticsRows
         standaloneSignatureRows
+        customAttributeRows
         userStringUpdates
         updates
         heapOffsets
@@ -634,6 +687,7 @@ let emit
     (eventMapRows: EventMapRowInfo list)
     (methodSemanticsRows: MethodSemanticsMetadataUpdate list)
     (standaloneSignatureRows: StandaloneSignatureUpdate list)
+    (customAttributeRows: CustomAttributeRowInfo list)
     (updates: MethodMetadataUpdate list)
     (heapOffsets: MetadataHeapOffsets)
     (externalRowCounts: int[])
@@ -656,6 +710,7 @@ let emit
         eventMapRows
         methodSemanticsRows
         standaloneSignatureRows
+        customAttributeRows
         ([] : (int * int * string) list)
         updates
         heapOffsets
