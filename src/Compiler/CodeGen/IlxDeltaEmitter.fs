@@ -711,17 +711,15 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     | _ -> struct (HandleKind.ModuleDefinition, 1)
             let name = if row.Name.IsNil then "" else metadataReader.GetString row.Name
             let namespaceName = if row.Namespace.IsNil then "" else metadataReader.GetString row.Namespace
-            let nameHandle = if row.Name.IsNil then None else Some row.Name
-            let namespaceHandle = if row.Namespace.IsNil then None else Some row.Namespace
             let nextRowId = nextTypeRefRowId + 1
             nextTypeRefRowId <- nextRowId
             typeReferenceRows.Add(
                 { RowId = nextRowId
                   ResolutionScope = resolutionScope
                   Name = name
-                  NameHandle = nameHandle
+                  NameHandle = None
                   Namespace = namespaceName
-                  NamespaceHandle = namespaceHandle })
+                  NamespaceHandle = None })
             let deltaToken = 0x01000000 ||| nextRowId
             typeRefTokenMap[token] <- deltaToken
             deltaToken
@@ -756,17 +754,15 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 else
                     metadataReader.GetBlobBytes row.Signature
             let name = metadataReader.GetString row.Name
-            let nameHandle = if row.Name.IsNil then None else Some row.Name
-            let signatureHandle = if row.Signature.IsNil then None else Some row.Signature
             let nextRowId = nextMemberRefRowId + 1
             nextMemberRefRowId <- nextRowId
             memberReferenceRows.Add(
                 { RowId = nextRowId
                   Parent = parentInfo
                   Name = name
-                  NameHandle = nameHandle
+                  NameHandle = None
                   Signature = signature
-                  SignatureHandle = signatureHandle })
+                  SignatureHandle = None })
             let deltaToken = 0x0A000000 ||| nextRowId
             memberRefTokenMap[token] <- deltaToken
             deltaToken
@@ -967,8 +963,34 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let baselineMethodHandles = request.Baseline.MetadataHandles.MethodHandles
     let baselineParameterHandles = request.Baseline.MetadataHandles.ParameterHandles
+    let baselineParametersByMethod =
+        let dict = Dictionary<MethodDefinitionKey, (ParameterDefinitionKey * ParameterDefinitionMetadataHandles) list>(HashIdentity.Structural)
+        for KeyValue(paramKey, info) in baselineParameterHandles do
+            let methodKey = paramKey.Method
+            let existing =
+                match dict.TryGetValue methodKey with
+                | true, entries -> entries
+                | _ -> []
+            dict[methodKey] <- (paramKey, info) :: existing
+        dict
+    if traceMethodUpdates.Value then
+        for KeyValue(methodKey, entries) in baselineParametersByMethod do
+            printfn "[fsharp-hotreload][param-baseline] method=%s::%s entries=%d" methodKey.DeclaringType methodKey.Name (List.length entries)
     let baselinePropertyHandles = request.Baseline.MetadataHandles.PropertyHandles
     let baselineEventHandles = request.Baseline.MetadataHandles.EventHandles
+    let firstParamRowByMethod = Dictionary<MethodDefinitionKey, int>(HashIdentity.Structural)
+
+    let addSyntheticParameter key sequence attrs =
+        let paramKey =
+            { ParameterDefinitionKey.Method = key
+              SequenceNumber = sequence }
+        if not (parameterRowLookup.ContainsKey paramKey) then
+            let rowId = parameterDefinitionIndex.Add paramKey
+            parameterRowLookup[paramKey] <- rowId
+            syntheticParameterInfo[paramKey] <- attrs
+            rowId
+        else
+            parameterRowLookup[paramKey]
 
     let enqueueParameters key methodHandle =
         let methodDef = metadataReader.GetMethodDefinition methodHandle
@@ -995,13 +1017,21 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     parameterHandleLookup[paramKey] <- parameterHandle
                     parameterDefinitionIndex.AddExisting paramKey
         if not sawParameter then
-            let paramKey =
-                { ParameterDefinitionKey.Method = key
-                  SequenceNumber = 0 }
-            if not (parameterRowLookup.ContainsKey paramKey) then
-                let rowId = parameterDefinitionIndex.Add paramKey
-                parameterRowLookup[paramKey] <- rowId
-                syntheticParameterInfo[paramKey] <- ParameterAttributes.None
+            match baselineParametersByMethod.TryGetValue key with
+            | true, entries when not (List.isEmpty entries) ->
+                if traceMethodUpdates.Value then
+                    printfn "[fsharp-hotreload][param-fallback] method=%s::%s entries=%d" key.DeclaringType key.Name (List.length entries)
+                for (paramKey, info) in entries do
+                    if not (parameterRowLookup.ContainsKey paramKey) then
+                        match info.RowId with
+                        | Some rowId when rowId > 0 ->
+                            parameterRowLookup[paramKey] <- rowId
+                            parameterDefinitionIndex.AddExisting paramKey
+                        | _ ->
+                            let syntheticRow = addSyntheticParameter key paramKey.SequenceNumber ParameterAttributes.None
+                            if traceMethodUpdates.Value then
+                                printfn "[fsharp-hotreload][param-fallback] synthesized baseline entry method=%s::%s seq=%d row=%d" key.DeclaringType key.Name paramKey.SequenceNumber syntheticRow
+            | _ -> ()
 
     orderedMethodInputs
     |> List.iter (fun struct (key, _, methodHandle, _, _) -> enqueueParameters key methodHandle)
@@ -1084,8 +1114,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     if List.isEmpty methodUpdateInputs && List.isEmpty updatedTypeTokens then
         emptyDelta
     else
-        let metadataBuilder = builder.MetadataBuilder
-
         let methodUpdatesWithDefs =
             orderedMethodInputs
             |> List.map (fun struct (key, methodToken, methodHandle, methodDef, body) ->
@@ -1125,8 +1153,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 dict[update.MethodKey] <-
                     struct (methodDef.Attributes, methodDef.ImplAttributes, name, signature, nameHandle, signatureHandle)
             dict
-
-        let firstParamRowByMethod = Dictionary<MethodDefinitionKey, int>(HashIdentity.Structural)
 
         let parameterDefinitionRowsSnapshot =
             parameterDefinitionIndex.Rows
@@ -1493,6 +1519,180 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         let customAttributeRowList : CustomAttributeRowInfo list =
             let rows = ResizeArray<CustomAttributeRowInfo>()
             let mutable nextRowId = baselineTableRowCounts.[int TableIndex.CustomAttribute]
+            let methodRowIdToKey = Dictionary<int, MethodDefinitionKey>(HashIdentity.Structural)
+            for struct (rowId, key, _) in methodDefinitionIndex.Rows do
+                methodRowIdToKey[rowId] <- key
+
+            let methodsWithCustomAttribute = HashSet<MethodDefinitionKey>(HashIdentity.Structural)
+
+            let rec getFullTypeName (handle: TypeDefinitionHandle) =
+                let def = metadataReader.GetTypeDefinition handle
+                let name = metadataReader.GetString def.Name
+                let ns =
+                    if def.Namespace.IsNil then
+                        ""
+                    else
+                        metadataReader.GetString def.Namespace
+                let declaring = def.GetDeclaringType()
+                if declaring.IsNil then
+                    if String.IsNullOrEmpty ns then
+                        name
+                    else
+                        ns + "." + name
+                else
+                    getFullTypeName declaring + "+" + name
+
+            let tryFindTypeDefinition fullName =
+                metadataReader.TypeDefinitions
+                |> Seq.tryPick (fun handle ->
+                    let def = metadataReader.GetTypeDefinition handle
+                    let name = metadataReader.GetString def.Name
+                    let ns =
+                        if def.Namespace.IsNil then
+                            ""
+                        else
+                            metadataReader.GetString def.Namespace
+                    let decl =
+                        if String.IsNullOrEmpty ns then
+                            name
+                        else
+                            ns + "." + name
+                    if String.Equals(decl, fullName, StringComparison.Ordinal) then
+                        Some handle
+                    else
+                        None)
+
+            let tryFindStateMachineType (methodKey: MethodDefinitionKey) =
+                match tryFindTypeDefinition methodKey.DeclaringType with
+                | None -> ValueNone
+                | Some parentHandle ->
+                    let parentDef = metadataReader.GetTypeDefinition parentHandle
+                    let nestedTypes = parentDef.GetNestedTypes()
+                    let prefix = methodKey.Name + "@hotreload"
+                    let matches =
+                        nestedTypes
+                        |> Seq.choose (fun nested ->
+                            let nestedDef = metadataReader.GetTypeDefinition nested
+                            let name = metadataReader.GetString nestedDef.Name
+                            if name.StartsWith(prefix, StringComparison.Ordinal) then
+                                Some(name, nested)
+                            else
+                                None)
+                        |> Seq.toArray
+
+                    if matches.Length = 0 then
+                        ValueNone
+                    else
+                        matches
+                        |> Array.tryFind (fun (name, _) -> String.Equals(name, prefix, StringComparison.Ordinal))
+                        |> Option.orElseWith (fun () -> matches |> Array.tryHead)
+                        |> Option.map snd
+                        |> ValueOption.ofOption
+
+            let findAssemblyReferenceRow scopeName =
+                metadataReader.AssemblyReferences
+                |> Seq.tryPick (fun handle ->
+                    let reference = metadataReader.GetAssemblyReference handle
+                    let name = metadataReader.GetString reference.Name
+                    if String.Equals(name, scopeName, StringComparison.OrdinalIgnoreCase) then
+                        let token = MetadataTokens.GetToken(EntityHandle.op_Implicit handle)
+                        let remapped = remapAssemblyRefToken token
+                        let rowId = remapped &&& 0x00FFFFFF
+                        Some(struct (HandleKind.AssemblyReference, rowId))
+                    else
+                        None)
+
+            let tryGetAssemblyScope () =
+                match findAssemblyReferenceRow "System.Runtime" with
+                | Some scope -> Some scope
+                | None -> findAssemblyReferenceRow "mscorlib"
+
+            let tryFindSystemTypeRef () =
+                metadataReader.TypeReferences
+                |> Seq.tryPick (fun handle ->
+                    let typeRef = metadataReader.GetTypeReference handle
+                    let name = metadataReader.GetString typeRef.Name
+                    let ns =
+                        if typeRef.Namespace.IsNil then
+                            ""
+                        else
+                            metadataReader.GetString typeRef.Namespace
+                    if String.Equals(name, "Type", StringComparison.Ordinal)
+                       && String.Equals(ns, "System", StringComparison.Ordinal) then
+                        Some handle
+                    else
+                        None)
+
+            let mutable asyncAttributeTypeRefToken : int option = None
+            let mutable asyncAttributeCtorToken : int option = None
+
+            let ensureAsyncAttributeTypeRef () =
+                match asyncAttributeTypeRefToken with
+                | Some token -> token
+                | None ->
+                    let scope =
+                        match tryGetAssemblyScope () with
+                        | Some value -> value
+                        | None -> failwith "Unable to locate System.Runtime/mscorlib assembly reference for AsyncStateMachineAttribute."
+                    let nextRowId = nextTypeRefRowId + 1
+                    nextTypeRefRowId <- nextRowId
+                    typeReferenceRows.Add(
+                        { RowId = nextRowId
+                          ResolutionScope = scope
+                          Name = "AsyncStateMachineAttribute"
+                          NameHandle = None
+                          Namespace = "System.Runtime.CompilerServices"
+                          NamespaceHandle = None })
+                    let token = 0x01000000 ||| nextRowId
+                    asyncAttributeTypeRefToken <- Some token
+                    token
+
+            let ensureAsyncAttributeCtor () =
+                match asyncAttributeCtorToken with
+                | Some token -> token
+                | None ->
+                    let attrTypeToken = ensureAsyncAttributeTypeRef ()
+                    let systemTypeRefHandle =
+                        match tryFindSystemTypeRef () with
+                        | Some handle -> handle
+                        | None -> failwith "Unable to locate System.Type type reference."
+
+                    let signatureBytes =
+                        let blob = BlobBuilder()
+                        let instanceHeader =
+                            (int SignatureCallingConvention.Default)
+                            ||| (int SignatureAttributes.Instance)
+                            |> byte
+                        blob.WriteByte(instanceHeader)
+                        blob.WriteCompressedInteger 1
+                        blob.WriteByte(LanguagePrimitives.EnumToValue SignatureTypeCode.Void)
+                        blob.WriteByte(0x12uy)
+                        let typeRefEntity : EntityHandle = TypeReferenceHandle.op_Implicit systemTypeRefHandle
+                        let codedIndex = CodedIndex.TypeDefOrRef typeRefEntity
+                        blob.WriteCompressedInteger codedIndex
+                        blob.ToArray()
+
+                    let parentRowId = attrTypeToken &&& 0x00FFFFFF
+                    let nextRowId = nextMemberRefRowId + 1
+                    nextMemberRefRowId <- nextRowId
+                    memberReferenceRows.Add(
+                        { RowId = nextRowId
+                          Parent = struct (HandleKind.TypeReference, parentRowId)
+                          Name = ".ctor"
+                          NameHandle = None
+                          Signature = signatureBytes
+                          SignatureHandle = None })
+
+                    let token = 0x0A000000 ||| nextRowId
+                    asyncAttributeCtorToken <- Some token
+                    token
+
+            let encodeAsyncAttributeValue (stateMachineFullName: string) =
+                let blob = BlobBuilder()
+                blob.WriteUInt16(0x0001us)
+                blob.WriteSerializedString(stateMachineFullName)
+                blob.WriteUInt16(0us)
+                blob.ToArray()
 
             let isAsyncStateMachineAttribute (attribute: CustomAttribute) =
                 match attribute.Constructor.Kind with
@@ -1508,27 +1708,54 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     | _ -> false
                 | _ -> false
 
-            for struct (key, _, _, methodDef, _) in methodUpdateInputs do
+            for struct (key: MethodDefinitionKey, _, _, methodDef, _) in methodUpdateInputs do
                 if methodDefinitionIndex.Contains key then
                     let parentRowId = methodDefinitionIndex.GetRowId key
                     for attributeHandle in methodDef.GetCustomAttributes() do
                         let attribute = metadataReader.GetCustomAttribute attributeHandle
+                        let constructorToken = MetadataTokens.GetToken attribute.Constructor
+                        let remappedConstructorToken = remapEntityToken constructorToken
+                        let ctorRowId = remappedConstructorToken &&& 0x00FFFFFF
+                        nextRowId <- nextRowId + 1
+                        let valueBytes =
+                            if attribute.Value.IsNil then
+                                Array.empty
+                            else
+                                metadataReader.GetBlobBytes attribute.Value
+
                         if isAsyncStateMachineAttribute attribute then
-                            let constructorToken = MetadataTokens.GetToken attribute.Constructor
-                            let remappedConstructorToken = remapEntityToken constructorToken
-                            let ctorRowId = remappedConstructorToken &&& 0x00FFFFFF
-                            nextRowId <- nextRowId + 1
-                            let valueBytes =
-                                if attribute.Value.IsNil then
-                                    Array.empty
-                                else
-                                    metadataReader.GetBlobBytes attribute.Value
-                            rows.Add(
-                                { RowId = nextRowId
-                                  Parent = struct (HandleKind.MethodDefinition, parentRowId)
-                                  Constructor = struct (attribute.Constructor.Kind, ctorRowId)
-                                  Value = valueBytes
-                                  ValueHandle = if attribute.Value.IsNil then None else Some attribute.Value })
+                            match methodRowIdToKey.TryGetValue parentRowId with
+                            | true, methodKey -> methodsWithCustomAttribute.Add methodKey |> ignore
+                            | _ -> ()
+
+                        rows.Add(
+                            { RowId = nextRowId
+                              Parent = struct (HandleKind.MethodDefinition, parentRowId)
+                              Constructor = struct (attribute.Constructor.Kind, ctorRowId)
+                              Value = valueBytes
+                              ValueHandle = if attribute.Value.IsNil then None else Some attribute.Value })
+
+            for (update, _) in methodUpdatesWithDefs do
+                let methodKey = update.MethodKey
+                if methodsWithCustomAttribute.Contains methodKey |> not then
+                    match tryFindStateMachineType methodKey with
+                    | ValueSome stateMachineHandle ->
+                        let ctorToken = ensureAsyncAttributeCtor ()
+                        let ctorRowId = ctorToken &&& 0x00FFFFFF
+                        let methodRowId = methodDefinitionIndex.GetRowId methodKey
+                        let stateMachineFullName = getFullTypeName stateMachineHandle
+                        let valueBytes = encodeAsyncAttributeValue stateMachineFullName
+
+                        nextRowId <- nextRowId + 1
+                        rows.Add(
+                            { RowId = nextRowId
+                              Parent = struct (HandleKind.MethodDefinition, methodRowId)
+                              Constructor = struct (HandleKind.MemberReference, ctorRowId)
+                              Value = valueBytes
+                              ValueHandle = None })
+
+                        methodsWithCustomAttribute.Add methodKey |> ignore
+                    | ValueNone -> ()
 
             rows |> Seq.toList
 
