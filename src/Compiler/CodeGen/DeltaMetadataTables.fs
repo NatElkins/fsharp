@@ -429,9 +429,12 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         let signatureToken = addExistingBlobHandle row.SignatureHandle row.Signature
 
         let codeRva =
-            match row.CodeRva with
-            | Some rva -> rva
-            | None -> body.CodeOffset
+            if body.CodeLength > 0 then
+                body.CodeOffset
+            else
+                match row.CodeRva with
+                | Some rva -> rva
+                | None -> 0
 
         let rowElements =
             [|

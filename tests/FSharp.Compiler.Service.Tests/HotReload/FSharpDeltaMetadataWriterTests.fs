@@ -1005,6 +1005,41 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(1, reader.GetTableRowCount(TableIndex.CustomAttribute))
 
     [<Fact>]
+    let ``method rows prefer delta code offsets`` () =
+        let table = DeltaMetadataTables()
+
+        let methodKey : MethodDefinitionKey =
+            { DeclaringType = "Sample.Type"
+              Name = "Method"
+              GenericArity = 0
+              ParameterTypes = []
+              ReturnType = ILType.Void }
+
+        let methodRow : DeltaWriter.MethodDefinitionRowInfo =
+            { Key = methodKey
+              RowId = 1
+              IsAdded = false
+              Attributes = enum 0
+              ImplAttributes = enum 0
+              Name = "Method"
+              NameHandle = None
+              Signature = Array.empty
+              SignatureHandle = None
+              FirstParameterRowId = None
+              CodeRva = Some 4096 }
+
+        let body : MethodBodyUpdate =
+            { MethodToken = 0x06000001
+              LocalSignatureToken = 0
+              CodeOffset = 8
+              CodeLength = 4 }
+
+        table.AddMethodRow(methodRow, body)
+
+        let storedRva = table.TableRows.MethodDef.[0].[0].Value
+        Assert.Equal(8, storedRva)
+
+    [<Fact>]
     let ``async multi-generation deltas preserve EncLog ordering`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
 
