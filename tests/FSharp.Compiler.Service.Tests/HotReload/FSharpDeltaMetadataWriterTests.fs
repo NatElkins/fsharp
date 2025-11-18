@@ -47,11 +47,28 @@ module FSharpDeltaMetadataWriterTests =
         entries
         |> Array.sortBy (fun (table, rowId) -> ((encTablePriority table) <<< 24) ||| (rowId &&& 0x00FFFFFF))
 
+    let private moduleEncLogEntry = (TableIndex.Module, 1, EditAndContinueOperation.Default)
+    let private moduleEncMapEntry = (TableIndex.Module, 1)
+
+    let private ensureModuleEncLogEntry (entries: (TableIndex * int * EditAndContinueOperation)[]) =
+        if entries |> Array.exists (fun (table, _, _) -> table = TableIndex.Module) then
+            entries
+        else
+            Array.append [| moduleEncLogEntry |] entries
+
+    let private ensureModuleEncMapEntry (entries: (TableIndex * int)[]) =
+        if entries |> Array.exists (fun (table, _) -> table = TableIndex.Module) then
+            entries
+        else
+            Array.append [| moduleEncMapEntry |] entries
+
     let private assertEncLogEqual expected actual =
-        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(sortEncLogEntries expected, sortEncLogEntries actual)
+        let expectedWithModule = expected |> ensureModuleEncLogEntry |> sortEncLogEntries
+        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedWithModule, sortEncLogEntries actual)
 
     let private assertEncMapEqual expected actual =
-        Assert.Equal<(TableIndex * int)[]>(sortEncMapEntries expected, sortEncMapEntries actual)
+        let expectedWithModule = expected |> ensureModuleEncMapEntry |> sortEncMapEntries
+        Assert.Equal<(TableIndex * int)[]>(expectedWithModule, sortEncMapEntries actual)
     let private localSignatureBlobDeltaBytes = 5
 
     let private assertBaselineHeapSnapshot (artifacts: MetadataDeltaTestHelpers.MetadataDeltaArtifacts) =
@@ -277,17 +294,19 @@ module FSharpDeltaMetadataWriterTests =
         let methodKey = methodKey "Sample.PropertyHost" "get_Message" stringType
 
         let getterDef = metadataReader.GetMethodDefinition getterHandle
-        let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
-            [ { Key = methodKey
-                RowId = 1
-                IsAdded = true
-                Attributes = getterDef.Attributes
-                ImplAttributes = getterDef.ImplAttributes
-                Name = metadataReader.GetString getterDef.Name
-                NameHandle = if getterDef.Name.IsNil then None else Some getterDef.Name
-                Signature = metadataReader.GetBlobBytes getterDef.Signature
-                SignatureHandle = if getterDef.Signature.IsNil then None else Some getterDef.Signature
-                FirstParameterRowId = None } ]
+        let methodRow : DeltaWriter.MethodDefinitionRowInfo =
+            { Key = methodKey
+              RowId = 1
+              IsAdded = true
+              Attributes = getterDef.Attributes
+              ImplAttributes = getterDef.ImplAttributes
+              Name = metadataReader.GetString getterDef.Name
+              NameHandle = if getterDef.Name.IsNil then None else Some getterDef.Name
+              Signature = metadataReader.GetBlobBytes getterDef.Signature
+              SignatureHandle = if getterDef.Signature.IsNil then None else Some getterDef.Signature
+              FirstParameterRowId = None
+              CodeRva = None }
+        let methodDefinitionRows = [ methodRow ]
 
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
@@ -352,16 +371,14 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(1, tableCount TableIndex.PropertyMap)
 
         let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
-            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
-               (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
+            [| (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
                // Roslyn also tags the containing PropertyMap row as AddProperty.
                (TableIndex.PropertyMap, 1, EditAndContinueOperation.AddProperty)
                (TableIndex.Property, 1, EditAndContinueOperation.AddProperty) |]
             |> sortEncLogEntries
 
         let expectedEncMap: (TableIndex * int)[] =
-            [| (TableIndex.Module, 1)
-               (TableIndex.MethodDef, 1)
+            [| (TableIndex.MethodDef, 1)
                (TableIndex.PropertyMap, 1)
                (TableIndex.Property, 1) |]
             |> sortEncMapEntries
@@ -392,15 +409,13 @@ module FSharpDeltaMetadataWriterTests =
         let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
 
         let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
-            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
-               (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
+            [| (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
                (TableIndex.PropertyMap, 1, EditAndContinueOperation.AddProperty)
                (TableIndex.Property, 1, EditAndContinueOperation.AddProperty) |]
             |> sortEncLogEntries
 
         let expectedEncMap: (TableIndex * int)[] =
-            [| (TableIndex.Module, 1)
-               (TableIndex.MethodDef, 1)
+            [| (TableIndex.MethodDef, 1)
                (TableIndex.PropertyMap, 1)
                (TableIndex.Property, 1) |]
             |> sortEncMapEntries
@@ -669,17 +684,19 @@ module FSharpDeltaMetadataWriterTests =
         let methodKey = methodKey "Sample.EventHost" "add_OnChanged" ILType.Void
 
         let addDef = metadataReader.GetMethodDefinition addHandle
-        let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
-            [ { Key = methodKey
-                RowId = 1
-                IsAdded = true
-                Attributes = addDef.Attributes
-                ImplAttributes = addDef.ImplAttributes
-                Name = metadataReader.GetString addDef.Name
-                NameHandle = if addDef.Name.IsNil then None else Some addDef.Name
-                Signature = metadataReader.GetBlobBytes addDef.Signature
-                SignatureHandle = if addDef.Signature.IsNil then None else Some addDef.Signature
-                FirstParameterRowId = None } ]
+        let methodRow : DeltaWriter.MethodDefinitionRowInfo =
+            { Key = methodKey
+              RowId = 1
+              IsAdded = true
+              Attributes = addDef.Attributes
+              ImplAttributes = addDef.ImplAttributes
+              Name = metadataReader.GetString addDef.Name
+              NameHandle = if addDef.Name.IsNil then None else Some addDef.Name
+              Signature = metadataReader.GetBlobBytes addDef.Signature
+              SignatureHandle = if addDef.Signature.IsNil then None else Some addDef.Signature
+              FirstParameterRowId = None
+              CodeRva = None }
+        let methodDefinitionRows = [ methodRow ]
 
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
@@ -752,16 +769,14 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(1, tableCount TableIndex.MethodSemantics)
 
         let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
-            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
-               (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
+            [| (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
                (TableIndex.EventMap, 1, EditAndContinueOperation.AddEvent)
                (TableIndex.Event, 1, EditAndContinueOperation.AddEvent)
                (TableIndex.MethodSemantics, 1, EditAndContinueOperation.AddMethod) |]
             |> sortEncLogEntries
 
         let expectedEncMap: (TableIndex * int)[] =
-            [| (TableIndex.Module, 1)
-               (TableIndex.MethodDef, 1)
+            [| (TableIndex.MethodDef, 1)
                (TableIndex.EventMap, 1)
                (TableIndex.Event, 1)
                (TableIndex.MethodSemantics, 1) |]
@@ -793,8 +808,7 @@ module FSharpDeltaMetadataWriterTests =
         let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
 
         let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
-            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
-               (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
+            [| (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
                (TableIndex.Param, 1, EditAndContinueOperation.AddParameter)
                (TableIndex.EventMap, 1, EditAndContinueOperation.AddEvent)
                (TableIndex.Event, 1, EditAndContinueOperation.AddEvent)
@@ -802,8 +816,7 @@ module FSharpDeltaMetadataWriterTests =
             |> sortEncLogEntries
 
         let expectedEncMap: (TableIndex * int)[] =
-            [| (TableIndex.Module, 1)
-               (TableIndex.MethodDef, 1)
+            [| (TableIndex.MethodDef, 1)
                (TableIndex.Param, 1)
                (TableIndex.EventMap, 1)
                (TableIndex.Event, 1)
@@ -935,8 +948,7 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(0, metadataDelta.TableRowCounts.[int TableIndex.Param])
 
         let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
-            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
-               (TableIndex.MethodDef, 1, EditAndContinueOperation.Default)
+            [| (TableIndex.MethodDef, 1, EditAndContinueOperation.Default)
                (TableIndex.TypeRef, 1, EditAndContinueOperation.Default)
                (TableIndex.TypeRef, 2, EditAndContinueOperation.Default)
                (TableIndex.MemberRef, 1, EditAndContinueOperation.Default)
@@ -947,8 +959,7 @@ module FSharpDeltaMetadataWriterTests =
             |> sortEncLogEntries
 
         let expectedEncMap: (TableIndex * int)[] =
-            [| (TableIndex.Module, 1)
-               (TableIndex.MethodDef, 1)
+            [| (TableIndex.MethodDef, 1)
                (TableIndex.TypeRef, 1)
                (TableIndex.TypeRef, 2)
                (TableIndex.MemberRef, 1)
@@ -981,12 +992,24 @@ module FSharpDeltaMetadataWriterTests =
         Assert.True(indexSizes.SimpleIndexBig[int TableIndex.MethodDef])
 
     [<Fact>]
+    let ``async delta metadata can be reopened`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
+
+        use provider =
+            MetadataReaderProvider.FromMetadataImage(
+                ImmutableArray.CreateRange<byte>(artifacts.Delta.Metadata)
+            )
+
+        let reader = provider.GetMetadataReader()
+        Assert.Equal(1, reader.GetTableRowCount(TableIndex.AssemblyRef))
+        Assert.Equal(1, reader.GetTableRowCount(TableIndex.CustomAttribute))
+
+    [<Fact>]
     let ``async multi-generation deltas preserve EncLog ordering`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
 
         let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
-            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
-               (TableIndex.MethodDef, 1, EditAndContinueOperation.Default)
+            [| (TableIndex.MethodDef, 1, EditAndContinueOperation.Default)
                (TableIndex.TypeRef, 1, EditAndContinueOperation.Default)
                (TableIndex.TypeRef, 2, EditAndContinueOperation.Default)
                (TableIndex.MemberRef, 1, EditAndContinueOperation.Default)
@@ -996,8 +1019,7 @@ module FSharpDeltaMetadataWriterTests =
             |> sortEncLogEntries
 
         let expectedEncMap: (TableIndex * int)[] =
-            [| (TableIndex.Module, 1)
-               (TableIndex.MethodDef, 1)
+            [| (TableIndex.MethodDef, 1)
                (TableIndex.TypeRef, 1)
                (TableIndex.TypeRef, 2)
                (TableIndex.MemberRef, 1)
@@ -1114,17 +1136,19 @@ module FSharpDeltaMetadataWriterTests =
         let methodKey = methodKey "Sample.PropertyHost" "get_Message" stringType
 
         let getterDef = metadataReader.GetMethodDefinition getterHandle
-        let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
-            [ { Key = methodKey
-                RowId = 1
-                IsAdded = true
-                Attributes = getterDef.Attributes
-                ImplAttributes = getterDef.ImplAttributes
-                Name = metadataReader.GetString getterDef.Name
-                NameHandle = if getterDef.Name.IsNil then None else Some getterDef.Name
-                Signature = metadataReader.GetBlobBytes getterDef.Signature
-                SignatureHandle = if getterDef.Signature.IsNil then None else Some getterDef.Signature
-                FirstParameterRowId = None } ]
+        let methodRow2 : DeltaWriter.MethodDefinitionRowInfo =
+            { Key = methodKey
+              RowId = 1
+              IsAdded = true
+              Attributes = getterDef.Attributes
+              ImplAttributes = getterDef.ImplAttributes
+              Name = metadataReader.GetString getterDef.Name
+              NameHandle = if getterDef.Name.IsNil then None else Some getterDef.Name
+              Signature = metadataReader.GetBlobBytes getterDef.Signature
+              SignatureHandle = if getterDef.Signature.IsNil then None else Some getterDef.Signature
+              FirstParameterRowId = None
+              CodeRva = None }
+        let methodDefinitionRows = [ methodRow2 ]
 
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
@@ -1283,14 +1307,12 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.MethodDef])
         Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.Param])
         let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
-            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
-               (TableIndex.MethodDef, methodRows.Head.RowId, EditAndContinueOperation.AddMethod)
+            [| (TableIndex.MethodDef, methodRows.Head.RowId, EditAndContinueOperation.AddMethod)
                (TableIndex.Param, parameterRows.Head.RowId, EditAndContinueOperation.AddParameter) |]
             |> sortEncLogEntries
 
         let expectedEncMap: (TableIndex * int)[] =
-            [| (TableIndex.Module, 1)
-               (TableIndex.MethodDef, methodRows.Head.RowId)
+            [| (TableIndex.MethodDef, methodRows.Head.RowId)
                (TableIndex.Param, parameterRows.Head.RowId) |]
             |> sortEncMapEntries
 
@@ -1349,16 +1371,14 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(2, metadataDelta.TableRowCounts.[int TableIndex.Param])
 
         let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
-            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
-               (TableIndex.MethodDef, methodRows[0].RowId, EditAndContinueOperation.AddMethod)
+            [| (TableIndex.MethodDef, methodRows[0].RowId, EditAndContinueOperation.AddMethod)
                (TableIndex.MethodDef, methodRows[1].RowId, EditAndContinueOperation.AddMethod)
                (TableIndex.Param, parameterRows[0].RowId, EditAndContinueOperation.AddParameter)
                (TableIndex.Param, parameterRows[1].RowId, EditAndContinueOperation.AddParameter) |]
             |> sortEncLogEntries
 
         let expectedEncMap: (TableIndex * int)[] =
-            [| (TableIndex.Module, 1)
-               (TableIndex.MethodDef, methodRows[0].RowId)
+            [| (TableIndex.MethodDef, methodRows[0].RowId)
                (TableIndex.MethodDef, methodRows[1].RowId)
                (TableIndex.Param, parameterRows[0].RowId)
                (TableIndex.Param, parameterRows[1].RowId) |]
@@ -1378,24 +1398,22 @@ module FSharpDeltaMetadataWriterTests =
         let artifacts = MetadataDeltaTestHelpers.emitClosureMultiGenerationArtifacts ()
 
         let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
-            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
-               (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
+            [| (TableIndex.MethodDef, 1, EditAndContinueOperation.AddMethod)
                (TableIndex.MethodDef, 2, EditAndContinueOperation.AddMethod)
                (TableIndex.Param, 1, EditAndContinueOperation.AddParameter)
                (TableIndex.Param, 2, EditAndContinueOperation.AddParameter) |]
             |> sortEncLogEntries
 
         let expectedEncMap: (TableIndex * int)[] =
-            [| (TableIndex.Module, 1)
-               (TableIndex.MethodDef, 1)
+            [| (TableIndex.MethodDef, 1)
                (TableIndex.MethodDef, 2)
                (TableIndex.Param, 1)
                (TableIndex.Param, 2) |]
             |> sortEncMapEntries
 
         let assertDelta (delta: DeltaWriter.MetadataDelta) =
-            Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, delta.EncLog)
-            Assert.Equal<(TableIndex * int)[]>(expectedEncMap, delta.EncMap)
+            assertEncLogEqual expectedEncLog delta.EncLog
+            assertEncMapEqual expectedEncMap delta.EncMap
             ignoreBadImageFormat (fun () -> assertTableStreamMatches delta)
             ignoreBadImageFormat (fun () -> assertTableCountsMatch delta.Metadata delta.TableRowCounts)
             ignoreBadImageFormat (fun () -> assertBitMasksMatch delta.Metadata delta.TableBitMasks)
@@ -1451,21 +1469,19 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.Param])
 
         let expectedEncLog: (TableIndex * int * EditAndContinueOperation)[] =
-            [| (TableIndex.Module, 1, EditAndContinueOperation.Default)
-               (TableIndex.MethodDef, methodRows[0].RowId, EditAndContinueOperation.AddMethod)
+            [| (TableIndex.MethodDef, methodRows[0].RowId, EditAndContinueOperation.AddMethod)
                (TableIndex.MethodDef, methodRows[1].RowId, EditAndContinueOperation.AddMethod)
                (TableIndex.Param, parameterRows[0].RowId, EditAndContinueOperation.AddParameter) |]
             |> sortEncLogEntries
 
         let expectedEncMap: (TableIndex * int)[] =
-            [| (TableIndex.Module, 1)
-               (TableIndex.MethodDef, methodRows[0].RowId)
+            [| (TableIndex.MethodDef, methodRows[0].RowId)
                (TableIndex.MethodDef, methodRows[1].RowId)
                (TableIndex.Param, parameterRows[0].RowId) |]
             |> sortEncMapEntries
 
-        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, metadataDelta.EncLog)
-        Assert.Equal<(TableIndex * int)[]>(expectedEncMap, metadataDelta.EncMap)
+        assertEncLogEqual expectedEncLog metadataDelta.EncLog
+        assertEncMapEqual expectedEncMap metadataDelta.EncMap
         Assert.True(metadataDelta.Metadata.Length > 0)
         ignoreBadImageFormat (fun () -> assertTableStreamMatches metadataDelta)
         ignoreBadImageFormat (fun () -> assertTableCountsMatch metadataDelta.Metadata metadataDelta.TableRowCounts)

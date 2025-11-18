@@ -125,6 +125,7 @@ let private tableRowsByIndex (tables: TableRows) =
     rows[int TableIndex.Param] <- tables.Param
     rows[int TableIndex.TypeRef] <- tables.TypeRef
     rows[int TableIndex.MemberRef] <- tables.MemberRef
+    rows[int TableIndex.CustomAttribute] <- tables.CustomAttribute
     rows[int TableIndex.AssemblyRef] <- tables.AssemblyRef
     rows[int TableIndex.StandAloneSig] <- tables.StandAloneSig
     rows[int TableIndex.Property] <- tables.Property
