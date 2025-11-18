@@ -858,6 +858,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let parameterRowLookup = Dictionary<ParameterDefinitionKey, int>()
     let parameterHandleLookup = Dictionary<ParameterDefinitionKey, ParameterHandle>()
     let syntheticParameterInfo = Dictionary<ParameterDefinitionKey, ParameterAttributes>(HashIdentity.Structural)
+    let returnParameterKeys = HashSet<ParameterDefinitionKey>(HashIdentity.Structural)
     let lastParamRowId = baselineTableRowCounts.[int TableIndex.Param]
     let parameterDefinitionIndex =
         let tryExisting key =
@@ -1033,6 +1034,23 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         else
             parameterRowLookup[paramKey]
 
+    let ensureReturnParameterRow key =
+        let paramKey =
+            { ParameterDefinitionKey.Method = key
+              SequenceNumber = 0 }
+        if parameterRowLookup.ContainsKey paramKey then
+            parameterRowLookup[paramKey]
+        else
+            match baselineParameterHandles |> Map.tryFind paramKey |> Option.bind (fun info -> info.RowId) with
+            | Some baselineRow when baselineRow > 0 ->
+                parameterRowLookup[paramKey] <- baselineRow
+                parameterDefinitionIndex.AddExisting paramKey
+                baselineRow
+            | _ ->
+                let rowId = addSyntheticParameter key 0 ParameterAttributes.None
+                returnParameterKeys.Add paramKey |> ignore
+                rowId
+
     let enqueueParameters key methodHandle =
         let methodDef = metadataReader.GetMethodDefinition methodHandle
         let parameters = methodDef.GetParameters()
@@ -1073,6 +1091,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                             if traceMethodUpdates.Value then
                                 printfn "[fsharp-hotreload][param-fallback] synthesized baseline entry method=%s::%s seq=%d row=%d" key.DeclaringType key.Name paramKey.SequenceNumber syntheticRow
             | _ -> ()
+
+        let _ = ensureReturnParameterRow key
+        ()
 
     orderedMethodInputs
     |> List.iter (fun struct (key, _, methodHandle, _, _) -> enqueueParameters key methodHandle)
@@ -1227,10 +1248,12 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     | true, existing when existing <= rowId -> ()
                     | _ -> firstParamRowByMethod[key.Method] <- rowId
 
+                    let effectiveIsAdded =
+                        if returnParameterKeys.Contains key then false else isAdded
                     Some
                         { ParameterDefinitionRowInfo.Key = key
                           RowId = rowId
-                          IsAdded = isAdded
+                          IsAdded = effectiveIsAdded
                           Attributes = attrs
                           SequenceNumber = sequence
                           Name = nameOpt

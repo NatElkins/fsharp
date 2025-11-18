@@ -319,9 +319,10 @@ let emitWithUserStrings
                 metadataBuilder.AddParameter(row.Attributes, nameHandle, row.SequenceNumber) |> ignore
             tableMirror.AddParameterRow row
 
-            let operation = if row.IsAdded then EditAndContinueOperation.AddParameter else EditAndContinueOperation.Default
-            encLog.Add(struct (TableIndex.Param, row.RowId, operation))
-            encMap.Add(struct (TableIndex.Param, row.RowId))
+            if row.SequenceNumber <> 0 then
+                let operation = if row.IsAdded then EditAndContinueOperation.AddParameter else EditAndContinueOperation.Default
+                encLog.Add(struct (TableIndex.Param, row.RowId, operation))
+                encMap.Add(struct (TableIndex.Param, row.RowId))
 
         for row in typeReferenceRows do
             if emitSrmTables then
