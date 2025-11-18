@@ -57,13 +57,6 @@ if [[ ${mdv_available} -eq 1 ]]; then
     exit 3
   fi
 
-  if ! "${MDV_PATH}" --version >/dev/null 2>&1; then
-    echo "warning: mdv executable at ${MDV_PATH} failed to run; skipping automatic mdv validation" >&2
-    mdv_available=0
-  fi
-fi
-
-if [[ ${mdv_available} -eq 1 ]]; then
   export FSHARP_HOTRELOAD_MDV_PATH="${MDV_PATH}"
   export FSHARP_HOTRELOAD_RUN_MDV=1
 else
