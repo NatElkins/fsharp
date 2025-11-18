@@ -623,8 +623,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let encBaseId =
         match request.PreviousGenerationId with
-        | Some prev when prev <> Guid.Empty -> prev
-        | _ -> moduleMvid
+        | Some prev -> prev
+        | None -> Guid.Empty
     let encId = System.Guid.NewGuid()
 
     let methodRowLookup =

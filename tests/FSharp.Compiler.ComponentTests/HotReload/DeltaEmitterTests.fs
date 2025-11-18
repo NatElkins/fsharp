@@ -446,7 +446,7 @@ module DeltaEmitterTests =
         Assert.Equal(0x06000001, bodyInfo.MethodToken)
         Assert.True(bodyInfo.CodeLength > 0)
         Assert.NotEqual(System.Guid.Empty, delta.GenerationId)
-        Assert.NotEqual(System.Guid.Empty, delta.BaseGenerationId)
+        Assert.Equal(System.Guid.Empty, delta.BaseGenerationId)
         let expectedEncLog =
             [|
                 (TableIndex.Module, 0x00000001, EditAndContinueOperation.Default)
@@ -826,7 +826,7 @@ module DeltaEmitterTests =
         Assert.NotEmpty(delta.IL)
         Assert.Single(delta.MethodBodies) |> ignore
         Assert.NotEqual(System.Guid.Empty, delta.GenerationId)
-        Assert.NotEqual(System.Guid.Empty, delta.BaseGenerationId)
+        Assert.Equal(System.Guid.Empty, delta.BaseGenerationId)
 
         match tryRunMdv "--version" with
         | ValueNone ->
@@ -911,7 +911,7 @@ module DeltaEmitterTests =
             }
 
         let delta1 = emitDelta requestGen1
-        Assert.Equal(baseline.ModuleId, delta1.BaseGenerationId)
+        Assert.Equal(System.Guid.Empty, delta1.BaseGenerationId)
         Assert.NotEqual(System.Guid.Empty, delta1.GenerationId)
 
         service.OnDeltaApplied delta1.GenerationId
@@ -960,7 +960,7 @@ module DeltaEmitterTests =
 
         match service.EmitDelta request with
         | Ok result ->
-            Assert.Equal(baseline.ModuleId, result.Delta.BaseGenerationId)
+            Assert.Equal(System.Guid.Empty, result.Delta.BaseGenerationId)
             Assert.NotEqual(System.Guid.Empty, result.Delta.GenerationId)
             service.CommitPendingUpdate(result.Delta.GenerationId)
         | Error error ->

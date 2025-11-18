@@ -442,7 +442,7 @@ let private createCore
     {
         ModuleId = moduleId
         EncId = System.Guid.Empty
-        EncBaseId = moduleId
+        EncBaseId = System.Guid.Empty
         NextGeneration = 1
         Metadata = metadataSnapshot
         TokenMappings = tokenMappings
