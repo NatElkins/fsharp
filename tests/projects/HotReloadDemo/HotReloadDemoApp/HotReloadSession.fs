@@ -26,7 +26,8 @@ type DemoSession =
       RuntimeAssembly: Assembly
       LoadContext: AssemblyLoadContext option
       WorkingDirectory: string
-      mutable Generation: int }
+      mutable Generation: int
+      DeltaDumpHistory: ResizeArray<string * string> }
 
 module HotReloadSession =
 
@@ -212,7 +213,8 @@ module HotReloadSession =
                                   RuntimeAssembly = runtimeAssembly
                                   LoadContext = loadContext
                                   WorkingDirectory = workingDirectory
-                                  Generation = 0 }
+                                  Generation = 0
+                                  DeltaDumpHistory = ResizeArray() }
                     with ex ->
                         return Error(AssemblyLoadFailed ex.Message)
         }
@@ -247,27 +249,38 @@ module HotReloadSession =
 
                     if dumpDirRequired then
                         try
-                            let dumpDir = Path.Combine(session.WorkingDirectory, "delta-dump")
-                            Directory.CreateDirectory(dumpDir) |> ignore
+                            let nextGeneration = session.Generation + 1
+                            let dumpRoot = Path.Combine(session.WorkingDirectory, "delta-dump")
+                            let generationDirName = sprintf "gen-%03d" nextGeneration
+                            let generationDir = Path.Combine(dumpRoot, generationDirName)
+                            Directory.CreateDirectory(generationDir) |> ignore
                             let write (name: string) (bytes: byte[]) =
-                                let path = Path.Combine(dumpDir, name)
+                                let path = Path.Combine(generationDir, name)
                                 File.WriteAllBytes(path, bytes)
                                 path
                             let metadataPath = write "metadata.bin" delta.Metadata
                             let ilPath = write "il.bin" delta.IL
                             delta.Pdb |> Option.iter (fun bytes -> write "pdb.bin" bytes |> ignore)
                             File.WriteAllLines(
-                                Path.Combine(dumpDir, "tokens.txt"),
+                                Path.Combine(generationDir, "tokens.txt"),
                                 [| sprintf "Updated methods: %A" delta.UpdatedMethods
                                    sprintf "Updated types: %A" delta.UpdatedTypes
                                    sprintf "Generation: %O" delta.GenerationId
                                    sprintf "Base generation: %O" delta.BaseGenerationId |])
+                            session.DeltaDumpHistory.Add(metadataPath, ilPath)
+
+                            let mdvArgs =
+                                session.DeltaDumpHistory
+                                |> Seq.map (fun (metaPath, ilPath) -> $"\"/g:{metaPath};{ilPath}\"")
+                                |> Seq.toArray
+
+                            let mdvArgsJoined = String.Join(" ", mdvArgs)
+
                             let mdvCommand =
-                                sprintf
-                                    "mdv \"%s\" \"/g:%s;%s\""
-                                    session.BaselineDllPath
-                                    metadataPath
-                                    ilPath
+                                if String.IsNullOrEmpty mdvArgsJoined then
+                                    sprintf "mdv \"%s\"" session.BaselineDllPath
+                                else
+                                    sprintf "mdv \"%s\" %s" session.BaselineDllPath mdvArgsJoined
 
                             printfn "[hotreload-delta] %s" mdvCommand
 
@@ -277,9 +290,10 @@ module HotReloadSession =
                                 psi.UseShellExecute <- false
                                 psi.RedirectStandardOutput <- true
                                 psi.RedirectStandardError <- true
-                                psi.WorkingDirectory <- dumpDir
+                                psi.WorkingDirectory <- generationDir
                                 psi.ArgumentList.Add(session.BaselineDllPath)
-                                psi.ArgumentList.Add($"/g:{metadataPath};{ilPath}")
+                                for (metaPath, ilPath) in session.DeltaDumpHistory do
+                                    psi.ArgumentList.Add($"/g:{metaPath};{ilPath}")
 
                                 try
                                     let procInstance = Process.Start(psi)

@@ -451,6 +451,7 @@ module DeltaEmitterTests =
             [|
                 (TableIndex.Module, 0x00000001, EditAndContinueOperation.Default)
                 (TableIndex.MethodDef, 0x00000001, EditAndContinueOperation.Default)
+                (TableIndex.StandAloneSig, 0x00000001, EditAndContinueOperation.Default)
             |]
 
         Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, delta.EncLog)
@@ -459,6 +460,7 @@ module DeltaEmitterTests =
             [|
                 (TableIndex.Module, 0x00000001)
                 (TableIndex.MethodDef, 0x00000001)
+                (TableIndex.StandAloneSig, 0x00000001)
             |]
 
         Assert.Equal<(TableIndex * int)[]>(expectedEncMap, delta.EncMap)
@@ -544,8 +546,23 @@ module DeltaEmitterTests =
         Assert.Equal(2, List.length delta.UpdatedMethodTokens)
         Assert.Equal<int Set>(Set.ofList [0x06000001; 0x06000002], delta.UpdatedMethodTokens |> Set.ofList)
         Assert.True(delta.MethodBodies |> List.forall (fun body -> body.CodeLength > 0))
-        Assert.Equal(3, delta.EncLog.Length)
-        Assert.Equal(3, delta.EncMap.Length)
+        let expectedLog =
+            [|
+                (TableIndex.Module, 0x00000001, EditAndContinueOperation.Default)
+                (TableIndex.MethodDef, 0x00000001, EditAndContinueOperation.Default)
+                (TableIndex.MethodDef, 0x00000002, EditAndContinueOperation.Default)
+                (TableIndex.StandAloneSig, 0x00000001, EditAndContinueOperation.Default)
+            |]
+        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedLog, delta.EncLog)
+
+        let expectedMap =
+            [|
+                (TableIndex.Module, 0x00000001)
+                (TableIndex.MethodDef, 0x00000001)
+                (TableIndex.MethodDef, 0x00000002)
+                (TableIndex.StandAloneSig, 0x00000001)
+            |]
+        Assert.Equal<(TableIndex * int)[]>(expectedMap, delta.EncMap)
         match delta.Pdb with
         | Some pdb -> Assert.True(pdb.Length >= 0)
         | None -> ()

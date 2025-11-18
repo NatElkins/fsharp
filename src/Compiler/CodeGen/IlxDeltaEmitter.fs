@@ -624,7 +624,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let encBaseId =
         match request.PreviousGenerationId with
         | Some prev when prev <> Guid.Empty -> prev
-        | _ -> Guid.Empty
+        | _ -> moduleMvid
     let encId = System.Guid.NewGuid()
 
     let methodRowLookup =
@@ -1558,6 +1558,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
             let methodsWithCustomAttribute = HashSet<MethodDefinitionKey>(HashIdentity.Structural)
             let methodsWithNullableContextAttribute = HashSet<MethodDefinitionKey>(HashIdentity.Structural)
+            let mutable nullableContextAttributeSeen = false
             let encodeNullableContextValue () =
                 [| 0x01uy; 0x00uy; 0x01uy; 0x00uy; 0x00uy |]
 
@@ -1718,6 +1719,25 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     systemObjectTypeRefToken <- Some token
                     token
 
+            let ensureSystemTypeRefHandle () =
+                match tryFindSystemTypeRef () with
+                | Some handle -> handle
+                | None ->
+                    let scope =
+                        match tryGetAssemblyScope () with
+                        | Some value -> value
+                        | None -> struct (HandleKind.ModuleDefinition, 1)
+                    let nextRowId = nextTypeRefRowId + 1
+                    nextTypeRefRowId <- nextRowId
+                    typeReferenceRows.Add(
+                        { RowId = nextRowId
+                          ResolutionScope = scope
+                          Name = "Type"
+                          NameHandle = None
+                          Namespace = "System"
+                          NamespaceHandle = None })
+                    MetadataTokens.TypeReferenceHandle nextRowId
+
             let ensureAsyncAttributeTypeRef () =
                 match asyncAttributeTypeRefToken with
                 | Some token -> token
@@ -1744,10 +1764,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 | Some token -> token
                 | None ->
                     let attrTypeToken = ensureAsyncAttributeTypeRef ()
-                    let systemTypeRefHandle =
-                        match tryFindSystemTypeRef () with
-                        | Some handle -> handle
-                        | None -> failwith "Unable to locate System.Type type reference."
+                    let systemTypeRefHandle = ensureSystemTypeRefHandle ()
 
                     let signatureBytes =
                         let blob = BlobBuilder()
@@ -1904,8 +1921,14 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                             | true, methodKey -> methodsWithCustomAttribute.Add methodKey |> ignore
                             | _ -> ()
                         if isNullableContextAttribute attribute then
+                            nullableContextAttributeSeen <- true
                             match methodRowIdToKey.TryGetValue parentRowId with
-                            | true, methodKey -> methodsWithNullableContextAttribute.Add methodKey |> ignore
+                            | true, methodKey ->
+                                if traceMetadata.Value then
+                                    printfn
+                                        "[fsharp-hotreload][metadata] nullable-context attribute detected on %s"
+                                        methodKey.Name
+                                methodsWithNullableContextAttribute.Add methodKey |> ignore
                             | _ -> ()
 
                         rows.Add(
@@ -1937,18 +1960,19 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         methodsWithCustomAttribute.Add methodKey |> ignore
                     | ValueNone -> ()
 
-            for KeyValue(methodRowId, methodKey) in methodRowIdToKey do
-                if methodsWithNullableContextAttribute.Contains methodKey |> not then
-                    let ctorToken = ensureNullableContextAttributeCtor ()
-                    let ctorRowId = ctorToken &&& 0x00FFFFFF
-                    nextRowId <- nextRowId + 1
-                    rows.Add(
-                        { RowId = nextRowId
-                          Parent = struct (HandleKind.MethodDefinition, methodRowId)
-                          Constructor = struct (HandleKind.MemberReference, ctorRowId)
-                          Value = encodeNullableContextValue ()
-                          ValueHandle = None })
-                    methodsWithNullableContextAttribute.Add methodKey |> ignore
+            if nullableContextAttributeSeen then
+                for KeyValue(methodRowId, methodKey) in methodRowIdToKey do
+                    if methodsWithNullableContextAttribute.Contains methodKey |> not then
+                        let ctorToken = ensureNullableContextAttributeCtor ()
+                        let ctorRowId = ctorToken &&& 0x00FFFFFF
+                        nextRowId <- nextRowId + 1
+                        rows.Add(
+                            { RowId = nextRowId
+                              Parent = struct (HandleKind.MethodDefinition, methodRowId)
+                              Constructor = struct (HandleKind.MemberReference, ctorRowId)
+                              Value = encodeNullableContextValue ()
+                              ValueHandle = None })
+                        methodsWithNullableContextAttribute.Add methodKey |> ignore
 
             let rowList = rows |> Seq.toList
             if traceMetadata.Value then

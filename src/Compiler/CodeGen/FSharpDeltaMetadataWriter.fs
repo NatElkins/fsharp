@@ -155,6 +155,9 @@ let emitWithUserStrings
         // Ensure tables not emitted in the current delta remain empty to satisfy metadata writer invariants.
         let methodUpdateCount = methodDefinitionRows |> List.length
         let parameterUpdateCount = parameterDefinitionRows |> List.length
+        let parameterEncCount =
+            parameterDefinitionRows
+            |> List.sumBy (fun row -> if row.SequenceNumber = 0 then 0 else 1)
         let standaloneSigCount = standaloneSignatureRows |> List.length
         let customAttributeCount = customAttributeRows |> List.length
         let typeRefCount = typeReferenceRows |> List.length
@@ -200,7 +203,7 @@ let emitWithUserStrings
         let encEntryCount =
             moduleEntryCount
             + methodUpdateCount
-            + parameterUpdateCount
+            + parameterEncCount
             + standaloneSigCount
             + typeRefCount
             + memberRefCount
@@ -618,6 +621,7 @@ let emitWithUserStrings
                 heapStreams.StringsLength
                 heapStreams.BlobsLength
                 heapStreams.GuidsLength
+            printfn "[fsharp-hotreload][heap-bytes] blob-bytes=%A" heapStreams.Blobs
 
         { Metadata = metadataBytes
           StringHeap = heapStreams.Strings

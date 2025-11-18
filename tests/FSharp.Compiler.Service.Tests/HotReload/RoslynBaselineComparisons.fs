@@ -145,3 +145,21 @@ module RoslynBaselineComparisons =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
         assertMatches roslynAdd artifacts.Generation1
         assertMatches roslynUpdate artifacts.Generation2
+
+    [<Fact>]
+    let ``closure delta row counts match Roslyn baseline`` () =
+        let baselines = loadRoslynTables ()
+        let roslynClosure = findBaseline "Closure" baselines
+
+        let closureDelta = MetadataDeltaTestHelpers.emitClosureDeltaArtifacts ()
+        assertMatches roslynClosure closureDelta.Delta
+
+    [<Fact>]
+    let ``closure multi-generation delta rows match Roslyn baseline`` () =
+        let baselines = loadRoslynTables ()
+        let roslynAdd = findBaseline "Closure" baselines
+        let roslynUpdate = findBaseline "ClosureUpdate" baselines
+
+        let artifacts = MetadataDeltaTestHelpers.emitClosureMultiGenerationArtifacts ()
+        assertMatches roslynAdd artifacts.Generation1
+        assertMatches roslynUpdate artifacts.Generation2

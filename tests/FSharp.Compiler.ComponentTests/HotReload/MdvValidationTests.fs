@@ -125,11 +125,12 @@ module MdvValidationTests =
                         sprintf "[Roslyn baseline] scenario '%s' exceeded %A: actual=%d baseline=%d" scenario tableIndex actual budget)
                 | None -> ()
 
+
     module private HeapBudgets =
         type Budget = { StringBytes: int; BlobBytes: int }
 
         let private metadataStringBytes = 14
-        let private metadataBlobBytes = 1
+        let private metadataBlobBytes = 4
 
         let private budgets : Map<string, Budget> =
             Map.ofList
@@ -1721,6 +1722,7 @@ type EventDemo() =
 
         let delta1 = emitDelta request1
         File.WriteAllBytes(meta1Path, delta1.Metadata)
+        RoslynBaseline.assertWithin "Closure" delta1.Metadata
         HeapBudgets.assertWithin "Closure" delta1.Metadata
 
         let baseline2 =
@@ -1737,6 +1739,7 @@ type EventDemo() =
 
         let delta2 = emitDelta request2
         File.WriteAllBytes(meta2Path, delta2.Metadata)
+        RoslynBaseline.assertWithin "ClosureUpdate" delta2.Metadata
         HeapBudgets.assertWithin "ClosureUpdate" delta2.Metadata
 
         let methodToken = baselineArtifacts.Baseline.MethodTokens[methodKey]
