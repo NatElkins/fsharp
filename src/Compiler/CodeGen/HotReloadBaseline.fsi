@@ -22,6 +22,11 @@ type ParameterDefinitionKey =
     { Method: MethodDefinitionKey
       SequenceNumber: int }
 
+type TypeReferenceKey =
+    { Scope: string
+      Namespace: string
+      Name: string }
+
 /// <summary>Stable identifier for a field definition in the baseline assembly.</summary>
 type FieldDefinitionKey =
     { DeclaringType: string
@@ -44,7 +49,10 @@ type EventDefinitionKey =
 type MethodDefinitionMetadataHandles =
     { NameHandle: StringHandle option
       SignatureHandle: BlobHandle option
-      FirstParameterRowId: int option }
+      FirstParameterRowId: int option
+      Rva: int option
+      Attributes: MethodAttributes option
+      ImplAttributes: MethodImplAttributes option }
 
 type ParameterDefinitionMetadataHandles =
     { NameHandle: StringHandle option
@@ -107,6 +115,8 @@ type FSharpEmitBaseline =
       PortablePdb: PortablePdbSnapshot option
       SynthesizedNameSnapshot: Map<string, string[]>
       MetadataHandles: BaselineHandleCache
+      TypeReferenceTokens: Map<TypeReferenceKey, int>
+      AssemblyReferenceTokens: Map<string, int>
       TableEntriesAdded: int[]
       StringStreamLengthAdded: int
       UserStringStreamLengthAdded: int

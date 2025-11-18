@@ -23,7 +23,8 @@ type MethodDefinitionRowInfo =
       NameHandle: StringHandle option
       Signature: byte[]
       SignatureHandle: BlobHandle option
-      FirstParameterRowId: int option }
+      FirstParameterRowId: int option
+      CodeRva: int option }
 
 type ParameterDefinitionRowInfo =
     { Key: ParameterDefinitionKey

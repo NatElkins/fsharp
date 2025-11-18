@@ -291,6 +291,14 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
             | _ -> false
         )
+    let traceMetadata =
+        lazy (
+            match System.Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METADATA") with
+            | null -> false
+            | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+            | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+            | _ -> false
+        )
     let writerOptions = defaultWriterOptions ilg HashAlgorithm.Sha256
     let assemblyBytes, pdbBytesOpt, emittedTokenMappings, _ =
         ILWriter.WriteILBinaryInMemoryWithArtifacts(writerOptions, request.Module, id)
@@ -613,13 +621,10 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     | _ -> ()
     let moduleMvid = request.Baseline.ModuleId
 
-    let baseGenerationId =
-        match request.CurrentGeneration, request.PreviousGenerationId with
-        | 1, _ -> request.Baseline.ModuleId
-        | _, Some prev -> prev
-        | _, None -> request.Baseline.ModuleId
-
-    let encBaseId = baseGenerationId
+    let encBaseId =
+        match request.PreviousGenerationId with
+        | Some prev when prev <> Guid.Empty -> prev
+        | _ -> Guid.Empty
     let encId = System.Guid.NewGuid()
 
     let methodRowLookup =
@@ -633,12 +638,26 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let baselinePropertyMapRowCount = baselineTableRowCounts.[int TableIndex.PropertyMap]
     let baselineEventMapRowCount = baselineTableRowCounts.[int TableIndex.EventMap]
     let lastMethodRowId = baselineTableRowCounts.[int TableIndex.MethodDef]
-    let mutable nextTypeRefRowId = baselineTableRowCounts.[int TableIndex.TypeRef]
-    let mutable nextMemberRefRowId = baselineTableRowCounts.[int TableIndex.MemberRef]
-    let mutable nextAssemblyRefRowId = baselineTableRowCounts.[int TableIndex.AssemblyRef]
+    let mutable nextTypeRefRowId = 0
+    let mutable nextMemberRefRowId = 0
+    let mutable nextAssemblyRefRowId = 0
     let typeReferenceRows = ResizeArray<TypeReferenceRowInfo>()
     let memberReferenceRows = ResizeArray<MemberReferenceRowInfo>()
     let assemblyReferenceRows = ResizeArray<AssemblyReferenceRowInfo>()
+    let baselineTypeReferenceTokens = request.Baseline.TypeReferenceTokens
+    let baselineAssemblyReferenceTokens = request.Baseline.AssemblyReferenceTokens
+    if traceMetadata.Value then
+        printfn
+            "[fsharp-hotreload][metadata] baseline-typerefs=%d baseline-assemblyrefs=%d"
+            (baselineTypeReferenceTokens |> Map.count)
+            (baselineAssemblyReferenceTokens |> Map.count)
+    let tryReuseBaselineTypeRef scopeName namespaceName typeName =
+        let key =
+            { TypeReferenceKey.Scope = scopeName
+              Namespace = namespaceName
+              Name = typeName }
+        baselineTypeReferenceTokens |> Map.tryFind key
+
     let typeRefTokenMap = Dictionary<int, int>()
     let memberRefTokenMap = Dictionary<int, int>()
     let assemblyRefTokenMap = Dictionary<int, int>()
@@ -672,13 +691,13 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                   Version = row.Version
                   Flags = row.Flags
                   PublicKeyOrToken = getBlob row.PublicKeyOrToken
-                  PublicKeyOrTokenHandle = if row.PublicKeyOrToken.IsNil then None else Some row.PublicKeyOrToken
-                  Name = metadataReader.GetString row.Name
-                  NameHandle = if row.Name.IsNil then None else Some row.Name
+                  PublicKeyOrTokenHandle = None
+                  Name = if row.Name.IsNil then "" else metadataReader.GetString row.Name
+                  NameHandle = None
                   Culture = if row.Culture.IsNil then None else Some(metadataReader.GetString row.Culture)
-                  CultureHandle = if row.Culture.IsNil then None else Some row.Culture
+                  CultureHandle = None
                   HashValue = getBlob row.HashValue
-                  HashValueHandle = if row.HashValue.IsNil then None else Some row.HashValue }
+                  HashValueHandle = None }
             assemblyReferenceRows.Add info
             let deltaToken = 0x23000000 ||| nextRowId
             assemblyRefTokenMap[token] <- deltaToken
@@ -690,39 +709,59 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         | _ ->
             let handle = MetadataTokens.TypeReferenceHandle token
             let row = metadataReader.GetTypeReference handle
-            let resolutionScope =
-                if row.ResolutionScope.IsNil then
-                    struct (HandleKind.ModuleDefinition, 1)
-                else
-                    let scopeToken = MetadataTokens.GetToken(row.ResolutionScope)
-                    match row.ResolutionScope.Kind with
-                    | HandleKind.AssemblyReference ->
-                        let mapped = remapAssemblyRefToken scopeToken
-                        struct (HandleKind.AssemblyReference, mapped &&& 0x00FFFFFF)
-                    | HandleKind.TypeReference ->
-                        let mapped = remapTypeRefToken scopeToken
-                        struct (HandleKind.TypeReference, mapped &&& 0x00FFFFFF)
-                    | HandleKind.ModuleDefinition ->
-                        let rowId = MetadataTokens.GetRowNumber row.ResolutionScope
-                        struct (HandleKind.ModuleDefinition, rowId)
-                    | HandleKind.ModuleReference ->
-                        let rowId = MetadataTokens.GetRowNumber row.ResolutionScope
-                        struct (HandleKind.ModuleReference, rowId)
-                    | _ -> struct (HandleKind.ModuleDefinition, 1)
             let name = if row.Name.IsNil then "" else metadataReader.GetString row.Name
             let namespaceName = if row.Namespace.IsNil then "" else metadataReader.GetString row.Namespace
-            let nextRowId = nextTypeRefRowId + 1
-            nextTypeRefRowId <- nextRowId
-            typeReferenceRows.Add(
-                { RowId = nextRowId
-                  ResolutionScope = resolutionScope
-                  Name = name
-                  NameHandle = None
-                  Namespace = namespaceName
-                  NamespaceHandle = None })
-            let deltaToken = 0x01000000 ||| nextRowId
-            typeRefTokenMap[token] <- deltaToken
-            deltaToken
+            let baselineToken =
+                match row.ResolutionScope.Kind with
+                | HandleKind.AssemblyReference ->
+                    let assemblyHandle = AssemblyReferenceHandle.op_Explicit row.ResolutionScope
+                    let assemblyRef = metadataReader.GetAssemblyReference assemblyHandle
+                    let scopeName = metadataReader.GetString assemblyRef.Name
+                    tryReuseBaselineTypeRef scopeName namespaceName name
+                | _ -> None
+            match baselineToken with
+            | Some reused ->
+                typeRefTokenMap[token] <- reused
+                reused
+            | None ->
+                if traceMetadata.Value then
+                    printfn
+                        "[fsharp-hotreload][metadata] remap typeref miss scope=%A ns=%s name=%s"
+                        row.ResolutionScope.Kind
+                        namespaceName
+                        name
+                let resolutionScope =
+                    if row.ResolutionScope.IsNil then
+                        struct (HandleKind.ModuleDefinition, 1)
+                    else
+                        let scopeToken = MetadataTokens.GetToken(row.ResolutionScope)
+                        match row.ResolutionScope.Kind with
+                        | HandleKind.AssemblyReference ->
+                            let mapped = remapAssemblyRefToken scopeToken
+                            struct (HandleKind.AssemblyReference, mapped &&& 0x00FFFFFF)
+                        | HandleKind.TypeReference ->
+                            let mapped = remapTypeRefToken scopeToken
+                            struct (HandleKind.TypeReference, mapped &&& 0x00FFFFFF)
+                        | HandleKind.ModuleDefinition ->
+                            let rowId = MetadataTokens.GetRowNumber row.ResolutionScope
+                            struct (HandleKind.ModuleDefinition, rowId)
+                        | HandleKind.ModuleReference ->
+                            let rowId = MetadataTokens.GetRowNumber row.ResolutionScope
+                            struct (HandleKind.ModuleReference, rowId)
+                        | _ -> struct (HandleKind.ModuleDefinition, 1)
+                let nextRowId = nextTypeRefRowId + 1
+                nextTypeRefRowId <- nextRowId
+                typeReferenceRows.Add(
+                    { RowId = nextRowId
+                      ResolutionScope = resolutionScope
+                      Name = name
+                      NameHandle = None
+                      Namespace = namespaceName
+                      NamespaceHandle = None })
+                let deltaToken = 0x01000000 ||| nextRowId
+                typeRefTokenMap[token] <- deltaToken
+                deltaToken
+            
 
     and remapMemberRefToken token =
         match memberRefTokenMap.TryGetValue token with
@@ -1208,6 +1247,15 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         match baselineHandles |> Option.bind (fun info -> info.SignatureHandle) with
                         | Some handle -> Some handle
                         | None -> emittedSignatureHandle
+                    let resolvedAttributes =
+                        match baselineHandles |> Option.bind (fun info -> info.Attributes) with
+                        | Some value -> value
+                        | None -> attrs
+                    let resolvedImplAttributes =
+                        match baselineHandles |> Option.bind (fun info -> info.ImplAttributes) with
+                        | Some value -> value
+                        | None -> implAttrs
+                    let resolvedCodeRva = baselineHandles |> Option.bind (fun info -> info.Rva)
                     let firstParam =
                         match baselineHandles |> Option.bind (fun info -> info.FirstParameterRowId) with
                         | Some _ as baselineRow -> baselineRow
@@ -1219,13 +1267,14 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         { MethodDefinitionRowInfo.Key = key
                           RowId = rowId
                           IsAdded = isAdded
-                          Attributes = attrs
-                          ImplAttributes = implAttrs
+                          Attributes = resolvedAttributes
+                          ImplAttributes = resolvedImplAttributes
                           Name = name
                           NameHandle = resolvedNameHandle
                           Signature = signature
                           SignatureHandle = resolvedSignatureHandle
-                          FirstParameterRowId = firstParam }
+                          FirstParameterRowId = firstParam
+                          CodeRva = resolvedCodeRva }
                 | _ -> None
 
         let methodDefinitionRowsSnapshot =
@@ -1524,6 +1573,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 methodRowIdToKey[rowId] <- key
 
             let methodsWithCustomAttribute = HashSet<MethodDefinitionKey>(HashIdentity.Structural)
+            let methodsWithNullableContextAttribute = HashSet<MethodDefinitionKey>(HashIdentity.Structural)
+            let encodeNullableContextValue () =
+                [| 0x01uy; 0x00uy; 0x01uy; 0x00uy; 0x00uy |]
 
             let rec getFullTypeName (handle: TypeDefinitionHandle) =
                 let def = metadataReader.GetTypeDefinition handle
@@ -1623,8 +1675,42 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     else
                         None)
 
+            let tryReuseBaselineTypeRef scopeName namespaceName typeName =
+                let key =
+                    { TypeReferenceKey.Scope = scopeName
+                      Namespace = namespaceName
+                      Name = typeName }
+                baselineTypeReferenceTokens |> Map.tryFind key
+
+            let tryFindExistingTypeRef scopeName namespaceName typeName =
+                metadataReader.TypeReferences
+                |> Seq.tryPick (fun handle ->
+                    let typeRef = metadataReader.GetTypeReference handle
+                    let name = metadataReader.GetString typeRef.Name
+                    if name = typeName then
+                        let ns = if typeRef.Namespace.IsNil then "" else metadataReader.GetString typeRef.Namespace
+                        if ns = namespaceName then
+                            match typeRef.ResolutionScope.Kind with
+                            | HandleKind.AssemblyReference ->
+                                let asm =
+                                    metadataReader.GetAssemblyReference(
+                                        AssemblyReferenceHandle.op_Explicit typeRef.ResolutionScope
+                                    )
+                                let asmName = metadataReader.GetString asm.Name
+                                if asmName = scopeName then
+                                    Some handle
+                                else
+                                    None
+                            | _ -> None
+                        else
+                            None
+                    else
+                        None)
+
             let mutable asyncAttributeTypeRefToken : int option = None
             let mutable asyncAttributeCtorToken : int option = None
+            let mutable nullableContextAttributeTypeRefToken : int option = None
+            let mutable nullableContextAttributeCtorToken : int option = None
 
             let ensureAsyncAttributeTypeRef () =
                 match asyncAttributeTypeRefToken with
@@ -1687,6 +1773,74 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     asyncAttributeCtorToken <- Some token
                     token
 
+            let ensureNullableContextAttributeTypeRef () =
+                match nullableContextAttributeTypeRefToken with
+                | Some token -> token
+                | None ->
+                    let baselineOrExistingToken =
+                        [ "System.Runtime"; "mscorlib" ]
+                        |> List.tryPick (fun scope ->
+                            match tryReuseBaselineTypeRef scope "System.Runtime.CompilerServices" "NullableContextAttribute" with
+                            | Some token -> Some token
+                            | None ->
+                                match tryFindExistingTypeRef scope "System.Runtime.CompilerServices" "NullableContextAttribute" with
+                                | Some handle -> Some(MetadataTokens.GetToken(EntityHandle.op_Implicit handle))
+                                | None -> None)
+                    match baselineOrExistingToken with
+                    | Some token ->
+                        nullableContextAttributeTypeRefToken <- Some token
+                        token
+                    | None ->
+                        let scope =
+                            match tryGetAssemblyScope () with
+                            | Some value -> value
+                            | None -> failwith "Unable to locate System.Runtime/mscorlib assembly reference for NullableContextAttribute."
+                        let nextRowId = nextTypeRefRowId + 1
+                        nextTypeRefRowId <- nextRowId
+                        typeReferenceRows.Add(
+                            { RowId = nextRowId
+                              ResolutionScope = scope
+                              Name = "NullableContextAttribute"
+                              NameHandle = None
+                              Namespace = "System.Runtime.CompilerServices"
+                              NamespaceHandle = None })
+                        let token = 0x01000000 ||| nextRowId
+                        nullableContextAttributeTypeRefToken <- Some token
+                        token
+
+            let ensureNullableContextAttributeCtor () =
+                match nullableContextAttributeCtorToken with
+                | Some token -> token
+                | None ->
+                    let attrTypeToken = ensureNullableContextAttributeTypeRef ()
+                    let signatureBytes =
+                        let blob = BlobBuilder()
+                        let instanceHeader =
+                            (int SignatureCallingConvention.Default)
+                            ||| (int SignatureAttributes.Instance)
+                            |> byte
+                        blob.WriteByte(instanceHeader)
+                        blob.WriteCompressedInteger 1
+                        blob.WriteByte(LanguagePrimitives.EnumToValue SignatureTypeCode.Void)
+                        blob.WriteByte(LanguagePrimitives.EnumToValue SignatureTypeCode.Byte)
+                        blob.ToArray()
+
+                    let parentRowId = attrTypeToken &&& 0x00FFFFFF
+                    let nextRowId = nextMemberRefRowId + 1
+                    nextMemberRefRowId <- nextRowId
+                    memberReferenceRows.Add(
+                        { RowId = nextRowId
+                          Parent = struct (HandleKind.TypeReference, parentRowId)
+                          Name = ".ctor"
+                          NameHandle = None
+                          Signature = signatureBytes
+                          SignatureHandle = None })
+
+                    let token = 0x0A000000 ||| nextRowId
+                    nullableContextAttributeCtorToken <- Some token
+                    token
+
+
             let encodeAsyncAttributeValue (stateMachineFullName: string) =
                 let blob = BlobBuilder()
                 blob.WriteUInt16(0x0001us)
@@ -1708,6 +1862,21 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     | _ -> false
                 | _ -> false
 
+            let isNullableContextAttribute (attribute: CustomAttribute) =
+                match attribute.Constructor.Kind with
+                | HandleKind.MemberReference ->
+                    let memberRef = metadataReader.GetMemberReference(MemberReferenceHandle.op_Explicit attribute.Constructor)
+                    match memberRef.Parent.Kind with
+                    | HandleKind.TypeReference ->
+                        let typeRef = metadataReader.GetTypeReference(TypeReferenceHandle.op_Explicit memberRef.Parent)
+                        let name = metadataReader.GetString typeRef.Name
+                        let ns = if typeRef.Namespace.IsNil then "" else metadataReader.GetString typeRef.Namespace
+                        ns = "System.Runtime.CompilerServices"
+                        && name = "NullableContextAttribute"
+                    | _ -> false
+                | _ -> false
+
+
             for struct (key: MethodDefinitionKey, _, _, methodDef, _) in methodUpdateInputs do
                 if methodDefinitionIndex.Contains key then
                     let parentRowId = methodDefinitionIndex.GetRowId key
@@ -1726,6 +1895,10 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         if isAsyncStateMachineAttribute attribute then
                             match methodRowIdToKey.TryGetValue parentRowId with
                             | true, methodKey -> methodsWithCustomAttribute.Add methodKey |> ignore
+                            | _ -> ()
+                        if isNullableContextAttribute attribute then
+                            match methodRowIdToKey.TryGetValue parentRowId with
+                            | true, methodKey -> methodsWithNullableContextAttribute.Add methodKey |> ignore
                             | _ -> ()
 
                         rows.Add(
@@ -1757,7 +1930,23 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         methodsWithCustomAttribute.Add methodKey |> ignore
                     | ValueNone -> ()
 
-            rows |> Seq.toList
+            for KeyValue(methodRowId, methodKey) in methodRowIdToKey do
+                if methodsWithNullableContextAttribute.Contains methodKey |> not then
+                    let ctorToken = ensureNullableContextAttributeCtor ()
+                    let ctorRowId = ctorToken &&& 0x00FFFFFF
+                    nextRowId <- nextRowId + 1
+                    rows.Add(
+                        { RowId = nextRowId
+                          Parent = struct (HandleKind.MethodDefinition, methodRowId)
+                          Constructor = struct (HandleKind.MemberReference, ctorRowId)
+                          Value = encodeNullableContextValue ()
+                          ValueHandle = None })
+                    methodsWithNullableContextAttribute.Add methodKey |> ignore
+
+            let rowList = rows |> Seq.toList
+            if traceMetadata.Value then
+                printfn "[fsharp-hotreload][metadata] custom-attributes rows=%d" (List.length rowList)
+            rowList
 
         let typeReferenceRowList =
             typeReferenceRows
@@ -1773,6 +1962,24 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             assemblyReferenceRows
             |> Seq.sortBy (fun row -> row.RowId)
             |> Seq.toList
+
+        if traceMetadata.Value then
+            printfn
+                "[fsharp-hotreload][metadata] row-counts typeRef=%d memberRef=%d assemblyRef=%d customAttr=%d"
+                typeReferenceRowList.Length
+                memberReferenceRowList.Length
+                assemblyReferenceRowList.Length
+                customAttributeRowList.Length
+            for row in typeReferenceRowList do
+                let struct (scopeKind, scopeRowId) = row.ResolutionScope
+                printfn
+                    "[fsharp-hotreload][metadata] typeref rowId=%d name=%s scope=%A row=%d"
+                    row.RowId
+                    row.Name
+                    scopeKind
+                    scopeRowId
+            for row in assemblyReferenceRowList do
+                printfn "[fsharp-hotreload][metadata] assemblyref rowId=%d name=%s" row.RowId row.Name
 
         let streams = builder.Build()
 
@@ -1800,6 +2007,19 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 methodUpdates
                 baselineHeapOffsets
                 request.Baseline.Metadata.TableRowCounts
+
+        if traceMetadata.Value then
+            let count idx = metadataDelta.TableRowCounts.[int idx]
+            printfn
+                "[fsharp-hotreload][metadata] table-counts module=%d method=%d param=%d typeRef=%d memberRef=%d assemblyRef=%d customAttr=%d standAloneSig=%d"
+                (count TableIndex.Module)
+                (count TableIndex.MethodDef)
+                (count TableIndex.Param)
+                (count TableIndex.TypeRef)
+                (count TableIndex.MemberRef)
+                (count TableIndex.AssemblyRef)
+                (count TableIndex.CustomAttribute)
+                (count TableIndex.StandAloneSig)
 
         let addedOrChangedMethods =
             streams.MethodBodies

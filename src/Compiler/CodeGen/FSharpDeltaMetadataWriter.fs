@@ -196,8 +196,10 @@ let emitWithUserStrings
             metadataBuilder.SetCapacity(TableIndex.TypeSpec, 0)
             metadataBuilder.SetCapacity(TableIndex.ImplMap, 0)
             metadataBuilder.SetCapacity(TableIndex.FieldRva, 0)
+        let moduleEntryCount = 1
         let encEntryCount =
-            methodUpdateCount
+            moduleEntryCount
+            + methodUpdateCount
             + parameterUpdateCount
             + standaloneSigCount
             + typeRefCount
@@ -235,7 +237,11 @@ let emitWithUserStrings
             | _ -> metadataBuilder.GetOrAddString(moduleName)
         let mvidHandle = metadataBuilder.GetOrAddGuid(moduleId)
         let encIdHandle = metadataBuilder.GetOrAddGuid(encId)
-        let encBaseHandle = metadataBuilder.GetOrAddGuid(encBaseId)
+        let encBaseHandle =
+            if encBaseId = System.Guid.Empty then
+                GuidHandle()
+            else
+                metadataBuilder.GetOrAddGuid(encBaseId)
         let _ = metadataBuilder.AddModule(0, moduleNameHandleOrAdded, mvidHandle, encIdHandle, encBaseHandle)
         let tableMirror = DeltaMetadataTables(heapOffsets)
         tableMirror.AddModuleRow(moduleName, moduleNameTokenOpt, moduleId, encId, encBaseId)
@@ -267,6 +273,9 @@ let emitWithUserStrings
 
         let mutable encLog = ResizeArray()
         let mutable encMap = ResizeArray()
+
+        encLog.Add(struct (TableIndex.Module, 1, EditAndContinueOperation.Default))
+        encMap.Add(struct (TableIndex.Module, 1))
 
         for row in methodDefinitionRows do
             match updatesByKey.TryGetValue row.Key with
@@ -568,7 +577,6 @@ let emitWithUserStrings
         let metadataSizes = DeltaMetadataSerializer.computeMetadataSizes tableMirror normalizedExternalRowCounts
         let tableRowCounts = metadataSizes.RowCounts
         let tableBitMasks = metadataSizes.BitMasks
-        let heapSizes = metadataSizes.HeapSizes
         let indexSizes = metadataSizes.IndexSizes
 
         let tableStreamInput =
@@ -617,7 +625,7 @@ let emitWithUserStrings
           EncLog = encLogEntries |> Array.map (fun struct (a, b, c) -> (a, b, c))
           EncMap = encMapEntries |> Array.map (fun struct (a, b) -> (a, b))
           TableRowCounts = tableRowCounts
-          HeapSizes = heapSizes
+          HeapSizes = metadataSizes.HeapSizes
           HeapOffsets = heapOffsets
           Tables = tableMirror.TableRows
           TableBitMasks = tableBitMasks

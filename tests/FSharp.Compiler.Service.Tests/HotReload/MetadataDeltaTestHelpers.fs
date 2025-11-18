@@ -709,17 +709,19 @@ module internal MetadataDeltaTestHelpers =
         let methodKey = methodKey "Sample.PropertyHost" "get_Message" stringType
 
         let getterDef = metadataReader.GetMethodDefinition getterHandle
-        let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
-            [ { Key = methodKey
-                RowId = 1
-                IsAdded = true
-                Attributes = getterDef.Attributes
-                ImplAttributes = getterDef.ImplAttributes
-                Name = metadataReader.GetString getterDef.Name
-                NameHandle = if getterDef.Name.IsNil then None else Some getterDef.Name
-                Signature = metadataReader.GetBlobBytes getterDef.Signature
-                SignatureHandle = if getterDef.Signature.IsNil then None else Some getterDef.Signature
-                FirstParameterRowId = None } ]
+        let methodRow: DeltaWriter.MethodDefinitionRowInfo =
+            { Key = methodKey
+              RowId = 1
+              IsAdded = true
+              Attributes = getterDef.Attributes
+              ImplAttributes = getterDef.ImplAttributes
+              Name = metadataReader.GetString getterDef.Name
+              NameHandle = if getterDef.Name.IsNil then None else Some getterDef.Name
+              Signature = metadataReader.GetBlobBytes getterDef.Signature
+              SignatureHandle = if getterDef.Signature.IsNil then None else Some getterDef.Signature
+              FirstParameterRowId = None
+              CodeRva = None }
+        let methodDefinitionRows = [ methodRow ]
 
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
@@ -863,17 +865,19 @@ module internal MetadataDeltaTestHelpers =
 
         let methodKey = methodKey typeName methodName stringType
 
-        let methodRows: DeltaWriter.MethodDefinitionRowInfo list =
-            [ { Key = methodKey
-                RowId = 1
-                IsAdded = true
-                Attributes = methodDef.Attributes
-                ImplAttributes = methodDef.ImplAttributes
-                Name = metadataReader.GetString methodDef.Name
-                NameHandle = if methodDef.Name.IsNil then None else Some methodDef.Name
-                Signature = metadataReader.GetBlobBytes methodDef.Signature
-                SignatureHandle = if methodDef.Signature.IsNil then None else Some methodDef.Signature
-                FirstParameterRowId = None } ]
+        let methodRow: DeltaWriter.MethodDefinitionRowInfo =
+            { Key = methodKey
+              RowId = 1
+              IsAdded = true
+              Attributes = methodDef.Attributes
+              ImplAttributes = methodDef.ImplAttributes
+              Name = metadataReader.GetString methodDef.Name
+              NameHandle = if methodDef.Name.IsNil then None else Some methodDef.Name
+              Signature = metadataReader.GetBlobBytes methodDef.Signature
+              SignatureHandle = if methodDef.Signature.IsNil then None else Some methodDef.Signature
+              FirstParameterRowId = None
+              CodeRva = None }
+        let methodRows = [ methodRow ]
 
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
@@ -979,17 +983,19 @@ module internal MetadataDeltaTestHelpers =
                 let signatureBytes = metadataReader.GetBlobBytes standalone.Signature
                 builder.AddStandaloneSignature(signatureBytes)
 
-        let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
-            [ { Key = methodKey
-                RowId = 1
-                IsAdded = false
-                Attributes = methodDef.Attributes
-                ImplAttributes = methodDef.ImplAttributes
-                Name = metadataReader.GetString methodDef.Name
-                NameHandle = if methodDef.Name.IsNil then None else Some methodDef.Name
-                Signature = metadataReader.GetBlobBytes methodDef.Signature
-                SignatureHandle = if methodDef.Signature.IsNil then None else Some methodDef.Signature
-                FirstParameterRowId = None } ]
+        let methodRow : DeltaWriter.MethodDefinitionRowInfo =
+            { Key = methodKey
+              RowId = 1
+              IsAdded = false
+              Attributes = methodDef.Attributes
+              ImplAttributes = methodDef.ImplAttributes
+              Name = metadataReader.GetString methodDef.Name
+              NameHandle = if methodDef.Name.IsNil then None else Some methodDef.Name
+              Signature = metadataReader.GetBlobBytes methodDef.Signature
+              SignatureHandle = if methodDef.Signature.IsNil then None else Some methodDef.Signature
+              FirstParameterRowId = None
+              CodeRva = None }
+        let methodDefinitionRows = [ methodRow ]
 
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
@@ -1366,17 +1372,19 @@ module internal MetadataDeltaTestHelpers =
 
         let firstParamRowId = parameterRows |> List.tryHead |> Option.map (fun row -> row.RowId)
 
-        let methodDefinitionRows: DeltaWriter.MethodDefinitionRowInfo list =
-            [ { Key = methodKey
-                RowId = 1
-                IsAdded = true
-                Attributes = addDef.Attributes
-                ImplAttributes = addDef.ImplAttributes
-                Name = metadataReader.GetString addDef.Name
-                NameHandle = if addDef.Name.IsNil then None else Some addDef.Name
-                Signature = metadataReader.GetBlobBytes addDef.Signature
-                SignatureHandle = if addDef.Signature.IsNil then None else Some addDef.Signature
-                FirstParameterRowId = firstParamRowId } ]
+        let methodRow : DeltaWriter.MethodDefinitionRowInfo =
+            { Key = methodKey
+              RowId = 1
+              IsAdded = true
+              Attributes = addDef.Attributes
+              ImplAttributes = addDef.ImplAttributes
+              Name = metadataReader.GetString addDef.Name
+              NameHandle = if addDef.Name.IsNil then None else Some addDef.Name
+              Signature = metadataReader.GetBlobBytes addDef.Signature
+              SignatureHandle = if addDef.Signature.IsNil then None else Some addDef.Signature
+              FirstParameterRowId = firstParamRowId
+              CodeRva = None }
+        let methodDefinitionRows = [ methodRow ]
 
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
@@ -1541,7 +1549,8 @@ module internal MetadataDeltaTestHelpers =
               NameHandle = if methodDef.Name.IsNil then None else Some methodDef.Name
               Signature = metadataReader.GetBlobBytes methodDef.Signature
               SignatureHandle = if methodDef.Signature.IsNil then None else Some methodDef.Signature
-              FirstParameterRowId = firstParamRowId }
+              FirstParameterRowId = firstParamRowId
+              CodeRva = None }
 
         let methodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle)
 

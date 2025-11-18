@@ -69,7 +69,15 @@ type EventDefinitionKey =
 type MethodDefinitionMetadataHandles =
     { NameHandle: StringHandle option
       SignatureHandle: BlobHandle option
-      FirstParameterRowId: int option }
+      FirstParameterRowId: int option
+      Rva: int option
+      Attributes: MethodAttributes option
+      ImplAttributes: MethodImplAttributes option }
+
+type TypeReferenceKey =
+    { Scope: string
+      Namespace: string
+      Name: string }
 
 type ParameterDefinitionMetadataHandles =
     { NameHandle: StringHandle option
@@ -137,6 +145,8 @@ type FSharpEmitBaseline =
         PortablePdb: PortablePdbSnapshot option
         SynthesizedNameSnapshot: Map<string, string[]>
         MetadataHandles: BaselineHandleCache
+        TypeReferenceTokens: Map<TypeReferenceKey, int>
+        AssemblyReferenceTokens: Map<string, int>
         TableEntriesAdded: int[]
         StringStreamLengthAdded: int
         UserStringStreamLengthAdded: int
@@ -448,6 +458,8 @@ let private createCore
         PortablePdb = portablePdbSnapshot
         SynthesizedNameSnapshot = synthesizedNames
         MetadataHandles = BaselineHandleCache.Empty
+        TypeReferenceTokens = Map.empty
+        AssemblyReferenceTokens = Map.empty
         TableEntriesAdded = Array.zeroCreate tableCount
         StringStreamLengthAdded = 0
         UserStringStreamLengthAdded = 0
@@ -512,6 +524,8 @@ let internal applyDelta
         AddedOrChangedMethods =
             (addedOrChangedMethods @ baseline.AddedOrChangedMethods)
             |> List.distinctBy (fun info -> info.MethodToken)
+        TypeReferenceTokens = baseline.TypeReferenceTokens
+        AssemblyReferenceTokens = baseline.AssemblyReferenceTokens
     }
 
 /// <summary>Create an <see cref="FSharpEmitBaseline"/> without capturing the ILX environment snapshot.</summary>
@@ -576,7 +590,10 @@ let private buildMethodHandles (reader: MetadataReader) (methodTokens: Map<Metho
                 key,
                 { NameHandle = stringHandleOption methodDef.Name
                   SignatureHandle = blobHandleOption methodDef.Signature
-                  FirstParameterRowId = firstParamRowId })
+                  FirstParameterRowId = firstParamRowId
+                  Rva = Some methodDef.RelativeVirtualAddress
+                  Attributes = Some methodDef.Attributes
+                  ImplAttributes = Some methodDef.ImplAttributes })
     )
     |> Map.ofSeq
 
@@ -635,11 +652,42 @@ let private buildEventHandles (reader: MetadataReader) (eventTokens: Map<EventDe
             Some(key, ({ NameHandle = stringHandleOption eventDef.Name } : EventDefinitionMetadataHandles)) )
     |> Map.ofSeq
 
+let private buildAssemblyReferenceTokens (reader: MetadataReader) : Map<string, int> =
+    reader.AssemblyReferences
+    |> Seq.map (fun handle ->
+        let assemblyRef = reader.GetAssemblyReference handle
+        let name = reader.GetString assemblyRef.Name
+        let token = MetadataTokens.GetToken(EntityHandle.op_Implicit handle)
+        name, token)
+    |> Map.ofSeq
+
+let private buildTypeReferenceTokens (reader: MetadataReader) : Map<TypeReferenceKey, int> =
+    reader.TypeReferences
+    |> Seq.choose (fun handle ->
+        let typeRef = reader.GetTypeReference handle
+        let name = reader.GetString typeRef.Name
+        let namespaceName = if typeRef.Namespace.IsNil then "" else reader.GetString typeRef.Namespace
+        match typeRef.ResolutionScope.Kind with
+        | HandleKind.AssemblyReference ->
+            let assemblyHandle = AssemblyReferenceHandle.op_Explicit typeRef.ResolutionScope
+            let assemblyRef = reader.GetAssemblyReference assemblyHandle
+            let scopeName = reader.GetString assemblyRef.Name
+            let key =
+                { TypeReferenceKey.Scope = scopeName
+                  Namespace = namespaceName
+                  Name = name }
+            let token = MetadataTokens.GetToken(EntityHandle.op_Implicit handle)
+            Some(key, token)
+        | _ -> None)
+    |> Map.ofSeq
+
 let attachMetadataHandles (metadataReader: MetadataReader) (baseline: FSharpEmitBaseline) =
     let methodHandles = buildMethodHandles metadataReader baseline.MethodTokens
     let parameterHandles = buildParameterHandles metadataReader baseline.MethodTokens
     let propertyHandles = buildPropertyHandles metadataReader baseline.PropertyTokens
     let eventHandles = buildEventHandles metadataReader baseline.EventTokens
+    let typeReferenceTokens = buildTypeReferenceTokens metadataReader
+    let assemblyReferenceTokens = buildAssemblyReferenceTokens metadataReader
     let cache =
         { MethodHandles = methodHandles
           ParameterHandles = parameterHandles
@@ -648,4 +696,6 @@ let attachMetadataHandles (metadataReader: MetadataReader) (baseline: FSharpEmit
     let moduleDef = metadataReader.GetModuleDefinition()
     { baseline with
         MetadataHandles = cache
-        ModuleNameHandle = stringHandleOption moduleDef.Name }
+        ModuleNameHandle = stringHandleOption moduleDef.Name
+        TypeReferenceTokens = typeReferenceTokens
+        AssemblyReferenceTokens = assemblyReferenceTokens }
