@@ -993,6 +993,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let methodDefinitionRowsRaw = methodDefinitionIndex.Rows
 
+    let emptyLocalSignature : byte[] = [| 0x07uy; 0x00uy |]
+
     let orderedMethodInputs =
         methodDefinitionRowsRaw
         |> List.choose (fun struct (_, key, _) ->
@@ -1158,12 +1160,13 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             |> List.map (fun struct (key, methodToken, methodHandle, methodDef, body) ->
                 let ilBytes = rewriteMethodBody remapUserString remapEntityToken body
                 let localSigToken =
-                    if body.LocalSignature.IsNil then
-                        0
-                    else
-                        let standalone = metadataReader.GetStandaloneSignature body.LocalSignature
-                        let signatureBytes = metadataReader.GetBlobBytes standalone.Signature
-                        builder.AddStandaloneSignature(signatureBytes)
+                    let signatureBytes =
+                        if body.LocalSignature.IsNil then
+                            emptyLocalSignature
+                        else
+                            let standalone = metadataReader.GetStandaloneSignature body.LocalSignature
+                            metadataReader.GetBlobBytes standalone.Signature
+                    builder.AddStandaloneSignature(signatureBytes)
 
                 let bodyUpdate =
                     builder.AddMethodBody(
