@@ -1005,6 +1005,15 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(1, reader.GetTableRowCount(TableIndex.CustomAttribute))
 
     [<Fact>]
+    let ``async delta matches roslyn type/member refs`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
+        let tableCounts = artifacts.Delta.TableRowCounts
+
+        Assert.Equal(2, tableCounts.[int TableIndex.TypeRef])
+        Assert.Equal(1, tableCounts.[int TableIndex.MemberRef])
+        Assert.Equal(1, tableCounts.[int TableIndex.StandAloneSig])
+
+    [<Fact>]
     let ``method rows prefer delta code offsets`` () =
         let table = DeltaMetadataTables()
 
