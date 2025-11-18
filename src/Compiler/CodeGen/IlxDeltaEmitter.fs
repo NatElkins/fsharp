@@ -659,7 +659,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         baselineTypeReferenceTokens |> Map.tryFind key
 
     let typeRefTokenMap = Dictionary<int, int>()
-    let memberRefTokenMap = Dictionary<int, int>()
     let assemblyRefTokenMap = Dictionary<int, int>()
     let methodDefinitionIndex = DefinitionIndex<MethodDefinitionKey>(methodRowLookup, lastMethodRowId)
     let processedMethodKeys = HashSet<MethodDefinitionKey>()
@@ -763,48 +762,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 deltaToken
             
 
-    and remapMemberRefToken token =
-        match memberRefTokenMap.TryGetValue token with
-        | true, mapped -> mapped
-        | _ ->
-            let handle = MetadataTokens.MemberReferenceHandle token
-            let row = metadataReader.GetMemberReference handle
-            let parentInfo =
-                match row.Parent.Kind with
-                | HandleKind.TypeReference ->
-                    let mapped = remapTypeRefToken (MetadataTokens.GetToken row.Parent)
-                    struct (HandleKind.TypeReference, mapped &&& 0x00FFFFFF)
-                | HandleKind.TypeDefinition ->
-                    let mapped = remapEntityToken (MetadataTokens.GetToken row.Parent)
-                    struct (HandleKind.TypeDefinition, mapped &&& 0x00FFFFFF)
-                | HandleKind.ModuleReference ->
-                    let rowId = MetadataTokens.GetRowNumber row.Parent
-                    struct (HandleKind.ModuleReference, rowId)
-                | HandleKind.MethodDefinition ->
-                    let mapped = remapEntityToken (MetadataTokens.GetToken row.Parent)
-                    struct (HandleKind.MethodDefinition, mapped &&& 0x00FFFFFF)
-                | HandleKind.TypeSpecification ->
-                    let rowId = MetadataTokens.GetRowNumber row.Parent
-                    struct (HandleKind.TypeSpecification, rowId)
-                | _ -> struct (HandleKind.TypeReference, 0)
-            let signature =
-                if row.Signature.IsNil then
-                    Array.empty
-                else
-                    metadataReader.GetBlobBytes row.Signature
-            let name = metadataReader.GetString row.Name
-            let nextRowId = nextMemberRefRowId + 1
-            nextMemberRefRowId <- nextRowId
-            memberReferenceRows.Add(
-                { RowId = nextRowId
-                  Parent = parentInfo
-                  Name = name
-                  NameHandle = None
-                  Signature = signature
-                  SignatureHandle = None })
-            let deltaToken = 0x0A000000 ||| nextRowId
-            memberRefTokenMap[token] <- deltaToken
-            deltaToken
+    and remapMemberRefToken token = token
 
     and remapEntityToken token =
         match token &&& 0xFF000000 with
@@ -1733,10 +1691,32 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     else
                         None)
 
+            let mutable systemObjectTypeRefToken : int option = None
             let mutable asyncAttributeTypeRefToken : int option = None
             let mutable asyncAttributeCtorToken : int option = None
             let mutable nullableContextAttributeTypeRefToken : int option = None
             let mutable nullableContextAttributeCtorToken : int option = None
+
+            let ensureSystemObjectTypeRef () =
+                match systemObjectTypeRefToken with
+                | Some token -> token
+                | None ->
+                    let scope =
+                        match tryGetAssemblyScope () with
+                        | Some value -> value
+                        | None -> struct (HandleKind.ModuleDefinition, 1)
+                    let nextRowId = nextTypeRefRowId + 1
+                    nextTypeRefRowId <- nextRowId
+                    typeReferenceRows.Add(
+                        { RowId = nextRowId
+                          ResolutionScope = scope
+                          Name = "Object"
+                          NameHandle = None
+                          Namespace = "System"
+                          NamespaceHandle = None })
+                    let token = 0x01000000 ||| nextRowId
+                    systemObjectTypeRefToken <- Some token
+                    token
 
             let ensureAsyncAttributeTypeRef () =
                 match asyncAttributeTypeRefToken with
@@ -1832,6 +1812,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                               NamespaceHandle = None })
                         let token = 0x01000000 ||| nextRowId
                         nullableContextAttributeTypeRefToken <- Some token
+                        let _ = ensureSystemObjectTypeRef ()
                         token
 
             let ensureNullableContextAttributeCtor () =
@@ -2004,6 +1985,14 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     row.Name
                     scopeKind
                     scopeRowId
+            for row in memberReferenceRowList do
+                let struct (parentKind, parentRowId) = row.Parent
+                printfn
+                    "[fsharp-hotreload][metadata] memberref rowId=%d name=%s parent=%A row=%d"
+                    row.RowId
+                    row.Name
+                    parentKind
+                    parentRowId
             for row in assemblyReferenceRowList do
                 printfn "[fsharp-hotreload][metadata] assemblyref rowId=%d name=%s" row.RowId row.Name
 
