@@ -180,6 +180,29 @@ module MdvValidationTests =
             |> Array.exists (fun (t, r) -> t = table && r = rowId)
         Assert.True(entryExists, $"Expected EncMap entry for {table} row {rowId}")
 
+    let private isDefinitionHandle (handle: EntityHandle) =
+        match handle.Kind with
+        | HandleKind.ModuleDefinition
+        | HandleKind.TypeDefinition
+        | HandleKind.MethodDefinition
+        | HandleKind.FieldDefinition
+        | HandleKind.Parameter
+        | HandleKind.PropertyDefinition
+        | HandleKind.EventDefinition
+        | HandleKind.AssemblyDefinition -> true
+        | _ -> false
+
+
+    let private assertEncMapDefinitionsMatch (delta: IlxDelta) (expected: EntityHandle list) =
+        let actual =
+            delta.EncMap
+            |> Array.map (fun (t, r) -> MetadataTokens.EntityHandle(t, r))
+            |> Array.toList
+            |> List.filter isDefinitionHandle
+
+        let expectedFiltered = expected |> List.filter (fun h -> not h.IsNil)
+        Assert.Equal<EntityHandle list>(expectedFiltered, actual)
+
     let private createTempProject () =
         let root = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-tests", System.Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(root) |> ignore
