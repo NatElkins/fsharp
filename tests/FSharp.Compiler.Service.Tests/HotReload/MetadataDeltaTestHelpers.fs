@@ -739,10 +739,18 @@ module internal MetadataDeltaTestHelpers =
           Generation1: DeltaWriter.MetadataDelta
           Generation2: DeltaWriter.MetadataDelta }
 
+    let private getModuleGenerationId (metadata: byte[]) =
+        use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(metadata))
+        let reader = provider.GetMetadataReader()
+        let moduleDef = reader.GetModuleDefinition()
+        let h = moduleDef.GenerationId
+        if h.IsNil then System.Guid.Empty else reader.GetGuid h
+
     let private emitPropertyDeltaCore
         (metadataReader: MetadataReader)
         (builder: IlDeltaStreamBuilder)
         (heapOffsets: MetadataHeapOffsets)
+        (encBaseId: Guid)
         =
         let stringType = ilGlobals.typ_String
 
@@ -814,7 +822,7 @@ module internal MetadataDeltaTestHelpers =
             moduleName
             None
             (System.Guid.NewGuid())
-            (System.Guid.NewGuid())
+            encBaseId
             (System.Guid.NewGuid())
             methodDefinitionRows
             []
@@ -829,12 +837,12 @@ module internal MetadataDeltaTestHelpers =
             heapOffsets
             (getRowCounts metadataReader)
 
-    let private emitPropertyDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) =
+    let private emitPropertyDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) (encBaseId: Guid) =
         use peReader = new PEReader(new MemoryStream(baselineBytes, false))
         let metadataReader = peReader.GetMetadataReader()
         let metadataSnapshot = metadataSnapshotFromReader metadataReader
         let builder = IlDeltaStreamBuilder(Some metadataSnapshot)
-        emitPropertyDeltaCore metadataReader builder heapOffsets
+        emitPropertyDeltaCore metadataReader builder heapOffsets encBaseId
 
     let emitPropertyDeltaArtifacts (messageLiteral: string option) () : MetadataDeltaArtifacts =
         let moduleDef = createPropertyModule messageLiteral ()
@@ -844,7 +852,7 @@ module internal MetadataDeltaTestHelpers =
         let baselineHeapSizes = getHeapSizes metadataReader
         let builder = IlDeltaStreamBuilder None
         let heapOffsets = computeHeapOffsets metadataReader
-        let metadataDelta = emitPropertyDeltaCore metadataReader builder heapOffsets
+        let metadataDelta = emitPropertyDeltaCore metadataReader builder heapOffsets System.Guid.Empty
 
         inspectDeltaMetadata "delta" metadataDelta.Metadata
 
@@ -1375,7 +1383,8 @@ module internal MetadataDeltaTestHelpers =
             let baseOffsets = computeHeapOffsets metadataReader
             advanceHeapOffsets baseOffsets generation1.Delta
 
-        let generation2 = emitPropertyDeltaFromBaseline generation1.BaselineBytes nextOffsets
+        let gen1EncId = getModuleGenerationId generation1.Delta.Metadata
+        let generation2 = emitPropertyDeltaFromBaseline generation1.BaselineBytes nextOffsets gen1EncId
 
         { BaselineBytes = generation1.BaselineBytes
           BaselineHeapSizes = generation1.BaselineHeapSizes

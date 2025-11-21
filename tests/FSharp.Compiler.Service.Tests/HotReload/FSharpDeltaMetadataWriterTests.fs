@@ -787,6 +787,7 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal("", mdReader.GetString(MetadataTokens.StringHandle 0))
         Assert.Equal(0, mdReader.GetBlobBytes(MetadataTokens.BlobHandle 0).Length)
         Assert.Equal("", mdReader.GetUserString(MetadataTokens.UserStringHandle 0))
+
     [<Fact>]
     let ``metadata writer emits event and method semantics rows`` () =
         let moduleDef = createEventModule None ()
