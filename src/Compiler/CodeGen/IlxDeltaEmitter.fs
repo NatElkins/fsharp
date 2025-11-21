@@ -2094,7 +2094,13 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             match pdbBytesOpt with
             | None -> None
             | Some pdbBytes ->
-                HotReloadPdb.emitDelta request.Baseline pdbBytes addedOrChangedMethods deltaToUpdatedMethodToken
+                HotReloadPdb.emitDelta
+                    request.Baseline
+                    pdbBytes
+                    addedOrChangedMethods
+                    deltaToUpdatedMethodToken
+                    metadataDelta.EncLog
+                    metadataDelta.EncMap
 
         let synthesizedSnapshot =
             request.SynthesizedNames

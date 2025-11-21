@@ -212,6 +212,41 @@ module MdvValidationTests =
 
         Assert.Equal<int list>(tokenize expectedFiltered, tokenize actual)
 
+    let private decodeEntityHandle (handle: EntityHandle) : TableIndex * int =
+        let token = MetadataTokens.GetToken(handle)
+        let table = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte (token >>> 24))
+        let rowId = token &&& 0x00FFFFFF
+        table, rowId
+
+    let private readEncTables (reader: MetadataReader) =
+        let encLog =
+            reader.GetEditAndContinueLogEntries()
+            |> Seq.map (fun entry ->
+                let table, rowId = decodeEntityHandle entry.Handle
+                table, rowId, entry.Operation)
+            |> Seq.toArray
+
+        let encMap =
+            reader.GetEditAndContinueMapEntries()
+            |> Seq.map decodeEntityHandle
+            |> Seq.toArray
+
+        encLog, encMap
+
+    let private getEncTablesFromMetadata metadataBytes =
+        withMetadataReader metadataBytes readEncTables
+
+    let private getEncTablesFromPdb pdbBytes =
+        use provider = MetadataReaderProvider.FromPortablePdbImage(ImmutableArray.CreateRange pdbBytes)
+        let reader = provider.GetMetadataReader()
+        readEncTables reader
+
+    let private sortEncLogEntries (entries: (TableIndex * int * EditAndContinueOperation)[]) =
+        entries |> Array.sortBy (fun (t, r, op) -> int t, r, int op)
+
+    let private sortEncMapEntries (entries: (TableIndex * int)[]) =
+        entries |> Array.sortBy (fun (t, r) -> int t, r)
+
     let private createTempProject () =
         let root = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-tests", System.Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(root) |> ignore
@@ -1785,6 +1820,42 @@ type EventDemo() =
         let hasParamEncMap =
             delta.EncMap |> Array.exists (fun (t, _) -> t = TableIndex.Param)
         Assert.True(hasParamEncMap, "Expected EncMap entry for Param table")
+
+        if not (keepArtifacts ()) then
+            try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
+            match baselineArtifacts.PdbPath with
+            | Some path -> try File.Delete(path) with _ -> ()
+            | None -> ()
+
+    [<Fact>]
+    let ``pdb enc tables mirror metadata enc tables for method update`` () =
+        let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createMethodModule "Baseline helper message")
+        let typeName = "Sample.MethodDemo"
+        let methodKey = TestHelpers.methodKey typeName "GetMessage" [] PrimaryAssemblyILGlobals.typ_String
+
+        let request : IlxDeltaRequest =
+            { Baseline = baselineArtifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = TestHelpers.createMethodModule "Generation 1 helper message"
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta = emitDelta request
+
+        let pdbBytes =
+            match delta.Pdb with
+            | Some bytes -> bytes
+            | None -> failwith "Expected PDB delta to be emitted"
+
+        let metaLog, metaMap = getEncTablesFromMetadata delta.Metadata
+        let pdbLog, pdbMap = getEncTablesFromPdb pdbBytes
+
+        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(sortEncLogEntries metaLog, sortEncLogEntries pdbLog)
+        Assert.Equal<(TableIndex * int)[]>(sortEncMapEntries metaMap, sortEncMapEntries pdbMap)
 
         if not (keepArtifacts ()) then
             try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()

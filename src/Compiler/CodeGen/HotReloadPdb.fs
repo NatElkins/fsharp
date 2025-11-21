@@ -47,6 +47,8 @@ let emitDelta
     (updatedPdbBytes: byte[])
     (addedOrChangedMethods: AddedOrChangedMethodInfo list)
     (deltaToUpdatedMethodToken: IReadOnlyDictionary<int, int>)
+    (metadataEncLog: (TableIndex * int * EditAndContinueOperation) array)
+    (metadataEncMap: (TableIndex * int) array)
     : byte[] option =
     match baseline.PortablePdb with
     | None -> None
@@ -112,7 +114,6 @@ let emitDelta
                     printfn "[hotreload-pdb] method token missing for delta token 0x%08x" token
                 else
                     let sourceHandle = MetadataTokens.MethodDefinitionHandle sourceToken
-                    let deltaHandle = MetadataTokens.MethodDefinitionHandle token
 
                     if sourceHandle.IsNil then
                         printfn "[hotreload-pdb] source handle nil for delta token 0x%08x (source token=0x%08x)" token sourceToken
@@ -134,11 +135,6 @@ let emitDelta
                                     metadata.GetOrAddBlob(reader.GetBlobBytes methodInfo.SequencePointsBlob)
 
                             metadata.AddMethodDebugInformation(targetDocument, sequencePointsHandle) |> ignore
-
-                            let entityHandle: EntityHandle = MethodDefinitionHandle.op_Implicit deltaHandle
-                            metadata.AddEncLogEntry(entityHandle, EditAndContinueOperation.Default)
-                            metadata.AddEncMapEntry(entityHandle)
-
                             emitted <- true
                         else
                             printfn
@@ -147,6 +143,18 @@ let emitDelta
                                 token
                                 sourceToken
                                 reader.MethodDebugInformation.Count
+
+            // Mirror metadata EncLog/EncMap so PDB delta stays in lockstep with metadata delta tables.
+            for (table, rowId, operation) in metadataEncLog do
+                let handle = MetadataTokens.EntityHandle(table, rowId)
+                metadata.AddEncLogEntry(handle, operation)
+
+            for (table, rowId) in metadataEncMap do
+                let handle = MetadataTokens.EntityHandle(table, rowId)
+                metadata.AddEncMapEntry(handle)
+
+            if not emitted && (metadataEncLog.Length > 0 || metadataEncMap.Length > 0) then
+                emitted <- true
 
             if not emitted then
                 printfn "[hotreload-pdb] no method debug info emitted for tokens %A" distinctTokens
