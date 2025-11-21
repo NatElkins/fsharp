@@ -661,6 +661,36 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Contains("#JTD", names)
 
     [<Fact>]
+    let ``metadata delta keeps BSJB signature and empty heap entries`` () =
+        // Use a simple property delta to produce real delta metadata/IL
+        let artifacts = emitPropertyDeltaArtifacts None ()
+        let metadata = artifacts.Delta.Metadata
+
+        // Validate metadata root header (BSJB + version 1.1)
+        use stream = new MemoryStream(metadata, false)
+        use reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen = true)
+        let signature = reader.ReadUInt32()
+        Assert.Equal<uint32>(0x424A5342u, signature) // "BSJB" little-endian
+        let major = reader.ReadUInt16()
+        let minor = reader.ReadUInt16()
+        Assert.Equal(1us, major)
+        Assert.Equal(1us, minor)
+
+        // Validate required streams are present
+        let names = metadataStreamNames metadata
+        Assert.Contains("#~", names)
+        Assert.Contains("#Strings", names)
+        Assert.Contains("#US", names)
+        Assert.Contains("#Blob", names)
+        Assert.Contains("#GUID", names)
+
+        // Validate row-0 heap entries remain the empty items required by ECMA
+        use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(metadata))
+        let mdReader = provider.GetMetadataReader()
+        Assert.Equal("", mdReader.GetString(MetadataTokens.StringHandle 0))
+        Assert.Equal(0, mdReader.GetBlobBytes(MetadataTokens.BlobHandle 0).Length)
+        Assert.Equal("", mdReader.GetUserString(MetadataTokens.UserStringHandle 0))
+    [<Fact>]
     let ``metadata writer emits event and method semantics rows`` () =
         let moduleDef = createEventModule None ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
