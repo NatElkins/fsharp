@@ -623,8 +623,18 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let encBaseId =
         match request.PreviousGenerationId with
-        | Some prev -> prev
-        | None -> Guid.Empty
+        | Some prev when prev <> Guid.Empty -> prev
+        | _ ->
+            let baselineEncId = request.Baseline.EncId
+            if baselineEncId <> Guid.Empty then baselineEncId else Guid.Empty
+
+    if traceMetadata.Value then
+        printfn
+            "[fsharp-hotreload][metadata] generation=%d prevGeneration=%A baselineEncId=%A resolvedBase=%A"
+            request.CurrentGeneration
+            request.PreviousGenerationId
+            request.Baseline.EncId
+            encBaseId
     let encId = System.Guid.NewGuid()
 
     let methodRowLookup =
@@ -952,8 +962,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let methodDefinitionRowsRaw = methodDefinitionIndex.Rows
 
-    let emptyLocalSignature : byte[] = [| 0x07uy; 0x00uy |]
-
     let orderedMethodInputs =
         methodDefinitionRowsRaw
         |> List.choose (fun struct (_, key, _) ->
@@ -1139,13 +1147,12 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             |> List.map (fun struct (key, methodToken, methodHandle, methodDef, body) ->
                 let ilBytes = rewriteMethodBody remapUserString remapEntityToken body
                 let localSigToken =
-                    let signatureBytes =
-                        if body.LocalSignature.IsNil then
-                            emptyLocalSignature
-                        else
-                            let standalone = metadataReader.GetStandaloneSignature body.LocalSignature
-                            metadataReader.GetBlobBytes standalone.Signature
-                    builder.AddStandaloneSignature(signatureBytes)
+                    if body.LocalSignature.IsNil then
+                        0
+                    else
+                        let standalone = metadataReader.GetStandaloneSignature body.LocalSignature
+                        let signatureBytes = metadataReader.GetBlobBytes standalone.Signature
+                        builder.AddStandaloneSignature(signatureBytes)
 
                 let bodyUpdate =
                     builder.AddMethodBody(
@@ -1206,8 +1213,10 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     | true, existing when existing <= rowId -> ()
                     | _ -> firstParamRowByMethod[key.Method] <- rowId
 
+                    // Treat synthesized return parameter rows as added so EncLog/EncMap
+                    // reflect the new Param table entry, mirroring Roslyn ENC behavior.
                     let effectiveIsAdded =
-                        if returnParameterKeys.Contains key then false else isAdded
+                        if returnParameterKeys.Contains key then true else isAdded
                     Some
                         { ParameterDefinitionRowInfo.Key = key
                           RowId = rowId
@@ -1240,13 +1249,17 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         | Some value -> value
                         | None -> implAttrs
                     let resolvedCodeRva = baselineHandles |> Option.bind (fun info -> info.Rva)
+                    let baselineFirstParam =
+                        baselineHandles
+                        |> Option.bind (fun info -> info.FirstParameterRowId)
+
                     let firstParam =
-                        match baselineHandles |> Option.bind (fun info -> info.FirstParameterRowId) with
-                        | Some _ as baselineRow -> baselineRow
-                        | None ->
-                            match firstParamRowByMethod.TryGetValue key with
-                            | true, value -> Some value
-                            | _ -> None
+                        match firstParamRowByMethod.TryGetValue key with
+                        | true, value when value > 0 -> Some value
+                        | _ ->
+                            match baselineFirstParam with
+                            | Some _ as baselineRow -> baselineRow
+                            | None -> None
                     Some
                         { MethodDefinitionRowInfo.Key = key
                           RowId = rowId

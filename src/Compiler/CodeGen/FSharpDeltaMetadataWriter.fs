@@ -287,6 +287,10 @@ let emitWithUserStrings
                     if emitSrmTables then
                         let nameHandle = metadataBuilder.GetOrAddString row.Name
                         let signatureHandle = metadataBuilder.GetOrAddBlob row.Signature
+                        let firstParamHandle =
+                            match row.FirstParameterRowId with
+                            | Some rid when rid > 0 -> MetadataTokens.ParameterHandle rid
+                            | _ -> ParameterHandle()
 
                         metadataBuilder.AddMethodDefinition(
                             row.Attributes,
@@ -294,8 +298,7 @@ let emitWithUserStrings
                             nameHandle,
                             signatureHandle,
                             update.Body.CodeOffset,
-                            ParameterHandle()
-                        )
+                            firstParamHandle)
                         |> ignore
                 tableMirror.AddMethodRow(row, update.Body)
                 if shouldTraceMethodRows () then
@@ -322,10 +325,9 @@ let emitWithUserStrings
                 metadataBuilder.AddParameter(row.Attributes, nameHandle, row.SequenceNumber) |> ignore
             tableMirror.AddParameterRow row
 
-            if row.SequenceNumber <> 0 then
-                let operation = if row.IsAdded then EditAndContinueOperation.AddParameter else EditAndContinueOperation.Default
-                encLog.Add(struct (TableIndex.Param, row.RowId, operation))
-                encMap.Add(struct (TableIndex.Param, row.RowId))
+            let operation = if row.IsAdded then EditAndContinueOperation.AddParameter else EditAndContinueOperation.Default
+            encLog.Add(struct (TableIndex.Param, row.RowId, operation))
+            encMap.Add(struct (TableIndex.Param, row.RowId))
 
         for row in typeReferenceRows do
             if emitSrmTables then

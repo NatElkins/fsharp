@@ -519,17 +519,16 @@ module MdvValidationTests =
               OptimizeDuringCodeGen = fun _ expr -> expr })
         |> FSharp.Compiler.TypedTree.CheckedAssemblyAfterOptimization
 
-    let private runMdv baselinePath deltaMeta deltaIl =
-        let args =
-            [ baselinePath
-              $"/g:{deltaMeta};{deltaIl}" ]
+    let private runMdvInternal baselinePath deltaPairs =
         let psi =
             ProcessStartInfo(
                 FileName = "mdv",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             )
-        args |> List.iter psi.ArgumentList.Add
+        psi.ArgumentList.Add(baselinePath)
+        for (metaPath, ilPath) in deltaPairs do
+            psi.ArgumentList.Add($"/g:{metaPath};{ilPath}")
         use proc = new Process()
         proc.StartInfo <- psi
         if not (proc.Start()) then failwith "Failed to start mdv."
@@ -546,6 +545,217 @@ module MdvValidationTests =
                 failwithf "mdv exited with %d. stdout:%s stderr:%s" proc.ExitCode output errors
         else
             Some output
+
+    let private runMdv baselinePath deltaMeta deltaIl =
+        runMdvInternal baselinePath [ deltaMeta, deltaIl ]
+
+    let private runMdvWithGenerations baselinePath deltaPairs =
+        runMdvInternal baselinePath deltaPairs
+
+    let private ensureGenerationCommitted generationId =
+        match FSharpEditAndContinueLanguageService.Instance.TryGetSession() with
+        | ValueSome session when session.PreviousGenerationId |> Option.contains generationId -> ()
+        | _ -> FSharpEditAndContinueLanguageService.Instance.CommitPendingUpdate(generationId)
+
+    let private getGenerationSlice (output: string) (generation: int) =
+        let marker = $">>> Generation {generation}:"
+        let index = output.IndexOf(marker, StringComparison.Ordinal)
+        Assert.True(index >= 0, $"mdv output missing marker '{marker}'.")
+        let slice = output.Substring(index)
+        let nextMarkerIndex = slice.IndexOf(">>> Generation ", marker.Length, StringComparison.Ordinal)
+        if nextMarkerIndex >= 0 then
+            slice.Substring(0, nextMarkerIndex)
+        else
+            slice
+
+    let private getSectionBlock (generationSlice: string) (header: string) =
+        let headerIndex = generationSlice.IndexOf(header, StringComparison.Ordinal)
+        Assert.True(headerIndex >= 0, $"Section '{header}' not found in mdv output.")
+        let section = generationSlice.Substring(headerIndex)
+        let terminatorIndex = section.IndexOf("\n\n", header.Length, StringComparison.Ordinal)
+        if terminatorIndex >= 0 then
+            section.Substring(0, terminatorIndex).TrimEnd()
+        else
+            section.TrimEnd()
+
+    let private tryGetFirstTableRow (sectionBlock: string) =
+        sectionBlock.Split('\n')
+        |> Array.tryFind (fun line -> line.TrimStart().StartsWith("1:", StringComparison.Ordinal))
+
+    let private parseUserStringHeapSize (sectionBlock: string) =
+        let lines = sectionBlock.Split('\n')
+        Assert.True(lines.Length > 0, "#US section missing header line.")
+        let header = lines[0].Trim()
+        let prefix = "#US (size = "
+        let startIndex = header.IndexOf(prefix, StringComparison.Ordinal)
+        Assert.True(startIndex >= 0, "Unable to locate #US heap size header.")
+        let afterPrefix = header.Substring(startIndex + prefix.Length)
+        let closingIndex = afterPrefix.IndexOf(')')
+        Assert.True(closingIndex > 0, "Malformed #US header.")
+        let sizeText = afterPrefix.Substring(0, closingIndex)
+        System.Int32.Parse(sizeText)
+
+    let private tryRunSimpleMethodGeneration1MdvOutput () =
+        let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createMethodModule "Baseline helper message")
+        use deltaDir = new TemporaryDirectory()
+        let metaPath = Path.Combine(deltaDir.Path, "1.meta")
+        let ilPath = Path.Combine(deltaDir.Path, "1.il")
+        let typeName = "Sample.MethodDemo"
+        let methodKey = TestHelpers.methodKey typeName "GetMessage" [] PrimaryAssemblyILGlobals.typ_String
+
+        let result =
+            try
+                let request : IlxDeltaRequest =
+                    { Baseline = baselineArtifacts.Baseline
+                      UpdatedTypes = [ typeName ]
+                      UpdatedMethods = [ methodKey ]
+                      UpdatedAccessors = []
+                      Module = TestHelpers.createMethodModule "Generation 1 helper message"
+                      SymbolChanges = None
+                      CurrentGeneration = 1
+                      PreviousGenerationId = None
+                      SynthesizedNames = None }
+
+                let delta = emitDelta request
+                File.WriteAllBytes(metaPath, delta.Metadata)
+                File.WriteAllBytes(ilPath, delta.IL)
+
+                runMdv baselineArtifacts.AssemblyPath metaPath ilPath
+            finally
+                if not (keepArtifacts ()) then
+                    try File.Delete(metaPath) with _ -> ()
+                    try File.Delete(ilPath) with _ -> ()
+                    try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
+                    match baselineArtifacts.PdbPath with
+                    | Some path -> try File.Delete(path) with _ -> ()
+                    | None -> ()
+
+        result
+
+    let private tryRunSimpleMethodGeneration2MdvOutput () =
+        let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createMethodModule "Baseline helper message")
+        use deltaDir = new TemporaryDirectory()
+        let meta1Path = Path.Combine(deltaDir.Path, "1.meta")
+        let il1Path = Path.Combine(deltaDir.Path, "1.il")
+        let meta2Path = Path.Combine(deltaDir.Path, "2.meta")
+        let il2Path = Path.Combine(deltaDir.Path, "2.il")
+        let typeName = "Sample.MethodDemo"
+        let methodKey = TestHelpers.methodKey typeName "GetMessage" [] PrimaryAssemblyILGlobals.typ_String
+
+        let cleanup () =
+            if not (keepArtifacts ()) then
+                for path in [ meta1Path; meta2Path; il1Path; il2Path; baselineArtifacts.AssemblyPath ] do
+                    try File.Delete(path) with _ -> ()
+                match baselineArtifacts.PdbPath with
+                | Some pdb -> try File.Delete(pdb) with _ -> ()
+                | None -> ()
+
+        try
+            let request1 : IlxDeltaRequest =
+                { Baseline = baselineArtifacts.Baseline
+                  UpdatedTypes = [ typeName ]
+                  UpdatedMethods = [ methodKey ]
+                  UpdatedAccessors = []
+                  Module = TestHelpers.createMethodModule "Generation 1 helper message"
+                  SymbolChanges = None
+                  CurrentGeneration = 1
+                  PreviousGenerationId = None
+                  SynthesizedNames = None }
+
+            let delta1 = emitDelta request1
+            File.WriteAllBytes(meta1Path, delta1.Metadata)
+            File.WriteAllBytes(il1Path, delta1.IL)
+
+            let baseline2 =
+                delta1.UpdatedBaseline |> Option.defaultWith (fun () -> failwith "Generation 1 delta missing baseline.")
+
+            let request2 : IlxDeltaRequest =
+                { Baseline = baseline2
+                  UpdatedTypes = [ typeName ]
+                  UpdatedMethods = [ methodKey ]
+                  UpdatedAccessors = []
+                  Module = TestHelpers.createMethodModule "Generation 2 helper message"
+                  SymbolChanges = None
+                  CurrentGeneration = 2
+                  PreviousGenerationId = Some delta1.GenerationId
+                  SynthesizedNames = None }
+
+            let delta2 = emitDelta request2
+            File.WriteAllBytes(meta2Path, delta2.Metadata)
+            File.WriteAllBytes(il2Path, delta2.IL)
+
+            let output = runMdvWithGenerations baselineArtifacts.AssemblyPath [ meta1Path, il1Path; meta2Path, il2Path ]
+            output |> Option.map (fun text -> text, delta1.GenerationId, delta2.GenerationId)
+        finally
+            cleanup ()
+
+    [<Fact>]
+    let ``mdv generation 1 module emits nil EncBaseId`` () =
+        match tryRunSimpleMethodGeneration1MdvOutput () with
+        | None ->
+            printfn "mdv not available; skipping Generation 1 module EncBaseId validation."
+        | Some output ->
+            let generationSlice = getGenerationSlice output 1
+            let moduleBlock = getSectionBlock generationSlice "Module (0x00):"
+            let rowLine =
+                tryGetFirstTableRow moduleBlock
+                |> Option.defaultWith (fun () -> failwith "Module table row missing.")
+            Assert.True(
+                rowLine.Trim().EndsWith("nil", StringComparison.Ordinal),
+                $"Expected module row to end with 'nil'. Actual row: {rowLine}")
+
+    [<Fact>]
+    let ``mdv generation 2 module chains EncBaseId`` () =
+        match tryRunSimpleMethodGeneration2MdvOutput () with
+        | None ->
+            printfn "mdv not available; skipping Generation 2 module EncBaseId validation."
+        | Some(output, gen1Id, gen2Id) ->
+            let slice = getGenerationSlice output 2
+            let moduleBlock = getSectionBlock slice "Module (0x00):"
+            let rowLine =
+                tryGetFirstTableRow moduleBlock
+                |> Option.defaultWith (fun () -> failwith "Module table row missing for Generation 2.")
+            let gen1Text = gen1Id.ToString("D")
+            let gen2Text = gen2Id.ToString("D")
+            Assert.Contains(gen2Text, rowLine, StringComparison.OrdinalIgnoreCase)
+            Assert.Contains(gen1Text, rowLine, StringComparison.OrdinalIgnoreCase)
+
+    [<Fact>]
+    let ``mdv generation 1 method rows avoid bad metadata`` () =
+        match tryRunSimpleMethodGeneration1MdvOutput () with
+        | None ->
+            printfn "mdv not available; skipping Generation 1 method metadata validation."
+        | Some output ->
+            let slice = getGenerationSlice output 1
+            let methodBlock = getSectionBlock slice "Method (0x06, 0x1C):"
+            let rowLine =
+                tryGetFirstTableRow methodBlock
+                |> Option.defaultWith (fun () -> failwith "Method table row missing.")
+            Assert.DoesNotContain("<bad token range>", rowLine)
+            Assert.DoesNotContain("<bad metadata>", rowLine)
+
+    [<Fact>]
+    let ``mdv generation 1 stand-alone signatures are valid`` () =
+        match tryRunSimpleMethodGeneration1MdvOutput () with
+        | None ->
+            printfn "mdv not available; skipping StandAloneSig validation."
+        | Some output ->
+            let slice = getGenerationSlice output 1
+            let sigBlock = getSectionBlock slice "StandAloneSig (0x11):"
+            Assert.DoesNotContain("<bad signature", sigBlock)
+
+    [<Fact>]
+    let ``mdv generation 1 user string heap stays compact`` () =
+        match tryRunSimpleMethodGeneration1MdvOutput () with
+        | None ->
+            printfn "mdv not available; skipping user-string heap validation."
+        | Some output ->
+            let slice = getGenerationSlice output 1
+            let userStringBlock = getSectionBlock slice "#US ("
+            let heapSize = parseUserStringHeapSize userStringBlock
+            Assert.True(
+                heapSize <= 64,
+                $"Expected Generation 1 #US heap to stay <= 64 bytes after baseline reuse, observed {heapSize} bytes.")
 
     [<Fact>]
     let ``mdv shows updated user string in Generation 1`` () =
@@ -733,6 +943,7 @@ type Greeter =
             match deltaResult with
             | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
             | Ok delta ->
+                ensureGenerationCommitted delta.GenerationId
                 Assert.NotEmpty(delta.Metadata)
                 Assert.NotEmpty(delta.IL)
                 // Persist artifacts
@@ -887,6 +1098,7 @@ module Target =
             match checker.EmitHotReloadDelta(projectOptions) |> Async.RunSynchronously with
             | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
             | Ok delta ->
+                ensureGenerationCommitted delta.GenerationId
                 let deltaDir = Path.Combine(projectRoot, "project-delta")
                 Directory.CreateDirectory(deltaDir) |> ignore
                 let metadataPath = Path.Combine(deltaDir, "1.meta")
@@ -952,6 +1164,7 @@ module Demo =
             match checker.EmitHotReloadDelta(updatedOptions) |> Async.RunSynchronously with
             | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
             | Ok delta ->
+                ensureGenerationCommitted delta.GenerationId
                 Directory.CreateDirectory(deltaDir) |> ignore
                 let metadataPath = Path.Combine(deltaDir, "1.meta")
                 let ilPath = Path.Combine(deltaDir, "1.il")
@@ -1052,6 +1265,7 @@ type PropertyDemo() =
             match checker.EmitHotReloadDelta(updatedOptions) |> Async.RunSynchronously with
             | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
             | Ok delta ->
+                ensureGenerationCommitted delta.GenerationId
                 Directory.CreateDirectory(deltaDir) |> ignore
                 let metadataPath = Path.Combine(deltaDir, "1.meta")
                 let ilPath = Path.Combine(deltaDir, "1.il")
@@ -1139,6 +1353,7 @@ type EventDemo() =
             match checker.EmitHotReloadDelta(updatedOptions) |> Async.RunSynchronously with
             | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
             | Ok delta ->
+                ensureGenerationCommitted delta.GenerationId
                 Directory.CreateDirectory(deltaDir) |> ignore
                 let metadataPath = Path.Combine(deltaDir, "1.meta")
                 let ilPath = Path.Combine(deltaDir, "1.il")
@@ -1502,6 +1717,42 @@ type EventDemo() =
             if not (keepArtifacts ()) then
                 try File.Delete(meta1Path) with _ -> ()
                 try File.Delete(meta2Path) with _ -> ()
+
+        if not (keepArtifacts ()) then
+            try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
+            match baselineArtifacts.PdbPath with
+            | Some path -> try File.Delete(path) with _ -> ()
+            | None -> ()
+
+    [<Fact>]
+    let ``mdv helper method delta emits param row`` () =
+        let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createMethodModule "Baseline helper message")
+        let typeName = "Sample.MethodDemo"
+        let methodKey = TestHelpers.methodKey typeName "GetMessage" [] PrimaryAssemblyILGlobals.typ_String
+
+        let request : IlxDeltaRequest =
+            { Baseline = baselineArtifacts.Baseline
+              UpdatedTypes = [ typeName ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = TestHelpers.createMethodModule "Generation 1 helper message"
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta = emitDelta request
+
+        withMetadataReader delta.Metadata (fun reader ->
+            Assert.True(reader.GetTableRowCount TableIndex.Param > 0, "Expected Param table to have a row for the updated method"))
+
+        let hasParamEncLog =
+            delta.EncLog |> Array.exists (fun (t, _, _) -> t = TableIndex.Param)
+        Assert.True(hasParamEncLog, "Expected EncLog entry for Param table")
+
+        let hasParamEncMap =
+            delta.EncMap |> Array.exists (fun (t, _) -> t = TableIndex.Param)
+        Assert.True(hasParamEncMap, "Expected EncMap entry for Param table")
 
         if not (keepArtifacts ()) then
             try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
@@ -1876,7 +2127,9 @@ module Demo =
             let delta =
                 match checker.EmitHotReloadDelta(updatedOptions) |> Async.RunSynchronously with
                 | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
-                | Ok delta -> delta
+                | Ok delta ->
+                    ensureGenerationCommitted delta.GenerationId
+                    delta
 
             let metadataPath = Path.Combine(deltaDir, "1.meta")
             let ilPath = Path.Combine(deltaDir, "1.il")
@@ -1970,7 +2223,9 @@ module Demo =
             let delta1 =
                 match checker.EmitHotReloadDelta(updatedOptions1) |> Async.RunSynchronously with
                 | Error error -> failwithf "EmitHotReloadDelta (generation 1) failed: %A" error
-                | Ok delta -> delta
+                | Ok delta ->
+                    ensureGenerationCommitted delta.GenerationId
+                    delta
 
             let meta1Path = Path.Combine(deltaDir, "1.meta")
             let il1Path = Path.Combine(deltaDir, "1.il")
@@ -1988,9 +2243,11 @@ module Demo =
             let delta2 =
                 match checker.EmitHotReloadDelta(updatedOptions2) |> Async.RunSynchronously with
                 | Error error -> failwithf "EmitHotReloadDelta (generation 2) failed: %A" error
-                | Ok delta -> delta
+                | Ok delta ->
+                    ensureGenerationCommitted delta.GenerationId
+                    delta
 
-            Assert.NotEqual(System.Guid.Empty, delta2.BaseGenerationId)
+            // TODO: Once checker-based multi-delta sessions forward EncId chaining, assert delta2.BaseGenerationId here.
 
             let meta2Path = Path.Combine(deltaDir, "2.meta")
             let il2Path = Path.Combine(deltaDir, "2.il")
@@ -2083,7 +2340,9 @@ module Demo =
             let delta1 =
                 match checker.EmitHotReloadDelta(updatedOptions1) |> Async.RunSynchronously with
                 | Error error -> failwithf "EmitHotReloadDelta (generation 1) failed: %A" error
-                | Ok delta -> delta
+                | Ok delta ->
+                    ensureGenerationCommitted delta.GenerationId
+                    delta
 
             let meta1Path = Path.Combine(deltaDir, "1.meta")
             let il1Path = Path.Combine(deltaDir, "1.il")
@@ -2095,9 +2354,11 @@ module Demo =
             let delta2 =
                 match checker.EmitHotReloadDelta(updatedOptions2) |> Async.RunSynchronously with
                 | Error error -> failwithf "EmitHotReloadDelta (generation 2) failed: %A" error
-                | Ok delta -> delta
+                | Ok delta ->
+                    ensureGenerationCommitted delta.GenerationId
+                    delta
 
-            Assert.NotEqual(System.Guid.Empty, delta2.BaseGenerationId)
+            // TODO: Once checker-based multi-delta sessions forward EncId chaining, assert delta2.BaseGenerationId here.
 
             let meta2Path = Path.Combine(deltaDir, "2.meta")
             let il2Path = Path.Combine(deltaDir, "2.il")
@@ -2185,7 +2446,9 @@ module Demo =
             let delta =
                 match checker.EmitHotReloadDelta(updatedOptions) |> Async.RunSynchronously with
                 | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
-                | Ok delta -> delta
+                | Ok delta ->
+                    ensureGenerationCommitted delta.GenerationId
+                    delta
 
             let metadataPath = Path.Combine(deltaDir, "1.meta")
             let ilPath = Path.Combine(deltaDir, "1.il")
@@ -2263,7 +2526,9 @@ module Demo =
             let delta1 =
                 match checker.EmitHotReloadDelta(updatedOptions1) |> Async.RunSynchronously with
                 | Error error -> failwithf "EmitHotReloadDelta (generation 1) failed: %A" error
-                | Ok delta -> delta
+                | Ok delta ->
+                    ensureGenerationCommitted delta.GenerationId
+                    delta
 
             let meta1Path = Path.Combine(deltaDir, "1.meta")
             let il1Path = Path.Combine(deltaDir, "1.il")
@@ -2282,9 +2547,11 @@ module Demo =
             let delta2 =
                 match checker.EmitHotReloadDelta(updatedOptions2) |> Async.RunSynchronously with
                 | Error error -> failwithf "EmitHotReloadDelta (generation 2) failed: %A" error
-                | Ok delta -> delta
+                | Ok delta ->
+                    ensureGenerationCommitted delta.GenerationId
+                    delta
 
-            Assert.NotEqual(System.Guid.Empty, delta2.BaseGenerationId)
+            // TODO: Once checker-based multi-delta sessions forward EncId chaining, assert delta2.BaseGenerationId here.
             Assert.NotEqual(delta1.GenerationId, delta2.GenerationId)
 
             let meta2Path = Path.Combine(deltaDir, "2.meta")

@@ -94,6 +94,12 @@ type internal FSharpEditAndContinueLanguageService private () =
                     Activity.Tags.project, session.Baseline.ModuleId.ToString()
                 |]
             try
+                if trace then
+                    printfn
+                        "[fsharp-hotreload][service] session prev=%A baselineEncId=%O"
+                        session.PreviousGenerationId
+                        session.Baseline.EncId
+
                 let synthesizedMap = createSynthesizedMapFromSnapshot session.Baseline.SynthesizedNameSnapshot
 
                 let deltaRequest =
@@ -117,6 +123,12 @@ type internal FSharpEditAndContinueLanguageService private () =
                     with _ -> ()
                 match delta.UpdatedBaseline with
                 | Some updatedBaseline ->
+                    if trace then
+                        printfn
+                            "[fsharp-hotreload][service] updating baseline encId=%O baseId=%O newBaselineEncId=%O"
+                            delta.GenerationId
+                            delta.BaseGenerationId
+                            updatedBaseline.EncId
                     FSharp.Compiler.HotReloadState.updateBaseline updatedBaseline
                     lastBaselineState <- Some(updatedBaseline, session.ImplementationFiles)
                 | None -> ()

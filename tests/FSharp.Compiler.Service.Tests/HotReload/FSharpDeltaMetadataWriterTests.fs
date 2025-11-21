@@ -617,6 +617,103 @@ module FSharpDeltaMetadataWriterTests =
         assertBlobHeapGrowthWithinMulti "async-multigen" artifacts asyncBlobDeltaBytes
 
     [<Fact>]
+    let ``method update emits return parameter row`` () =
+        let moduleDef = MetadataDeltaTestHelpers.createParameterlessMethodModule (Some "baseline message") ()
+        let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
+        use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
+        let metadataReader = peReader.GetMetadataReader()
+
+        let methodHandle =
+            metadataReader.MethodDefinitions
+            |> Seq.find (fun h -> metadataReader.GetString(metadataReader.GetMethodDefinition(h).Name) = "GetMessage")
+
+        let methodDef = metadataReader.GetMethodDefinition methodHandle
+        let methodRowId = MetadataTokens.GetRowNumber methodHandle
+
+        let methodKey =
+            { DeclaringType = "Sample.ParamlessHost"
+              Name = "GetMessage"
+              GenericArity = 0
+              ParameterTypes = []
+              ReturnType = ilGlobals.typ_String }
+
+        let methodRow : DeltaWriter.MethodDefinitionRowInfo =
+            { Key = methodKey
+              RowId = methodRowId
+              IsAdded = false
+              Attributes = methodDef.Attributes
+              ImplAttributes = methodDef.ImplAttributes
+              Name = metadataReader.GetString methodDef.Name
+              NameHandle = if methodDef.Name.IsNil then None else Some methodDef.Name
+              Signature = metadataReader.GetBlobBytes methodDef.Signature
+              SignatureHandle = if methodDef.Signature.IsNil then None else Some methodDef.Signature
+              FirstParameterRowId = None
+              CodeRva = Some methodDef.RelativeVirtualAddress }
+
+        let nextParamRowId = metadataReader.GetTableRowCount(TableIndex.Param) + 1
+        let paramRow : DeltaWriter.ParameterDefinitionRowInfo =
+            { Key = { Method = methodKey; SequenceNumber = 0 }
+              RowId = nextParamRowId
+              IsAdded = true
+              Attributes = ParameterAttributes.None
+              SequenceNumber = 0
+              Name = None
+              NameHandle = None }
+
+        let methodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle)
+        let updates: DeltaWriter.MethodMetadataUpdate list =
+            [ { MethodKey = methodKey
+                MethodToken = methodToken
+                MethodHandle = methodHandle
+                Body =
+                    { MethodToken = methodToken
+                      LocalSignatureToken = 0
+                      CodeOffset = 0
+                      CodeLength = 4 } } ]
+
+        let baselineHeapSizes : MetadataHeapSizes =
+            { StringHeapSize = metadataReader.GetHeapSize HeapIndex.String
+              UserStringHeapSize = metadataReader.GetHeapSize HeapIndex.UserString
+              BlobHeapSize = metadataReader.GetHeapSize HeapIndex.Blob
+              GuidHeapSize = metadataReader.GetHeapSize HeapIndex.Guid }
+
+        let baselineRowCounts =
+            Array.init MetadataTokens.TableCount (fun i ->
+                let table = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte i)
+                metadataReader.GetTableRowCount table)
+
+        let metadataDelta =
+            let moduleDefHandle = metadataReader.GetModuleDefinition()
+            let moduleGuid = metadataReader.GetGuid(moduleDefHandle.Mvid)
+
+            DeltaWriter.emit
+                (MetadataBuilder())
+                (metadataReader.GetString(metadataReader.GetModuleDefinition().Name))
+                None
+                (System.Guid.NewGuid())
+                System.Guid.Empty
+                moduleGuid
+                [ methodRow ]
+                [ paramRow ]
+                []
+                []
+                []
+                []
+                []
+                []
+                []
+                updates
+                (DeltaMetadataTables.MetadataHeapOffsets.OfHeapSizes baselineHeapSizes)
+                baselineRowCounts
+
+        Assert.Equal(1, metadataDelta.TableRowCounts.[int TableIndex.Param])
+        Assert.Contains(metadataDelta.EncLog, fun (t, _, _) -> t = TableIndex.Param)
+        Assert.Contains(metadataDelta.EncMap, fun (t, _) -> t = TableIndex.Param)
+        ignoreBadImageFormat (fun () -> assertTableStreamMatches metadataDelta)
+        ignoreBadImageFormat (fun () -> assertEncLogMatches metadataDelta.Metadata metadataDelta.EncLog)
+        ignoreBadImageFormat (fun () -> assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap)
+
+    [<Fact>]
     let ``property multi-generation uses ENC-sized indexes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
 
@@ -678,7 +775,7 @@ module FSharpDeltaMetadataWriterTests =
 
         // Validate required streams are present
         let names = metadataStreamNames metadata
-        Assert.Contains("#~", names)
+        Assert.True(names |> List.exists (fun n -> n = "#~" || n = "#-"), "Missing #~ or #- stream")
         Assert.Contains("#Strings", names)
         Assert.Contains("#US", names)
         Assert.Contains("#Blob", names)

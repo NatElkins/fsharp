@@ -451,7 +451,7 @@ module DeltaEmitterTests =
             [|
                 (TableIndex.Module, 0x00000001, EditAndContinueOperation.Default)
                 (TableIndex.MethodDef, 0x00000001, EditAndContinueOperation.Default)
-                (TableIndex.StandAloneSig, 0x00000001, EditAndContinueOperation.Default)
+                (TableIndex.Param, 0x00000001, EditAndContinueOperation.AddParameter)
             |]
 
         Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, delta.EncLog)
@@ -460,10 +460,73 @@ module DeltaEmitterTests =
             [|
                 (TableIndex.Module, 0x00000001)
                 (TableIndex.MethodDef, 0x00000001)
-                (TableIndex.StandAloneSig, 0x00000001)
+                (TableIndex.Param, 0x00000001)
             |]
 
         Assert.Equal<(TableIndex * int)[]>(expectedEncMap, delta.EncMap)
+
+    [<Fact>]
+    let ``emitDelta sets generation 1 base id to Guid.Empty`` () =
+        let _, baseline = createBaseline ()
+        let updatedModule = createModule 99
+
+        let request =
+            {
+                IlxDeltaRequest.Baseline = baseline
+                UpdatedTypes = [ "Sample.Type" ]
+                UpdatedMethods = [ methodKey baseline "GetValue" ]
+                UpdatedAccessors = []
+                Module = updatedModule
+                SymbolChanges = None
+                CurrentGeneration = 1
+                PreviousGenerationId = None
+                SynthesizedNames = None
+            }
+
+        let delta = emitDelta request
+
+        Assert.NotEqual(System.Guid.Empty, delta.GenerationId)
+        Assert.Equal(System.Guid.Empty, delta.BaseGenerationId)
+
+    [<Fact>]
+    let ``emitDelta chains BaseGenerationId across generations`` () =
+        let _, baseline = createBaseline ()
+
+        let requestGen1 =
+            { IlxDeltaRequest.Baseline = baseline
+              UpdatedTypes = [ "Sample.Type" ]
+              UpdatedMethods = [ methodKey baseline "GetValue" ]
+              UpdatedAccessors = []
+              Module = createModule 101
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta1 = emitDelta requestGen1
+        Assert.NotEqual(System.Guid.Empty, delta1.GenerationId)
+        Assert.Equal(System.Guid.Empty, delta1.BaseGenerationId)
+
+        let baseline2 =
+            match delta1.UpdatedBaseline with
+            | Some b -> b
+            | None -> failwith "Generation 1 delta did not return an updated baseline."
+
+        let requestGen2 =
+            { IlxDeltaRequest.Baseline = baseline2
+              UpdatedTypes = [ "Sample.Type" ]
+              UpdatedMethods = [ methodKey baseline "GetValue" ]
+              UpdatedAccessors = []
+              Module = createModule 102
+              SymbolChanges = None
+              CurrentGeneration = 2
+              PreviousGenerationId = Some delta1.GenerationId
+              SynthesizedNames = None }
+
+        let delta2 = emitDelta requestGen2
+
+        Assert.NotEqual(System.Guid.Empty, delta2.GenerationId)
+        Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
 
     [<Fact>]
     let ``emitDelta ignores unknown symbols`` () =
@@ -551,7 +614,8 @@ module DeltaEmitterTests =
                 (TableIndex.Module, 0x00000001, EditAndContinueOperation.Default)
                 (TableIndex.MethodDef, 0x00000001, EditAndContinueOperation.Default)
                 (TableIndex.MethodDef, 0x00000002, EditAndContinueOperation.Default)
-                (TableIndex.StandAloneSig, 0x00000001, EditAndContinueOperation.Default)
+                (TableIndex.Param, 0x00000001, EditAndContinueOperation.AddParameter)
+                (TableIndex.Param, 0x00000002, EditAndContinueOperation.AddParameter)
             |]
         Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedLog, delta.EncLog)
 
@@ -560,7 +624,8 @@ module DeltaEmitterTests =
                 (TableIndex.Module, 0x00000001)
                 (TableIndex.MethodDef, 0x00000001)
                 (TableIndex.MethodDef, 0x00000002)
-                (TableIndex.StandAloneSig, 0x00000001)
+                (TableIndex.Param, 0x00000001)
+                (TableIndex.Param, 0x00000002)
             |]
         Assert.Equal<(TableIndex * int)[]>(expectedMap, delta.EncMap)
         match delta.Pdb with
@@ -646,10 +711,10 @@ module DeltaEmitterTests =
             delta.EncLog
             |> Array.filter (fun (table, _, _) -> table = TableIndex.Param)
 
-        Assert.Equal(2, paramAdds.Length)
+        Assert.Equal(3, paramAdds.Length)
 
         let baselineParamCount = baselineArtifacts.Baseline.Metadata.TableRowCounts.[int TableIndex.Param]
-        let expectedParamRows = [ baselineParamCount + 1; baselineParamCount + 2 ]
+        let expectedParamRows = [ baselineParamCount + 1; baselineParamCount + 2; baselineParamCount + 3 ]
 
         let actualRows =
             paramAdds

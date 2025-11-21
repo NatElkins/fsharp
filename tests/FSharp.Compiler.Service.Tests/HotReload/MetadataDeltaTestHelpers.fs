@@ -510,6 +510,56 @@ module internal MetadataDeltaTestHelpers =
             (mkILExportedTypes [])
             "v4.0.30319"
 
+    /// Minimal module with a single parameterless method returning a string literal.
+    let createParameterlessMethodModule (messageLiteral: string option) () =
+        let ilg = ilGlobals
+        let stringType = ilg.typ_String
+        let literal = defaultArg messageLiteral "baseline"
+
+        let methodBody =
+            mkMethodBody(
+                false,
+                [],
+                2,
+                nonBranchingInstrsToCode [ I_ldstr literal; I_ret ],
+                None,
+                None)
+
+        let methodDef =
+            mkILNonGenericStaticMethod(
+                "GetMessage",
+                ILMemberAccess.Public,
+                [],
+                mkILReturn stringType,
+                methodBody)
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    "Sample.ParamlessHost",
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ methodDef ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
     let createClosureModule () =
         let ilg = ilGlobals
         let stringType = ilg.typ_String

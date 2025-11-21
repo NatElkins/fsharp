@@ -705,5 +705,8 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         counts
 
     member _.AddUserStringLiteral(offset: int, value: string) =
-        userStrings.AddEntry(offset, value)
+        let relativeOffset =
+            let start = heapOffsets.UserStringHeapStart
+            if offset > start then offset - start else offset
+        userStrings.AddEntry(relativeOffset, value)
         userStringHeapBytesCache <- None
