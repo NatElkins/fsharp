@@ -789,6 +789,29 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal("", mdReader.GetUserString(MetadataTokens.UserStringHandle 0))
 
     [<Fact>]
+    let ``async delta enc log marks updated method and params as Default`` () =
+        // Async scenario updates an existing method body (no new defs)
+        let artifacts = emitAsyncDeltaArtifacts None ()
+        let encLog = artifacts.Delta.EncLog
+
+        let methodEntry =
+            encLog
+            |> Array.tryFind (fun (table, _, _) -> table = TableIndex.MethodDef)
+            |> Option.defaultWith (fun () -> failwith "Missing MethodDef EncLog entry")
+
+        let _, _, methodOp = methodEntry
+        Assert.Equal(EditAndContinueOperation.Default, methodOp)
+
+        let paramOps =
+            encLog
+            |> Array.filter (fun (table, _, _) -> table = TableIndex.Param)
+            |> Array.map (fun (_, _, op) -> op)
+
+        // Param rows may be absent for updates; if present they must be Default.
+        if paramOps.Length > 0 then
+            Assert.All(paramOps, fun op -> Assert.Equal(EditAndContinueOperation.Default, op))
+
+    [<Fact>]
     let ``metadata writer emits event and method semantics rows`` () =
         let moduleDef = createEventModule None ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
