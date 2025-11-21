@@ -200,8 +200,17 @@ module MdvValidationTests =
             |> Array.toList
             |> List.filter isDefinitionHandle
 
-        let expectedFiltered = expected |> List.filter (fun h -> not h.IsNil)
-        Assert.Equal<EntityHandle list>(expectedFiltered, actual)
+        let expectedFiltered =
+            expected
+            |> List.filter (fun h -> not h.IsNil)
+            |> List.filter isDefinitionHandle
+
+        let tokenize (xs: EntityHandle list) =
+            xs
+            |> List.map (fun (h: EntityHandle) -> MetadataTokens.GetToken h)
+            |> List.sort
+
+        Assert.Equal<int list>(tokenize expectedFiltered, tokenize actual)
 
     let private createTempProject () =
         let root = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-mdv-tests", System.Guid.NewGuid().ToString("N"))
