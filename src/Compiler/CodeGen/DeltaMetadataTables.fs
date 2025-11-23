@@ -300,6 +300,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let rowElementStringAbsolute value = rowElementAbsolute RowElementTags.String value
     let rowElementBlobAbsolute value = rowElementAbsolute RowElementTags.Blob value
     let rowElementGuid value = rowElement RowElementTags.Guid value
+    let rowElementGuidAbsolute value = rowElementAbsolute RowElementTags.Guid value
     let rowElementSimpleIndex table value = rowElement (RowElementTags.SimpleIndex table) value
     let rowElementTypeDefOrRef tag value = rowElement (RowElementTags.TypeDefOrRefOrSpec tag) value
     let rowElementHasSemantics tag value = rowElement (RowElementTags.HasSemantics tag) value
@@ -373,7 +374,11 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             idx, false
 
     let addGuidValue (value: Guid) =
-        if value = System.Guid.Empty then 0 else guids.AddSharedEntry(value.ToByteArray())
+        if value = System.Guid.Empty then
+            0
+        else
+            let idx = guids.AddSharedEntry(value.ToByteArray())
+            idx
 
     let stringElement (token, isAbsolute) = if isAbsolute then rowElementStringAbsolute token else rowElementString token
     let blobElement (token, isAbsolute) = if isAbsolute then rowElementBlobAbsolute token else rowElementBlob token
@@ -396,30 +401,43 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let buildGuidHeapBytes () =
         use ms = new MemoryStream()
         use writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen = true)
-        // Guid heap index 0 refers to null; keep a single 0 GUID there.
-        writer.Write(Array.zeroCreate<byte> 16)
+        // Guid heap is a packed list of 16-byte entries; no sentinel is emitted.
         for entry in guids.Entries do
             if entry.Length = 16 then
                 writer.Write(entry)
             else
                 invalidArg "entry" "GUID entries must be 16 bytes."
+        if Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METADATA") = "1" then
+            let dumpGuid (bytes: byte[]) =
+                if bytes.Length >= 16 then
+                    BitConverter.ToString(bytes, 0, 16)
+                else
+                    "<invalid>"
+            printfn "[delta-guid-heap] entries=%d" guids.Entries.Length
+            guids.Entries
+            |> Seq.mapi (fun idx b -> idx + 1, dumpGuid b)
+            |> Seq.iter (fun (idx, g) -> printfn "[delta-guid-heap] idx=%d guidBytes=%s" idx g)
         writer.Flush()
         ms.ToArray()
     let buildUserStringHeapBytes () = userStrings.Bytes
 
-    member _.AddModuleRow(name: string, nameHandleOpt: StringHandle option, moduleId: Guid, encId: Guid, encBaseId: Guid) =
+    member _.AddModuleRow(name: string, nameHandleOpt: StringHandle option, generation: int, _moduleId: Guid, encId: Guid, encBaseId: Guid) =
         if moduleRows.Count = 0 then
             let nameToken =
                 match nameHandleOpt with
                 | Some handle when not handle.IsNil -> MetadataTokens.GetHeapOffset handle, true
                 | _ -> addStringValue name, false
+            // Emit MVID and EncIds into delta guid heap (delta-relative); baseline offset applied during serialization.
+            let mvidIndex = addGuidValue _moduleId
+            let encIdIndex = addGuidValue encId
+            let encBaseIdIndex = addGuidValue encBaseId
             let row =
                 [|
-                    rowElementUShort 0us
+                    rowElementUShort (uint16 generation)
                     stringElement nameToken
-                    rowElementGuid (addGuidValue moduleId)
-                    rowElementGuid (addGuidValue encId)
-                    rowElementGuid (addGuidValue encBaseId)
+                    rowElementGuid mvidIndex
+                    rowElementGuid encIdIndex
+                    rowElementGuid encBaseIdIndex
                 |]
             moduleRows.Add row
 

@@ -739,17 +739,81 @@ module internal MetadataDeltaTestHelpers =
           Generation1: DeltaWriter.MetadataDelta
           Generation2: DeltaWriter.MetadataDelta }
 
-    let private getModuleGenerationId (metadata: byte[]) =
+    let private tryGetGuidHeap (metadata: byte[]) =
+        use ms = new MemoryStream(metadata, false)
+        use reader = new BinaryReader(ms, Encoding.UTF8, leaveOpen = true)
+
+        let align4 (v: int) = (v + 3) &&& ~~~3
+
+        try
+            let signature = reader.ReadUInt32()
+            if signature <> 0x424A5342u then
+                None
+            else
+                reader.ReadUInt16() |> ignore // major
+                reader.ReadUInt16() |> ignore // minor
+                reader.ReadUInt32() |> ignore // reserved
+
+                let versionLength = reader.ReadUInt32() |> int
+                let paddedVersionLength = align4 versionLength
+                reader.ReadBytes(paddedVersionLength) |> ignore
+
+                reader.ReadUInt16() |> ignore // flags
+                let streamCount = reader.ReadUInt16() |> int
+
+                let mutable guidBytes: byte[] option = None
+
+                for _ = 0 to streamCount - 1 do
+                    let offset = reader.ReadUInt32() |> int
+                    let size = reader.ReadUInt32() |> int
+                    let nameBytes = ResizeArray<byte>()
+                    let mutable b = reader.ReadByte()
+                    while b <> 0uy do
+                        nameBytes.Add b
+                        b <- reader.ReadByte()
+                    while ms.Position % 4L <> 0L do
+                        reader.ReadByte() |> ignore
+
+                    let name = Encoding.UTF8.GetString(nameBytes.ToArray())
+                    if name = "#GUID" && offset + size <= metadata.Length then
+                        guidBytes <- Some(Array.sub metadata offset size)
+
+                guidBytes
+        with _ ->
+            None
+
+    let private getModuleGenerationId (metadata: byte[]) (baselineGuidEntries: int) =
         use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(metadata))
         let reader = provider.GetMetadataReader()
         let moduleDef = reader.GetModuleDefinition()
-        let h = moduleDef.GenerationId
-        if h.IsNil then System.Guid.Empty else reader.GetGuid h
+        let handle = moduleDef.GenerationId
+
+        if handle.IsNil then
+            System.Guid.Empty
+        else
+            let rawIndex = (MetadataTokens.GetHeapOffset handle / 16) + 1
+
+            match tryGetGuidHeap metadata with
+            | Some heap ->
+                printfn "[getModuleGenerationId] rawIndex=%d baselineEntries=%d heapLen=%d" rawIndex baselineGuidEntries heap.Length
+                let deltaIndex = rawIndex - baselineGuidEntries
+                let offset = (deltaIndex - 1) * 16
+                if deltaIndex > 0 && offset >= 0 && offset + 16 <= heap.Length then
+                    System.Guid(Array.sub heap offset 16)
+                else
+                    System.Guid.Empty
+            | None ->
+                // Fall back to the reader if the heap is present and in range.
+                try
+                    reader.GetGuid handle
+                with _ ->
+                    System.Guid.Empty
 
     let private emitPropertyDeltaCore
         (metadataReader: MetadataReader)
         (builder: IlDeltaStreamBuilder)
         (heapOffsets: MetadataHeapOffsets)
+        (generation: int)
         (encBaseId: Guid)
         =
         let stringType = ilGlobals.typ_String
@@ -815,15 +879,18 @@ module internal MetadataDeltaTestHelpers =
                 FirstPropertyRowId = Some 1
                 IsAdded = true } ]
 
-        let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
+        let moduleDef = metadataReader.GetModuleDefinition()
+        let moduleName = metadataReader.GetString(moduleDef.Name)
+        let moduleGuid = metadataReader.GetGuid(moduleDef.Mvid)
 
         DeltaWriter.emit
             builder.MetadataBuilder
             moduleName
             None
+            generation
             (System.Guid.NewGuid())
             encBaseId
-            (System.Guid.NewGuid())
+            moduleGuid
             methodDefinitionRows
             []
             propertyRows
@@ -837,12 +904,13 @@ module internal MetadataDeltaTestHelpers =
             heapOffsets
             (getRowCounts metadataReader)
 
-    let private emitPropertyDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) (encBaseId: Guid) =
+    let private emitPropertyDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) (generation: int) (encBaseId: Guid) =
         use peReader = new PEReader(new MemoryStream(baselineBytes, false))
         let metadataReader = peReader.GetMetadataReader()
         let metadataSnapshot = metadataSnapshotFromReader metadataReader
         let builder = IlDeltaStreamBuilder(Some metadataSnapshot)
-        emitPropertyDeltaCore metadataReader builder heapOffsets encBaseId
+        printfn "[property-delta] generation=%d encBaseId=%A" generation encBaseId
+        emitPropertyDeltaCore metadataReader builder heapOffsets generation encBaseId
 
     let emitPropertyDeltaArtifacts (messageLiteral: string option) () : MetadataDeltaArtifacts =
         let moduleDef = createPropertyModule messageLiteral ()
@@ -852,7 +920,8 @@ module internal MetadataDeltaTestHelpers =
         let baselineHeapSizes = getHeapSizes metadataReader
         let builder = IlDeltaStreamBuilder None
         let heapOffsets = computeHeapOffsets metadataReader
-        let metadataDelta = emitPropertyDeltaCore metadataReader builder heapOffsets System.Guid.Empty
+        printfn "[property-delta] baseline guid heap size = %d" baselineHeapSizes.GuidHeapSize
+        let metadataDelta = emitPropertyDeltaCore metadataReader builder heapOffsets 1 System.Guid.Empty
 
         inspectDeltaMetadata "delta" metadataDelta.Metadata
 
@@ -947,15 +1016,18 @@ module internal MetadataDeltaTestHelpers =
                       CodeOffset = 0
                       CodeLength = 1 } } ]
 
-        let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
+        let moduleDef = metadataReader.GetModuleDefinition()
+        let moduleName = metadataReader.GetString moduleDef.Name
+        let moduleGuid = metadataReader.GetGuid moduleDef.Mvid
 
         DeltaWriter.emit
             builder.MetadataBuilder
             moduleName
             None
+            1
             (System.Guid.NewGuid())
-            (System.Guid.NewGuid())
-            (System.Guid.NewGuid())
+            System.Guid.Empty
+            moduleGuid
             methodRows
             [] // parameter rows
             [] // property rows
@@ -1305,6 +1377,7 @@ module internal MetadataDeltaTestHelpers =
                 builder.MetadataBuilder
                 moduleName
                 None
+                1
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
@@ -1383,8 +1456,37 @@ module internal MetadataDeltaTestHelpers =
             let baseOffsets = computeHeapOffsets metadataReader
             advanceHeapOffsets baseOffsets generation1.Delta
 
-        let gen1EncId = getModuleGenerationId generation1.Delta.Metadata
-        let generation2 = emitPropertyDeltaFromBaseline generation1.BaselineBytes nextOffsets gen1EncId
+        let baseGuidEntries = generation1.BaselineHeapSizes.GuidHeapSize / 16
+        let gen1EncId = getModuleGenerationId generation1.Delta.Metadata baseGuidEntries
+        printfn "[property-multigen] gen1 EncId = %A" gen1EncId
+        let generation2 = emitPropertyDeltaFromBaseline generation1.BaselineBytes nextOffsets 2 gen1EncId
+        let baseEntriesGen2 = nextOffsets.GuidHeapStart / 16
+        let encId2 =
+            getModuleGenerationId generation2.Metadata baseEntriesGen2
+
+        let baseId =
+            use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(generation2.Metadata))
+            let reader = provider.GetMetadataReader()
+            let moduleDef = reader.GetModuleDefinition()
+            let handle = moduleDef.BaseGenerationId
+            if handle.IsNil then
+                System.Guid.Empty
+            else
+                let rawIndex = (MetadataTokens.GetHeapOffset handle / 16) + 1
+                match tryGetGuidHeap generation2.Metadata with
+                | Some heap ->
+                    let offset = (rawIndex - 1) * 16
+                    if rawIndex > 0 && offset >= 0 && offset + 16 <= heap.Length then
+                        System.Guid(Array.sub heap offset 16)
+                    else
+                        System.Guid.Empty
+                | None ->
+                    try
+                        reader.GetGuid handle
+                    with _ ->
+                        System.Guid.Empty
+
+        printfn "[property-multigen] gen2 EncId = %A BaseId = %A" encId2 baseId
 
         { BaselineBytes = generation1.BaselineBytes
           BaselineHeapSizes = generation1.BaselineHeapSizes
@@ -1498,6 +1600,7 @@ module internal MetadataDeltaTestHelpers =
             builder.MetadataBuilder
             moduleName
             None
+            1
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())
@@ -1650,6 +1753,7 @@ module internal MetadataDeltaTestHelpers =
             builder.MetadataBuilder
             moduleName
             None
+            1
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())
             (System.Guid.NewGuid())

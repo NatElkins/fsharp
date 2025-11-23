@@ -269,6 +269,199 @@ module FSharpDeltaMetadataWriterTests =
         let actual = readEncMapEntriesFromMetadata metadata
         Assert.Equal<(TableIndex * int)[]>(expected, actual)
 
+    let private tryGetGuidHeap (metadata: byte[]) =
+        use ms = new MemoryStream(metadata, false)
+        use reader = new BinaryReader(ms, Encoding.UTF8, leaveOpen = true)
+
+        let align4 (v: int) = (v + 3) &&& ~~~3
+
+        try
+            let signature = reader.ReadUInt32()
+            if signature <> 0x424A5342u then
+                None
+            else
+                // major + minor + reserved
+                reader.ReadUInt16() |> ignore
+                reader.ReadUInt16() |> ignore
+                reader.ReadUInt32() |> ignore
+
+                let versionLength = reader.ReadUInt32() |> int
+                let paddedVersionLength = align4 versionLength
+                reader.ReadBytes(paddedVersionLength) |> ignore
+
+                // flags + stream count
+                reader.ReadUInt16() |> ignore
+                let streamCount = reader.ReadUInt16() |> int
+
+                let mutable guidBytes: byte[] option = None
+
+                for _ = 0 to streamCount - 1 do
+                    let offset = reader.ReadUInt32() |> int
+                    let size = reader.ReadUInt32() |> int
+                    let nameBytes = ResizeArray<byte>()
+                    let mutable b = reader.ReadByte()
+                    while b <> 0uy do
+                        nameBytes.Add b
+                        b <- reader.ReadByte()
+                    while ms.Position % 4L <> 0L do
+                        reader.ReadByte() |> ignore
+
+                    let name = Encoding.UTF8.GetString(nameBytes.ToArray())
+                    if name = "#GUID" && offset + size <= metadata.Length then
+                        guidBytes <- Some(Array.sub metadata offset size)
+
+                guidBytes
+        with _ ->
+            None
+
+    let private readModuleInfo (metadata: byte[]) =
+        let handleIndex (h: GuidHandle) =
+            if h.IsNil then 0 else (MetadataTokens.GetHeapOffset h / 16) + 1
+
+        let readWith (reader: MetadataReader) =
+            // Parse heap size flags from #- stream header (for diagnostics).
+            let heapFlags =
+                use ms = new MemoryStream(metadata, false)
+                use br = new BinaryReader(ms, Encoding.UTF8, leaveOpen = true)
+                if br.ReadUInt32() <> 0x424A5342u then 0us else
+                br.ReadUInt16() |> ignore // major
+                br.ReadUInt16() |> ignore // minor
+                br.ReadUInt32() |> ignore // reserved
+                let versionLen = int (br.ReadUInt32())
+                ms.Seek(int64 ((versionLen + 3) &&& ~~~3), SeekOrigin.Current) |> ignore
+                br.ReadUInt16() |> ignore // flags
+                br.ReadUInt16()
+            let guidBig = (heapFlags &&& 0x02us) <> 0us
+            let stringsBig = (heapFlags &&& 0x01us) <> 0us
+            let blobsBig = (heapFlags &&& 0x04us) <> 0us
+
+            let moduleDef = reader.GetModuleDefinition()
+            let guidHeapSize = reader.GetHeapSize(HeapIndex.Guid)
+            let generation = int moduleDef.Generation
+            let nameOffset = MetadataTokens.GetHeapOffset moduleDef.Name
+            let mvidOffset = MetadataTokens.GetHeapOffset moduleDef.Mvid
+            let encIdOffset = MetadataTokens.GetHeapOffset moduleDef.GenerationId
+            let encBaseOffset = MetadataTokens.GetHeapOffset moduleDef.BaseGenerationId
+            let mvidIndex = if mvidOffset = 0 then 1 else (mvidOffset / 16) + 1
+            let encIdIndex = if encIdOffset = 0 then 1 else (encIdOffset / 16) + 1
+            let encBaseIdIndex = if encBaseOffset = 0 then 1 else (encBaseOffset / 16) + 1
+            let mvidHandleStr = moduleDef.Mvid.ToString()
+            let genIdHandleStr = moduleDef.GenerationId.ToString()
+            let baseIdHandleStr = moduleDef.BaseGenerationId.ToString()
+
+            let tryGuid (h: GuidHandle) =
+                if h.IsNil then None
+                else
+                    try Some(reader.GetGuid h) with _ -> None
+
+            let mvidGuid = tryGuid moduleDef.Mvid
+            let encIdGuid = tryGuid moduleDef.GenerationId
+            let encBaseIdGuid = tryGuid moduleDef.BaseGenerationId
+
+            let guidHeapBytes =
+                if metadata.Length >= 2 && metadata.[0] = 0x4Duy && metadata.[1] = 0x5Auy then
+                    Array.empty
+                else
+                    tryGetGuidHeap metadata |> Option.defaultValue Array.empty
+
+            let tryString (h: StringHandle) =
+                if h.IsNil then None
+                else
+                    try Some(reader.GetString h) with _ -> None
+
+            let name = tryString moduleDef.Name
+
+            struct
+                (generation,
+                 nameOffset,
+                 name,
+                 mvidIndex,
+                 mvidGuid,
+                 encIdIndex,
+                 encIdGuid,
+                 encBaseIdIndex,
+                 encBaseIdGuid,
+                 guidHeapSize,
+                 guidHeapBytes,
+                 guidBig,
+                 stringsBig,
+                 blobsBig,
+                 mvidOffset,
+                 encIdOffset,
+                 encBaseOffset,
+                 mvidHandleStr,
+                 genIdHandleStr,
+                 baseIdHandleStr)
+
+        if metadata.Length >= 2 && metadata.[0] = 0x4Duy && metadata.[1] = 0x5Auy then
+            use peReader = new PEReader(new MemoryStream(metadata, false))
+            readWith (peReader.GetMetadataReader())
+        else
+            use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(metadata))
+            readWith (provider.GetMetadataReader())
+
+    /// Dumps the module row columns directly from the #- table stream for debugging.
+    let private dumpModuleRowFromTableStream (tableStream: byte[]) =
+        let readU16 off =
+            let b0 = uint16 tableStream.[off]
+            let b1 = uint16 tableStream.[off + 1]
+            int (b0 ||| (b1 <<< 8))
+
+        let readU32 off =
+            let b0 = uint32 tableStream.[off]
+            let b1 = uint32 tableStream.[off + 1]
+            let b2 = uint32 tableStream.[off + 2]
+            let b3 = uint32 tableStream.[off + 3]
+            int (b0 ||| (b1 <<< 8) ||| (b2 <<< 16) ||| (b3 <<< 24))
+
+        let mutable offset = 0
+        let _reserved = readU32 offset
+        offset <- offset + 4
+        let _major = tableStream.[offset]
+        let _minor = tableStream.[offset + 1]
+        offset <- offset + 2
+        let heapSizes = tableStream.[offset]
+        offset <- offset + 1
+        let _reserved2 = tableStream.[offset]
+        offset <- offset + 1
+
+        let validLow = readU32 offset
+        offset <- offset + 4
+        let validHigh = readU32 offset
+        offset <- offset + 4
+        let _sortedLow = readU32 offset
+        offset <- offset + 4
+        let _sortedHigh = readU32 offset
+        offset <- offset + 4
+
+        let isPresent idx =
+            if idx < 32 then ((validLow >>> idx) &&& 1) = 1 else ((validHigh >>> (idx - 32)) &&& 1) = 1
+
+        let rowCounts = Array.zeroCreate<int> MetadataTokens.TableCount
+        for idx = 0 to MetadataTokens.TableCount - 1 do
+            if isPresent idx then
+                rowCounts[idx] <- readU32 offset
+                offset <- offset + 4
+
+        // Row size of Module: u16 + string idx + 3x guid idx.
+        let heapIndexSize flag = if (heapSizes &&& flag) <> 0uy then 4 else 2
+        let stringsSize = heapIndexSize 0x01uy
+        let guidsSize = heapIndexSize 0x02uy
+        let moduleRowSize = 2 + stringsSize + guidsSize * 3
+
+        // Module is the first table; rows start immediately after row counts.
+        let moduleStart = offset
+        let readHeap isBig off = if isBig then readU32 off else readU16 off
+        let gen = readU16 moduleStart
+        let nameIdx = readHeap ((heapSizes &&& 0x01uy) <> 0uy) (moduleStart + 2)
+        let mvidIdx = readHeap ((heapSizes &&& 0x02uy) <> 0uy) (moduleStart + 2 + stringsSize)
+        let encIdIdx = readHeap ((heapSizes &&& 0x02uy) <> 0uy) (moduleStart + 2 + stringsSize + guidsSize)
+        let encBaseIdx = readHeap ((heapSizes &&& 0x02uy) <> 0uy) (moduleStart + 2 + stringsSize + guidsSize * 2)
+
+        let rowBytes = tableStream |> Array.skip moduleStart |> Array.truncate moduleRowSize
+
+        struct (gen, nameIdx, mvidIdx, encIdIdx, encBaseIdx, rowCounts[int TableIndex.Module], moduleStart, moduleRowSize, heapSizes, rowBytes)
+
     [<Fact>]
     let ``metadata writer emits property rows`` () =
         let moduleDef = createPropertyModule None ()
@@ -349,6 +542,7 @@ module FSharpDeltaMetadataWriterTests =
                 builder.MetadataBuilder
                 moduleName
                 None
+                1
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
@@ -690,6 +884,7 @@ module FSharpDeltaMetadataWriterTests =
                 (MetadataBuilder())
                 (metadataReader.GetString(metadataReader.GetModuleDefinition().Name))
                 None
+                1
                 (System.Guid.NewGuid())
                 System.Guid.Empty
                 moduleGuid
@@ -733,7 +928,7 @@ module FSharpDeltaMetadataWriterTests =
     [<Fact>]
     let ``metadata root omits #JTD when no ENC tables are present`` () =
         let mirror = DeltaMetadataTables MetadataHeapOffsets.Zero
-        mirror.AddModuleRow("Empty.dll", None, System.Guid.NewGuid(), System.Guid.NewGuid(), System.Guid.NewGuid())
+        mirror.AddModuleRow("Empty.dll", None, 0, System.Guid.NewGuid(), System.Guid.NewGuid(), System.Guid.NewGuid())
         let sizes =
             DeltaMetadataSerializer.computeMetadataSizes mirror (Array.zeroCreate MetadataTokens.TableCount)
         let heaps = DeltaMetadataSerializer.buildHeapStreams mirror
@@ -898,6 +1093,7 @@ module FSharpDeltaMetadataWriterTests =
                 builder.MetadataBuilder
                 moduleName
                 None
+                1
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
@@ -1236,6 +1432,172 @@ module FSharpDeltaMetadataWriterTests =
         assertDelta artifacts.Generation2
 
     [<Fact>]
+    let ``module rows chain enc ids and reuse name/mvid across generations`` () =
+        Environment.SetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METADATA", "1") |> ignore
+        let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
+
+        let struct (baseGen, baseNameOffset, baseName, baseMvidIndex, baseMvidGuid, baseEncIdIndex, baseEncIdGuid, baseEncBaseIdIndex, baseEncBaseIdGuid, baseGuidBytes, baseGuidHeapBytes, _, _, _, baseMvidOffset, baseEncIdOffset, baseEncBaseOffset, baseMvidHandleStr, baseEncIdHandleStr, baseBaseIdHandleStr) =
+            readModuleInfo artifacts.BaselineBytes
+
+        printfn "[module-row baseline] gen=%d nameOffset=%d mvidIndex=%d encIdIndex=%d encBaseIndex=%d guidBytes=%d mvidGuid=%A encIdGuid=%A baseGuid=%A mvidOffset=%d encIdOffset=%d baseOffset=%d"
+            baseGen baseNameOffset baseMvidIndex baseEncIdIndex baseEncBaseIdIndex baseGuidBytes baseMvidGuid baseEncIdGuid baseEncBaseIdGuid baseMvidOffset baseEncIdOffset baseEncBaseOffset
+        printfn "[module-row baseline handles] mvid=%s genId=%s baseId=%s" baseMvidHandleStr baseEncIdHandleStr baseBaseIdHandleStr
+        printfn "[module-row baseline guid heap] size=%d idx1=%s idx2=%s" baseGuidHeapBytes.Length (BitConverter.ToString(baseGuidHeapBytes, 0, Math.Min(16, baseGuidHeapBytes.Length))) (if baseGuidHeapBytes.Length >= 32 then BitConverter.ToString(baseGuidHeapBytes,16,16) else "<n/a>")
+
+        let struct (gen1, nameOffset1, name1, mvidIndex1, mvidGuid1, encIdIndex1, encIdGuid1, encBaseIdIndex1, encBaseIdGuid1, guidBytes1, guidHeapBytes1, guidBig1, stringsBig1, blobsBig1, mvidOffset1, encIdOffset1, encBaseOffset1, mvidHandleStr1, encIdHandleStr1, encBaseHandleStr1) =
+            readModuleInfo artifacts.Generation1.Metadata
+        let struct (gen1RowGen, gen1RowNameIdx, gen1RowMvidIdx, gen1RowEncIdx, gen1RowBaseIdx, gen1RowCount, gen1RowOffset, gen1RowSize, gen1HeapFlags, gen1RowBytes) =
+            dumpModuleRowFromTableStream artifacts.Generation1.TableStream.Bytes
+        let tableBytes1 = artifacts.Generation1.TableStream.Bytes
+        let tablePrefix1 = tableBytes1 |> Array.truncate 32 |> BitConverter.ToString
+        printfn "[module-row gen1 raw table bytes prefix] %s" tablePrefix1
+        // Dump GUID heap entries for gen1
+        let dumpGuid idx =
+            let offset = (idx - 1) * 16
+            if offset + 16 <= guidHeapBytes1.Length then
+                let slice = Array.sub guidHeapBytes1 offset 16
+                BitConverter.ToString(slice)
+            else "<out-of-range>"
+        printfn "[module-row gen1 guid heap] idx1=%s idx2=%s idx3=%s size=%d" (dumpGuid 1) (dumpGuid 2) (dumpGuid 3) guidHeapBytes1.Length
+
+        printfn
+            "[module-row gen1] nameOffset=%d mvidIndex=%d encIdIndex=%d encBaseIndex=%d guidBytes=%d guidsBig=%b stringsBig=%b blobsBig=%b encIdGuid=%A encBaseGuid=%A mvidOffset=%d encIdOffset=%d baseOffset=%d handles(mvid=%s enc=%s base=%s) | row(gen=%d name=%d mvid=%d enc=%d base=%d count=%d offset=%d size=%d heapFlags=0x%02x rowBytes=%s)"
+            nameOffset1
+            mvidIndex1
+            encIdIndex1
+            encBaseIdIndex1
+            guidBytes1
+            guidBig1
+            stringsBig1
+            blobsBig1
+            encIdGuid1
+            encBaseIdGuid1
+            mvidOffset1
+            encIdOffset1
+            encBaseOffset1
+            mvidHandleStr1
+            encIdHandleStr1
+            encBaseHandleStr1
+            gen1RowGen
+            gen1RowNameIdx
+            gen1RowMvidIdx
+            gen1RowEncIdx
+            gen1RowBaseIdx
+            gen1RowCount
+            gen1RowOffset
+            gen1RowSize
+            gen1HeapFlags
+            (BitConverter.ToString(gen1RowBytes))
+
+        let readGuidAtOffset (heap: byte[]) offset =
+            if heap.Length = 0 then
+                None
+            elif offset >= 0 && offset + 16 <= heap.Length then
+                Some(System.Guid(Array.sub heap offset 16))
+            else
+                None
+
+        let struct (gen2, nameOffset2, name2, mvidIndex2, mvidGuid2, encIdIndex2, encIdGuid2, encBaseIdIndex2, encBaseIdGuid2, guidBytes2, guidHeapBytes2, guidBig2, stringsBig2, blobsBig2, mvidOffset2, encIdOffset2, encBaseOffset2, mvidHandleStr2, encIdHandleStr2, encBaseHandleStr2) =
+            readModuleInfo artifacts.Generation2.Metadata
+        let struct (gen2RowGen, gen2RowNameIdx, gen2RowMvidIdx, gen2RowEncIdx, gen2RowBaseIdx, gen2RowCount, gen2RowOffset, gen2RowSize, gen2HeapFlags, gen2RowBytes) =
+            dumpModuleRowFromTableStream artifacts.Generation2.TableStream.Bytes
+        let dumpGuid2 idx =
+            let offset = (idx - 1) * 16
+            if offset + 16 <= guidHeapBytes2.Length then
+                let slice = Array.sub guidHeapBytes2 offset 16
+                BitConverter.ToString(slice)
+            else "<out-of-range>"
+        printfn "[module-row gen2 guid heap] idx1=%s idx2=%s idx3=%s idx4=%s size=%d" (dumpGuid2 1) (dumpGuid2 2) (dumpGuid2 3) (dumpGuid2 4) guidHeapBytes2.Length
+
+        printfn
+            "[module-row gen2] nameOffset=%d mvidIndex=%d encIdIndex=%d encBaseIndex=%d guidBytes=%d guidsBig=%b stringsBig=%b blobsBig=%b encIdGuid=%A encBaseGuid=%A mvidOffset=%d encIdOffset=%d baseOffset=%d handles(mvid=%s enc=%s base=%s) | row(gen=%d name=%d mvid=%d enc=%d base=%d count=%d offset=%d size=%d heapFlags=0x%02x rowBytes=%s)"
+            nameOffset2
+            mvidIndex2
+            encIdIndex2
+            encBaseIdIndex2
+            guidBytes2
+            guidBig2
+            stringsBig2
+            blobsBig2
+            encIdGuid2
+            encBaseIdGuid2
+            mvidOffset2
+            encIdOffset2
+            encBaseOffset2
+            mvidHandleStr2
+            encIdHandleStr2
+            encBaseHandleStr2
+            gen2RowGen
+            gen2RowNameIdx
+            gen2RowMvidIdx
+            gen2RowEncIdx
+            gen2RowBaseIdx
+            gen2RowCount
+            gen2RowOffset
+            gen2RowSize
+            gen2HeapFlags
+            (BitConverter.ToString(gen2RowBytes))
+
+        // Expected offsets (encoded values) are baseline + prior generation heap sizes + entry offset.
+        let baselineGuidBytes = artifacts.BaselineHeapSizes.GuidHeapSize
+        let gen1GuidBytes = guidBytes1
+        let gen2HeapStart = baselineGuidBytes + gen1GuidBytes
+
+        let expectedMvidOffset1 = baselineGuidBytes
+        let expectedEncIdOffset1 = baselineGuidBytes + 16
+        let expectedMvidOffset2 = gen2HeapStart
+        let expectedEncIdOffset2 = gen2HeapStart + 16
+        let expectedEncBaseOffset2 = gen2HeapStart + 32
+
+        // Row values should match the encoded offsets.
+        Assert.Equal(expectedMvidOffset1, gen1RowMvidIdx)
+        Assert.Equal(expectedEncIdOffset1, gen1RowEncIdx)
+        Assert.Equal(expectedMvidOffset2, gen2RowMvidIdx)
+        Assert.Equal(expectedEncIdOffset2, gen2RowEncIdx)
+        Assert.Equal(expectedEncBaseOffset2, gen2RowBaseIdx)
+
+        // Heap sizes (no sentinel): gen1 contains MVID + EncId, gen2 adds EncBaseId.
+        Assert.True(guidBytes1 >= 32, "Guid heap should contain MVID + EncId")
+        Assert.True(guidBytes2 >= 48, "Gen2 Guid heap should contain MVID + EncId + EncBaseId")
+
+        // Decode GUIDs directly from the delta heaps using local offsets.
+        let gen1MvidLocal = expectedMvidOffset1 - baselineGuidBytes
+        let gen1EncIdLocal = expectedEncIdOffset1 - baselineGuidBytes
+        let gen2MvidLocal = expectedMvidOffset2 - gen2HeapStart
+        let gen2EncIdLocal = expectedEncIdOffset2 - gen2HeapStart
+        let gen2EncBaseLocal = expectedEncBaseOffset2 - gen2HeapStart
+
+        let gen1MvidGuidValue = readGuidAtOffset guidHeapBytes1 gen1MvidLocal
+        let encIdGuid1Value = readGuidAtOffset guidHeapBytes1 gen1EncIdLocal
+        let gen2MvidGuidValue = readGuidAtOffset guidHeapBytes2 gen2MvidLocal
+        let encIdGuid2Value = readGuidAtOffset guidHeapBytes2 gen2EncIdLocal
+        let encBaseGuid2Value = readGuidAtOffset guidHeapBytes2 gen2EncBaseLocal
+
+        // Baseline expectations
+        Assert.Equal(0, baseGen)
+        Assert.True(baseMvidGuid.IsSome, "Baseline MVID should be present")
+        Assert.True(baseName.IsSome, "Baseline module name should be readable")
+
+        // Gen1 expectations
+        Assert.Equal(1, gen1)
+        match name1 with
+        | Some n -> Assert.Equal(baseName, name1)
+        | None -> ()
+        Assert.Equal(expectedMvidOffset1, mvidOffset1)
+        Assert.Equal(0, encBaseOffset1)
+        Assert.Equal(expectedEncIdOffset1, encIdOffset1)
+        Assert.True(encIdGuid1Value.IsSome, "Gen1 EncId GUID should be readable from delta heap")
+        Assert.NotEqual(baseMvidGuid, encIdGuid1Value)
+        Assert.Equal(baseMvidGuid, gen1MvidGuidValue)
+
+        // Gen2 expectations
+        Assert.True(encIdGuid2Value.IsSome, "Gen2 EncId GUID should be readable from delta heap")
+        Assert.True(encBaseGuid2Value.IsSome, "Gen2 EncBaseId should resolve to a GUID in delta heap")
+        Assert.Equal(encIdGuid1Value, encBaseGuid2Value)
+        Assert.NotEqual(baseMvidGuid, encIdGuid2Value)
+        Assert.Equal(baseMvidGuid, gen2MvidGuidValue)
+
+    [<Fact>]
     let ``closure delta uses ENC-sized indexes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitClosureDeltaArtifacts ()
         let indexSizes = artifacts.Delta.IndexSizes
@@ -1386,6 +1748,7 @@ module FSharpDeltaMetadataWriterTests =
                 builder.MetadataBuilder
                 moduleName
                 None
+                1
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
@@ -1483,6 +1846,7 @@ module FSharpDeltaMetadataWriterTests =
                 builder.MetadataBuilder
                 moduleName
                 None
+                1
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
@@ -1546,6 +1910,7 @@ module FSharpDeltaMetadataWriterTests =
                 builder.MetadataBuilder
                 moduleName
                 None
+                1
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
@@ -1644,6 +2009,7 @@ module FSharpDeltaMetadataWriterTests =
                 builder.MetadataBuilder
                 moduleName
                 None
+                1
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())
                 (System.Guid.NewGuid())

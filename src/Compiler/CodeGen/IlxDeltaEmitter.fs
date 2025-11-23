@@ -2040,6 +2040,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 metadataBuilder
                 moduleName
                 baselineModuleNameHandle
+                request.CurrentGeneration
                 encId
                 encBaseId
                 moduleMvid

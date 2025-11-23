@@ -2,6 +2,7 @@ module internal FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
 open System
 open System.Collections.Generic
+open System.Collections.Immutable
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Reflection
@@ -92,6 +93,7 @@ let emitWithUserStrings
     (metadataBuilder: MetadataBuilder)
     (moduleName: string)
     (moduleNameHandle: StringHandle option)
+    (generation: int)
     (encId: Guid)
     (encBaseId: Guid)
     (moduleId: Guid)
@@ -245,9 +247,10 @@ let emitWithUserStrings
                 GuidHandle()
             else
                 metadataBuilder.GetOrAddGuid(encBaseId)
-        let _ = metadataBuilder.AddModule(0, moduleNameHandleOrAdded, mvidHandle, encIdHandle, encBaseHandle)
+        printfn "[emitWithUserStrings] generation=%d moduleId=%A encId=%A encBaseId=%A" generation moduleId encId encBaseId
+        let _ = metadataBuilder.AddModule(generation, moduleNameHandleOrAdded, mvidHandle, encIdHandle, encBaseHandle)
         let tableMirror = DeltaMetadataTables(heapOffsets)
-        tableMirror.AddModuleRow(moduleName, moduleNameTokenOpt, moduleId, encId, encBaseId)
+        tableMirror.AddModuleRow(moduleName, moduleNameTokenOpt, generation, moduleId, encId, encBaseId)
 
         let entityHandleFromTable tableIndex rowId =
             MetadataTokens.Handle(tableIndex, rowId)
@@ -600,6 +603,11 @@ let emitWithUserStrings
         let metadataBytes = DeltaMetadataSerializer.serializeMetadataRoot tableStreamInput heapStreams tableStream
 
         if shouldTraceMetadata () then
+            printfn
+                "[fsharp-hotreload][index-sizes] stringsBig=%b guidsBig=%b blobsBig=%b"
+                indexSizes.StringsBig
+                indexSizes.GuidsBig
+                indexSizes.BlobsBig
             let methodRows = tableRowCounts[int TableIndex.MethodDef]
             let paramRows = tableRowCounts[int TableIndex.Param]
             let propertyRows = tableRowCounts[int TableIndex.Property]
@@ -625,6 +633,24 @@ let emitWithUserStrings
                 heapStreams.GuidsLength
             printfn "[fsharp-hotreload][heap-bytes] blob-bytes=%A" heapStreams.Blobs
 
+        // Debug: verify module GenerationId/BaseGenerationId encoding
+        try
+            use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(metadataBytes))
+            let reader = provider.GetMetadataReader()
+            let moduleDef = reader.GetModuleDefinition()
+            let genIdIndex =
+                if moduleDef.GenerationId.IsNil then 0 else (MetadataTokens.GetHeapOffset moduleDef.GenerationId / 16) + 1
+            let baseGenIdIndex =
+                if moduleDef.BaseGenerationId.IsNil then 0 else (MetadataTokens.GetHeapOffset moduleDef.BaseGenerationId / 16) + 1
+            let guidHeapSize = reader.GetHeapSize(HeapIndex.Guid)
+            printfn
+                "[fsharp-hotreload][module-row-debug] generation=%d genIdIndex=%d baseGenIdIndex=%d guidHeapSize=%d"
+                generation
+                genIdIndex
+                baseGenIdIndex
+                guidHeapSize
+        with _ -> ()
+
         { Metadata = metadataBytes
           StringHeap = heapStreams.Strings
           BlobHeap = heapStreams.Blobs
@@ -643,6 +669,7 @@ let emitWithReferences
     (metadataBuilder: MetadataBuilder)
     (moduleName: string)
     (moduleNameHandle: StringHandle option)
+    (generation: int)
     (encId: Guid)
     (encBaseId: Guid)
     (moduleId: Guid)
@@ -667,6 +694,7 @@ let emitWithReferences
         metadataBuilder
         moduleName
         moduleNameHandle
+        generation
         encId
         encBaseId
         moduleId
@@ -691,6 +719,7 @@ let emit
     (metadataBuilder: MetadataBuilder)
     (moduleName: string)
     (moduleNameHandle: StringHandle option)
+    (generation: int)
     (encId: Guid)
     (encBaseId: Guid)
     (moduleId: Guid)
@@ -711,6 +740,7 @@ let emit
         metadataBuilder
         moduleName
         moduleNameHandle
+        generation
         encId
         encBaseId
         moduleId
