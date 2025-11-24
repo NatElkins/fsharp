@@ -152,6 +152,30 @@ module PdbTests =
         if not hasLiteral then
             printfn "[hotreload-pdb] portable PDB did not contain literal '%s'; skipping literal assertion" literal
 
+    let private readEncTablesFromPdb (pdbBytes: byte[]) =
+        use provider = MetadataReaderProvider.FromPortablePdbImage(ImmutableArray.CreateRange pdbBytes)
+        let reader = provider.GetMetadataReader()
+        let encLog =
+            reader.GetEditAndContinueLogEntries()
+            |> Seq.map (fun entry ->
+                let handle = entry.Handle
+                let token = MetadataTokens.GetToken(handle)
+                let table = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte (token >>> 24))
+                let rowId = token &&& 0x00FFFFFF
+                table, rowId, entry.Operation)
+            |> Seq.toArray
+
+        let encMap =
+            reader.GetEditAndContinueMapEntries()
+            |> Seq.map (fun handle ->
+                let token = MetadataTokens.GetToken(handle)
+                let table = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte (token >>> 24))
+                let rowId = token &&& 0x00FFFFFF
+                table, rowId)
+            |> Seq.toArray
+
+        encLog, encMap
+
     [<Fact>]
     let ``emitDelta emits portable PDB delta with sequence points`` () =
         let _, baseline = createBaselineWithArtifacts 42
@@ -179,6 +203,46 @@ module PdbTests =
             | None -> failwith "Expected portable PDB delta"
 
         assertPdbContainsMethodToken pdbBytes methodToken
+
+    [<Fact>]
+    let ``PDB EncLog/EncMap matches metadata Enc tables`` () =
+        let _, baseline = createBaselineWithArtifacts 42
+        let methodKey = baselineMethodKey baseline "GetValue"
+        let updatedModule = createModuleWithSeqPoints 100
+
+        let request : IlxDeltaRequest =
+            { Baseline = baseline
+              UpdatedTypes = [ "Sample.Type" ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = updatedModule
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta = emitDelta request
+
+        let pdbBytes =
+            match delta.Pdb with
+            | Some bytes -> bytes
+            | None -> failwith "Expected portable PDB delta"
+
+        let pdbEncLog, pdbEncMap = readEncTablesFromPdb pdbBytes
+
+        let expectedLog =
+            delta.EncLog
+            |> Array.sortBy (fun (t, r, op) -> int t, r, int op)
+
+        let expectedMap =
+            delta.EncMap
+            |> Array.sortBy (fun (t, r) -> int t, r)
+
+        let actualLog = pdbEncLog |> Array.sortBy (fun (t, r, op) -> int t, r, int op)
+        let actualMap = pdbEncMap |> Array.sortBy (fun (t, r) -> int t, r)
+
+        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedLog, actualLog)
+        Assert.Equal<(TableIndex * int)[]>(expectedMap, actualMap)
 
     [<Fact>]
     let ``emitDelta emits portable PDB delta for property accessor edits`` () =
