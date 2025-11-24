@@ -1071,6 +1071,50 @@ module DeltaEmitterTests =
         Assert.Equal<byte[]>(signature, standalone.Blob)
 
     [<Fact>]
+    let ``IL delta fat header matches method body length`` () =
+        // Baseline module with GetValue = 42, delta changes body to return 84.
+        let _, baseline = createBaseline ()
+        let updatedModule = createModule 84
+
+        let request : IlxDeltaRequest =
+            { Baseline = baseline
+              UpdatedTypes = [ "Sample.Type" ]
+              UpdatedMethods = [ methodKey baseline "GetValue" ]
+              UpdatedAccessors = []
+              Module = updatedModule
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta = emitDelta request
+
+        let bodyInfo = Assert.Single(delta.MethodBodies)
+        let ilBytes = delta.IL
+        let offset = bodyInfo.CodeOffset
+
+        // Fat header: low 2 bits == 0x3, size byte == 0x30 (header size = 3 dwords => 12 bytes).
+        let flagsByte = ilBytes[offset]
+        let sizeByte = ilBytes[offset + 1]
+        Assert.Equal(0x3uy, flagsByte &&& 0x3uy)
+        Assert.Equal(0x30uy, sizeByte)
+
+        // Code size in header matches MethodBodyUpdate.CodeLength.
+        let codeSize =
+            BitConverter.ToInt32(ilBytes, offset + 4)
+        Assert.Equal(bodyInfo.CodeLength, codeSize)
+
+        // No EH sections expected for this simple body (no MoreSects flag).
+        Assert.Equal(0uy, flagsByte &&& e_CorILMethod_MoreSects)
+
+        // MethodDef RVA should equal the code offset.
+        use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange delta.Metadata)
+        let reader = provider.GetMetadataReader()
+        let methodHandle = reader.MethodDefinitions |> Seq.head
+        let methodDef = reader.GetMethodDefinition methodHandle
+        Assert.Equal(bodyInfo.CodeOffset, methodDef.RelativeVirtualAddress)
+
+    [<Fact>]
     let ``MethodDef RVA matches emitted method body offset`` () =
         // Baseline module with GetValue = 42
         let _, baseline = createBaseline ()
