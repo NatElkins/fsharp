@@ -1069,3 +1069,40 @@ module DeltaEmitterTests =
         let expected = MetadataTokens.GetToken(EntityHandle.op_Implicit standalone.Handle)
         Assert.Equal(expected, token)
         Assert.Equal<byte[]>(signature, standalone.Blob)
+
+    [<Fact>]
+    let ``MethodDef RVA matches emitted method body offset`` () =
+        // Baseline module with GetValue = 42
+        let _, baseline = createBaseline ()
+        // Updated module changes GetValue body to return 84
+        let updatedModule = createModule 84
+
+        let request : IlxDeltaRequest =
+            { Baseline = baseline
+              UpdatedTypes = [ "Sample.Type" ]
+              UpdatedMethods = [ methodKey baseline "GetValue" ]
+              UpdatedAccessors = []
+              Module = updatedModule
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta = emitDelta request
+
+        let bodyInfo = Assert.Single(delta.MethodBodies)
+
+        use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange delta.Metadata)
+        let reader = provider.GetMetadataReader()
+
+        // Resolve MethodDef for GetValue in the delta metadata
+        // Delta string heap offsets are absolute to baseline; names may be unreadable from delta alone.
+        // This delta emits exactly one MethodDef row, so take the first handle.
+        let methodHandle =
+            reader.MethodDefinitions
+            |> Seq.head
+
+        let methodDef = reader.GetMethodDefinition methodHandle
+
+        // MethodDef.RVA should point at the emitted method body offset
+        Assert.Equal(bodyInfo.CodeOffset, methodDef.RelativeVirtualAddress)
