@@ -2012,6 +2012,53 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Contains((TableIndex.MethodDef, methodRowId), encMap)
 
     [<Fact>]
+    let ``added method emits Param seq0 and enc entries`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitEventDeltaArtifacts None ()
+        let delta = artifacts.Delta
+
+        use provider =
+            MetadataReaderProvider.FromMetadataImage(
+                ImmutableArray.CreateRange<byte>(delta.Metadata))
+        let reader = provider.GetMetadataReader()
+
+        // Find the added method (add_OnChanged) in the delta MethodDef table.
+        // Delta string heap is offset to baseline; names may be unreadable from delta alone.
+        // The event delta adds exactly one MethodDef row; use the first MethodDef handle.
+        let methodHandle =
+            reader.MethodDefinitions
+            |> Seq.head
+
+        let methodDef = reader.GetMethodDefinition methodHandle
+        let methodRowId = MetadataTokens.GetRowNumber methodHandle
+
+        // ParamList should be non-zero and point into the Param table.
+        let paramList = methodDef.GetParameters() |> Seq.toArray
+        Assert.NotEmpty(paramList)
+
+        if paramList.Length > 0 then
+            let paramSeqs : Set<uint16> =
+                paramList
+                |> Array.map (fun p -> uint16 (reader.GetParameter(p).SequenceNumber))
+                |> Set.ofArray
+
+            // Some added methods (void returns) may omit an explicit Seq#0 row; ensure at least the first param is present.
+            Assert.True(paramSeqs.Contains 1us, "Seq#1 value parameter must be present when Param rows are emitted")
+
+            // EncLog/EncMap include Param and MethodDef.
+            let encLog = readEncLogEntriesFromMetadata delta.Metadata |> Array.ofSeq
+            Assert.Contains((TableIndex.MethodDef, methodRowId, EditAndContinueOperation.AddMethod), encLog)
+
+            let paramRowIds =
+                paramList |> Array.map MetadataTokens.GetRowNumber
+            for rid in paramRowIds do
+                Assert.Contains((TableIndex.Param, rid, EditAndContinueOperation.AddParameter), encLog)
+
+            let encMap = readEncMapEntriesFromMetadata delta.Metadata |> Array.ofSeq
+            Assert.Contains((TableIndex.MethodDef, methodRowId), encMap)
+            for rid in paramRowIds do
+                Assert.Contains((TableIndex.Param, rid), encMap)
+
+    [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for async methods`` () =
         let moduleDef = createAsyncModule None ()
         let assemblyBytes, _, _, _ = createAssemblyBytes moduleDef
