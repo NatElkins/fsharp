@@ -176,6 +176,84 @@ module PdbTests =
 
         encLog, encMap
 
+    let private createModuleWithTwoSeqPointMethods () =
+        let ilg = PrimaryAssemblyILGlobals
+        let mkMethod name value =
+            createMethodWithSeqPoint ilg name value "Sample.fs"
+
+        let methods =
+            [ mkMethod "GetValueA" 1
+              mkMethod "GetValueB" 2 ]
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    "Sample.Type",
+                    ILTypeDefAccess.Public,
+                    mkILMethods methods,
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField
+                )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
+    let private createBaselineWithTwoMethods () =
+        let moduleDef = createModuleWithTwoSeqPointMethods ()
+
+        let methodTokenMap =
+            [ "GetValueA", 0x06000001
+              "GetValueB", 0x06000002 ]
+            |> dict
+
+        let tokenMappings : ILTokenMappings =
+            { TypeDefTokenMap = fun (_, _) -> 0x02000001
+              FieldDefTokenMap = fun _ _ -> 0x04000001
+              MethodDefTokenMap = fun _ _ mdef -> methodTokenMap[mdef.Name]
+              PropertyTokenMap = fun _ _ _ -> 0x17000001
+              EventTokenMap = fun _ _ _ -> 0x14000001 }
+
+        let metadataSnapshot : MetadataSnapshot =
+            { HeapSizes =
+                { StringHeapSize = 96
+                  UserStringHeapSize = 32
+                  BlobHeapSize = 96
+                  GuidHeapSize = 16 }
+              TableRowCounts = Array.create 64 0
+              GuidHeapStart = 0 }
+
+        let portablePdbSnapshot : PortablePdbSnapshot =
+            { Bytes = Array.empty
+              TableRowCounts = ImmutableArray.CreateRange(Array.create MetadataTokens.TableCount 0)
+              EntryPointToken = None }
+
+        let moduleId = System.Guid.Parse("aaaaaaaa-0000-0000-0000-aaaaaaaaaaaa")
+
+        let baseline =
+            FSharp.Compiler.HotReloadBaseline.create
+                moduleDef
+                tokenMappings
+                metadataSnapshot
+                moduleId
+                (Some portablePdbSnapshot)
+
+        moduleDef, baseline
+
     [<Fact>]
     let ``emitDelta emits portable PDB delta with sequence points`` () =
         let _, baseline = createBaselineWithArtifacts 42
@@ -243,6 +321,85 @@ module PdbTests =
 
         Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedLog, actualLog)
         Assert.Equal<(TableIndex * int)[]>(expectedMap, actualMap)
+
+    [<Fact>]
+    let ``PDB delta includes only updated methods and stable documents`` () =
+        let moduleDef, baseline = createBaselineWithTwoMethods ()
+        let methodAKey = baselineMethodKey baseline "GetValueA"
+        let methodBKey = baselineMethodKey baseline "GetValueB"
+
+        // Update only method B
+        let updatedModule =
+            let ilg = PrimaryAssemblyILGlobals
+            let updatedMethod =
+                createMethodWithSeqPoint ilg "GetValueB" 99 "Sample.fs"
+            let unchangedMethod =
+                createMethodWithSeqPoint ilg "GetValueA" 1 "Sample.fs"
+            let typeDef =
+                mkILSimpleClass
+                    ilg
+                    (
+                        "Sample.Type",
+                        ILTypeDefAccess.Public,
+                        mkILMethods [ unchangedMethod; updatedMethod ],
+                        mkILFields [],
+                        emptyILTypeDefs,
+                        mkILProperties [],
+                        mkILEvents [],
+                        emptyILCustomAttrs,
+                        ILTypeInit.BeforeField
+                    )
+            mkILSimpleModule
+                "SampleAssembly"
+                "SampleModule"
+                true
+                (4, 0)
+                false
+                (mkILTypeDefs [ typeDef ])
+                None
+                None
+                0
+                (mkILExportedTypes [])
+                "v4.0.30319"
+
+        let request : IlxDeltaRequest =
+            { Baseline = baseline
+              UpdatedTypes = [ "Sample.Type" ]
+              UpdatedMethods = [ methodBKey ]
+              UpdatedAccessors = []
+              Module = updatedModule
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta = emitDelta request
+        let pdbBytes =
+            match delta.Pdb with
+            | Some bytes -> bytes
+            | None -> failwith "Expected portable PDB delta"
+
+        use provider = MetadataReaderProvider.FromPortablePdbImage(ImmutableArray.CreateRange pdbBytes))
+        let reader = provider.GetMetadataReader()
+
+        // Only the updated method should appear in MethodDebugInformation
+        let methodTokensInPdb =
+            reader.MethodDebugInformation
+            |> Seq.map (fun h ->
+                let def = h.ToDefinitionHandle()
+                MetadataTokens.GetToken(MethodDefinitionHandle.op_Implicit def))
+            |> Seq.toArray
+
+        Assert.Equal<int[]>([| baseline.MethodTokens[methodBKey] |], methodTokensInPdb)
+
+        // No new Document rows should be emitted (same source file)
+        Assert.Equal(0, reader.GetTableRowCount(TableIndex.Document))
+
+        // Sequence points remain present for the updated method
+        let handle = reader.MethodDebugInformation |> Seq.head
+        let info = reader.GetMethodDebugInformation handle
+        let points = info.GetSequencePoints() |> Seq.toArray
+        Assert.NotEmpty(points)
 
     [<Fact>]
     let ``emitDelta emits portable PDB delta for property accessor edits`` () =
