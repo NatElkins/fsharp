@@ -466,6 +466,54 @@ module DeltaEmitterTests =
         let moduleId = System.Guid.Parse("33333333-4444-5555-6666-777777777777")
         moduleDef, FSharp.Compiler.HotReloadBaseline.create moduleDef tokenMappings metadataSnapshot moduleId None
 
+    let private createLocalsModule (locals: ILType list) (bodyInstrs: ILInstr[]) : ILModuleDef =
+        let ilg = PrimaryAssemblyILGlobals
+
+        let methodBody =
+            mkMethodBody (
+                false,
+                locals |> List.map (fun ty -> mkILLocal ty None),
+                4,
+                nonBranchingInstrsToCode (Array.toList bodyInstrs),
+                None,
+                None)
+
+        let methodDef =
+            mkILNonGenericStaticMethod(
+                "Compute",
+                ILMemberAccess.Public,
+                [],
+                mkILReturn ilg.typ_Int32,
+                methodBody)
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    "Sample.LocalsDemo",
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ methodDef ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField
+                )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
     let private methodKey (baseline: FSharpEmitBaseline) name =
         baseline.MethodTokens
         |> Map.toSeq
@@ -1085,6 +1133,122 @@ module DeltaEmitterTests =
         let deltaCallToken = readCallOperand (ReadOnlySpan<byte>(deltaIl))
 
         Assert.Equal(baselineCallToken, deltaCallToken)
+
+    [<Fact>]
+    let ``emitDelta reuses StandAloneSig token when locals unchanged`` () =
+        let baselineModule =
+            createLocalsModule
+                [ PrimaryAssemblyILGlobals.typ_Int32 ]
+                [| AI_ldc(DT_I4, ILConst.I4 5); I_ret |]
+
+        let updatedModule =
+            createLocalsModule
+                [ PrimaryAssemblyILGlobals.typ_Int32 ]
+                [| AI_ldc(DT_I4, ILConst.I4 7); I_ret |]
+
+        let baselineArtifacts = TestHelpers.createBaselineFromModule baselineModule
+        let methodKey = TestHelpers.methodKeyByName baselineArtifacts.Baseline "Sample.LocalsDemo" "Compute"
+
+        let _baselineLocalSigToken, baselineSigBytes =
+            use peReader = new PEReader(File.OpenRead(baselineArtifacts.AssemblyPath))
+            let methodToken = baselineArtifacts.Baseline.MethodTokens[methodKey]
+            let methodHandle = MetadataTokens.MethodDefinitionHandle methodToken
+            let reader = peReader.GetMetadataReader()
+            let methodDef = reader.GetMethodDefinition methodHandle
+            let body = peReader.GetMethodBody(methodDef.RelativeVirtualAddress)
+            let sigHandle = body.LocalSignature
+            Assert.False(sigHandle.IsNil, "Baseline method is expected to carry a local signature.")
+            let sigToken = MetadataTokens.GetToken(EntityHandle.op_Implicit sigHandle)
+            let sigBytes =
+                let standalone = reader.GetStandaloneSignature sigHandle
+                reader.GetBlobBytes standalone.Signature
+            sigToken, sigBytes
+
+        let request : IlxDeltaRequest =
+            { Baseline = baselineArtifacts.Baseline
+              UpdatedTypes = [ "Sample.LocalsDemo" ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = updatedModule
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta = emitDelta request
+
+        use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange delta.Metadata)
+        let deltaReader = deltaProvider.GetMetadataReader()
+
+        Assert.Equal(1, deltaReader.GetTableRowCount(TableIndex.StandAloneSig))
+        let bodyInfo = Assert.Single(delta.MethodBodies)
+        let expectedToken =
+            MetadataTokens.GetToken(EntityHandle.op_Implicit (MetadataTokens.StandaloneSignatureHandle 1))
+        Assert.Equal(expectedToken, bodyInfo.LocalSignatureToken)
+        let signatureBlob = Assert.Single(delta.StandaloneSignatures)
+        Assert.Equal<byte>(baselineSigBytes, signatureBlob.Blob)
+
+    [<Fact>]
+    let ``emitDelta adds new StandAloneSig and header token when locals change`` () =
+        let baselineModule =
+            createLocalsModule
+                [ PrimaryAssemblyILGlobals.typ_Int32 ]
+                [| AI_ldc(DT_I4, ILConst.I4 5); I_ret |]
+
+        let updatedModule =
+            createLocalsModule
+                [ PrimaryAssemblyILGlobals.typ_Int32; PrimaryAssemblyILGlobals.typ_Int32 ]
+                [| AI_ldc(DT_I4, ILConst.I4 1)
+                   I_stloc 0us
+                   AI_ldc(DT_I4, ILConst.I4 2)
+                   I_stloc 1us
+                   I_ldloc 0us
+                   I_ldloc 1us
+                   AI_add
+                   I_ret |]
+
+        let baselineArtifacts = TestHelpers.createBaselineFromModule baselineModule
+        let methodKey = TestHelpers.methodKeyByName baselineArtifacts.Baseline "Sample.LocalsDemo" "Compute"
+
+        let _baselineStandaloneCount, baselineSigBytes =
+            use peReader = new PEReader(File.OpenRead(baselineArtifacts.AssemblyPath))
+            let reader = peReader.GetMetadataReader()
+            let count = reader.GetTableRowCount(TableIndex.StandAloneSig)
+            let methodHandle = MetadataTokens.MethodDefinitionHandle(baselineArtifacts.Baseline.MethodTokens[methodKey])
+            let methodDef = reader.GetMethodDefinition methodHandle
+            let body = peReader.GetMethodBody(methodDef.RelativeVirtualAddress)
+            let sigHandle = body.LocalSignature
+            let sigBytes =
+                let standalone = reader.GetStandaloneSignature sigHandle
+                reader.GetBlobBytes standalone.Signature
+            count, sigBytes
+
+        let request : IlxDeltaRequest =
+            { Baseline = baselineArtifacts.Baseline
+              UpdatedTypes = [ "Sample.LocalsDemo" ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = updatedModule
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta = emitDelta request
+
+        use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange delta.Metadata)
+        let deltaReader = deltaProvider.GetMetadataReader()
+
+        Assert.Equal(1, deltaReader.GetTableRowCount(TableIndex.StandAloneSig))
+        let expectedToken =
+            MetadataTokens.GetToken(EntityHandle.op_Implicit (MetadataTokens.StandaloneSignatureHandle 1))
+        let bodyInfo = Assert.Single(delta.MethodBodies)
+        Assert.Equal(expectedToken, bodyInfo.LocalSignatureToken)
+
+        let signatureBlob = Assert.Single(delta.StandaloneSignatures)
+        let expectedSig = [| 0x07uy; 0x02uy; 0x08uy; 0x08uy |] // locals: int32, int32
+        Assert.Equal<byte>(expectedSig, signatureBlob.Blob)
+        Assert.NotEqual<byte>(baselineSigBytes, signatureBlob.Blob)
 
 
     [<Fact>]
