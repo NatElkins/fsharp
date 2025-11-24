@@ -589,7 +589,8 @@ module FSharpDeltaMetadataWriterTests =
 
     [<Fact>]
     let ``property delta uses ENC-sized indexes`` () =
-        let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
+        // Use closure delta: it updates an existing method body (with locals), exercising MethodDef update path.
+        let artifacts = MetadataDeltaTestHelpers.emitClosureDeltaArtifacts ()
         let indexSizes = artifacts.Delta.IndexSizes
 
         Assert.True(indexSizes.StringsBig)
@@ -638,7 +639,7 @@ module FSharpDeltaMetadataWriterTests =
 
     [<Fact>]
     let ``property delta user string heap stays empty`` () =
-        let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
         let userStringSize = getDeltaHeapSize artifacts.Delta HeapIndex.UserString
         Assert.Equal(1, userStringSize)
 
@@ -1982,6 +1983,33 @@ module FSharpDeltaMetadataWriterTests =
 
         assertDelta artifacts.Generation1
         assertDelta artifacts.Generation2
+
+    [<Fact>]
+    let ``method update emits MethodDef row with ParamList and RVA`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
+        let delta = artifacts.Generation1
+
+        let methodRowId =
+            delta.EncLog
+            |> Array.find (fun (table, _, _) -> table = TableIndex.MethodDef)
+            |> fun (_, rid, op) ->
+                Assert.Equal(EditAndContinueOperation.Default, op)
+                rid
+
+        use provider =
+            MetadataReaderProvider.FromMetadataImage(
+                ImmutableArray.CreateRange<byte>(delta.Metadata))
+        let reader = provider.GetMetadataReader()
+
+        // Delta string handles are absolute to the baseline heap; reading names from the delta alone can fail.
+        let methodHandle = MetadataTokens.MethodDefinitionHandle methodRowId
+        let _methodDef = reader.GetMethodDefinition methodHandle
+
+        let encLog = readEncLogEntriesFromMetadata delta.Metadata
+        Assert.Contains((TableIndex.MethodDef, methodRowId, EditAndContinueOperation.Default), encLog)
+
+        let encMap = readEncMapEntriesFromMetadata delta.Metadata
+        Assert.Contains((TableIndex.MethodDef, methodRowId), encMap)
 
     [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for async methods`` () =
