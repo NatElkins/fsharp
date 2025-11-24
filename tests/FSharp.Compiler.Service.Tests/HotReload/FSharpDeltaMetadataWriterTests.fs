@@ -1669,6 +1669,9 @@ module FSharpDeltaMetadataWriterTests =
         let encLog = readEncLogEntriesFromMetadata artifacts.Delta.Metadata
         Assert.Contains((TableIndex.StandAloneSig, 1, EditAndContinueOperation.Default), encLog)
 
+        let encMap = readEncMapEntriesFromMetadata artifacts.Delta.Metadata
+        Assert.Contains((TableIndex.StandAloneSig, 1), encMap)
+
     [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for property rows`` () =
         let moduleDef = createPropertyModule None ()
