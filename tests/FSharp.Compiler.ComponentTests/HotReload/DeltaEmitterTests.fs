@@ -18,6 +18,7 @@ open System.IO
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
+open System.Buffers.Binary
 open Xunit.Sdk
 open FSharp.Test
 open FSharp.Compiler.HotReload.SymbolMatcher
@@ -158,6 +159,102 @@ module DeltaEmitterTests =
             0
             (mkILExportedTypes [])
             "v4.0.30319"
+
+    let private mscorlibRef =
+        ILAssemblyRef.Create(
+            "mscorlib",
+            None,
+            Some(
+                PublicKeyToken
+                    [|
+                        0xb7uy
+                        0x7auy
+                        0x5cuy
+                        0x56uy
+                        0x19uy
+                        0x34uy
+                        0xe0uy
+                        0x89uy
+                    |]
+            ),
+            false,
+            Some(ILVersionInfo(4us, 0us, 0us, 0us)),
+            None)
+
+    let private createConsoleCallModule useIntOverload =
+        let ilg = PrimaryAssemblyILGlobals
+        let consoleTypeRef = mkILTyRef(ILScopeRef.Assembly mscorlibRef, "System.Console")
+
+        let bodyInstrs =
+            let consoleType = mkILNamedTy ILBoxity.AsObject consoleTypeRef []
+
+            if useIntOverload then
+                let methodSpec =
+                    mkILNonGenericMethSpecInTy(consoleType, ILCallingConv.Static, "WriteLine", [ ilg.typ_Int32 ], ILType.Void)
+
+                nonBranchingInstrsToCode [ AI_ldc(DT_I4, ILConst.I4 123); mkNormalCall methodSpec; I_ret ]
+            else
+                let methodSpec =
+                    mkILNonGenericMethSpecInTy(consoleType, ILCallingConv.Static, "WriteLine", [ ilg.typ_String ], ILType.Void)
+
+                nonBranchingInstrsToCode [ I_ldstr "hello"; mkNormalCall methodSpec; I_ret ]
+
+        let methodDef =
+            mkILNonGenericStaticMethod(
+                "Log",
+                ILMemberAccess.Public,
+                [],
+                mkILReturn ILType.Void,
+                mkMethodBody (false, [], 2, bodyInstrs, None, None)
+            )
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    "Sample.ConsoleDemo",
+                    ILTypeDefAccess.Public,
+                    mkILMethods [ methodDef ],
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField
+                )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
+    let private readCallOperand (bytes: ReadOnlySpan<byte>) =
+        let mutable offset = 0
+        let mutable found = ValueNone
+
+        while offset < bytes.Length && found.IsNone do
+            match bytes[offset] with
+            | 0x72uy -> // ldstr token (4 bytes)
+                offset <- offset + 1 + 4
+            | 0x28uy ->
+                let token = BinaryPrimitives.ReadInt32LittleEndian(bytes.Slice(offset + 1, 4))
+                found <- ValueSome token
+                offset <- bytes.Length
+            | 0x2Auy -> // ret
+                offset <- offset + 1
+            | opcode -> failwithf "Unexpected opcode 0x%02X while reading call operand" opcode
+
+        match found with
+        | ValueSome token -> token
+        | ValueNone -> failwith "No call opcode found in method body"
 
     let private createModuleWithParameterizedMethod () =
         let ilg = PrimaryAssemblyILGlobals
@@ -943,6 +1040,51 @@ module DeltaEmitterTests =
             (fun operand -> Assert.Equal<byte>(0x64uy, operand)),
             (fun ret -> Assert.Equal<byte>(0x2Auy, ret))
         )
+
+    [<Fact>]
+    let ``emitDelta reuses MemberRef tokens for unchanged external call`` () =
+        let baselineArtifacts = TestHelpers.createBaselineFromModule (createConsoleCallModule false)
+        let updatedModule = createConsoleCallModule false
+
+        let methodKey = TestHelpers.methodKeyByName baselineArtifacts.Baseline "Sample.ConsoleDemo" "Log"
+
+        let request : IlxDeltaRequest =
+            {
+                Baseline = baselineArtifacts.Baseline
+                UpdatedTypes = [ "Sample.ConsoleDemo" ]
+                UpdatedMethods = [ methodKey ]
+                UpdatedAccessors = []
+                Module = updatedModule
+                SymbolChanges = None
+                CurrentGeneration = 1
+                PreviousGenerationId = None
+                SynthesizedNames = None
+            }
+
+        let delta = emitDelta request
+
+        use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange delta.Metadata)
+        let deltaReader = deltaProvider.GetMetadataReader()
+
+        Assert.Equal(0, deltaReader.GetTableRowCount(TableIndex.MemberRef))
+        Assert.Equal(0, deltaReader.GetTableRowCount(TableIndex.TypeRef))
+
+        // Read baseline call token directly from the emitted IL
+        use peReader = new PEReader(File.OpenRead(baselineArtifacts.AssemblyPath))
+        let baselineReader = peReader.GetMetadataReader()
+        let baselineMethodToken = baselineArtifacts.Baseline.MethodTokens[methodKey]
+        let baselineMethodHandle = MetadataTokens.MethodDefinitionHandle baselineMethodToken
+        let baselineMethodDef = baselineReader.GetMethodDefinition baselineMethodHandle
+        let baselineBody = peReader.GetMethodBody(baselineMethodDef.RelativeVirtualAddress)
+        let baselineIl = baselineBody.GetILBytes()
+        let baselineCallToken = readCallOperand (ReadOnlySpan<byte>(baselineIl))
+
+        let bodyInfo = Assert.Single(delta.MethodBodies)
+        let instructionStart = bodyInfo.CodeOffset + 12
+        let deltaIl = delta.IL.AsSpan().Slice(instructionStart, bodyInfo.CodeLength).ToArray()
+        let deltaCallToken = readCallOperand (ReadOnlySpan<byte>(deltaIl))
+
+        Assert.Equal(baselineCallToken, deltaCallToken)
 
 
     [<Fact>]
