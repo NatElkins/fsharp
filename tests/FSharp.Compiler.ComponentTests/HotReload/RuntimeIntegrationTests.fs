@@ -226,6 +226,134 @@ type Type =
             try checker.InvalidateAll() with _ -> ()
             try Directory.Delete(projectDir, true) with _ -> ()
 
-    [<Fact(Skip = "ApplyUpdate not EnC-capable yet; harness kept for future debugging")>]
+    [<Fact>]
     let ``ApplyUpdate succeeds for method body edit`` () =
-        ()
+        // This test requires DOTNET_MODIFIABLE_ASSEMBLIES=debug to be set
+        // To run: DOTNET_MODIFIABLE_ASSEMBLIES=debug dotnet test --filter "ApplyUpdate succeeds"
+        let modifiable = Environment.GetEnvironmentVariable("DOTNET_MODIFIABLE_ASSEMBLIES")
+        if not (String.Equals(modifiable, "debug", StringComparison.OrdinalIgnoreCase)) then
+            printfn "[skip] DOTNET_MODIFIABLE_ASSEMBLIES must be 'debug' for this test"
+        else
+            // Use the FSharpChecker hot reload API (same as HotReloadDemoApp)
+            let checker =
+                FSharpChecker.Create(
+                    keepAssemblyContents = true,
+                    keepAllBackgroundResolutions = false,
+                    keepAllBackgroundSymbolUses = false,
+                    enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                    enablePartialTypeChecking = false,
+                    captureIdentifiersWhenParsing = false
+                )
+
+            let projectDir = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-applyupdate", System.Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(projectDir) |> ignore
+            let fsPath = Path.Combine(projectDir, "Library.fs")
+            let dllPath = Path.Combine(projectDir, "Library.dll")
+            // Separate runtime copy (matches HotReloadDemoApp pattern)
+            let runtimeDllPath = Path.Combine(projectDir, "Library.runtime.dll")
+
+            try
+                File.WriteAllText(fsPath, baselineSource)
+
+                // Get project options with hot reload enabled
+                let projectOptions, _ =
+                    checker.GetProjectOptionsFromScript(
+                        fsPath,
+                        SourceText.ofString baselineSource,
+                        assumeDotNetFramework = false,
+                        useSdkRefs = true,
+                        useFsiAuxLib = false
+                    )
+                    |> Async.RunImmediate
+
+                let projectOptions =
+                    { projectOptions with
+                        SourceFiles = [| fsPath |]
+                        OtherOptions =
+                            projectOptions.OtherOptions
+                            |> Array.append
+                                [| "--target:library"
+                                   "--langversion:preview"
+                                   "--optimize-"
+                                   "--debug:portable"
+                                   "--deterministic"
+                                   "--enable:hotreloaddeltas"
+                                   $"--out:{dllPath}" |] }
+
+                // Compile baseline
+                checker.InvalidateAll()
+                let compileDiagnostics, _ =
+                    checker.Compile(Array.concat [ [| "fsc.exe" |]; projectOptions.OtherOptions; projectOptions.SourceFiles ])
+                    |> Async.RunImmediate
+
+                let errors = compileDiagnostics |> Array.filter (fun d -> d.Severity = FSharpDiagnosticSeverity.Error)
+                if errors.Length > 0 then failwithf "Baseline compilation failed: %A" (errors |> Array.map (fun d -> d.Message))
+
+                // Start hot reload session
+                match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+                | Error error -> failwithf "Failed to start hot reload session: %A" error
+                | Ok () -> ()
+
+                // Copy baseline to runtime location and load it (same as HotReloadDemoApp)
+                File.Copy(dllPath, runtimeDllPath, true)
+                let pdbPath = Path.ChangeExtension(dllPath, ".pdb")
+                if File.Exists(pdbPath) then
+                    File.Copy(pdbPath, Path.ChangeExtension(runtimeDllPath, ".pdb"), true)
+
+                let assembly = Assembly.LoadFrom(runtimeDllPath)
+
+                // Verify baseline method value
+                let methodType = assembly.GetType("Sample.Type", throwOnError = true)
+                let method = methodType.GetMethod("GetValue", BindingFlags.Public ||| BindingFlags.Static)
+                let beforeValue = method.Invoke(null, [||]) :?> int
+                Assert.Equal(1, beforeValue)
+
+                // Update source
+                File.WriteAllText(fsPath, updatedSource)
+                checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+
+                // Recompile without hot reload capture (same as HotReloadDemoApp pattern)
+                let updatedOptions =
+                    { projectOptions with
+                        OtherOptions =
+                            projectOptions.OtherOptions
+                            |> Array.filter (fun opt ->
+                                not (opt.StartsWith("--enable:hotreloaddeltas", StringComparison.OrdinalIgnoreCase))) }
+
+                let compileDiagnostics2, _ =
+                    checker.Compile(Array.concat [ [| "fsc.exe" |]; updatedOptions.OtherOptions; updatedOptions.SourceFiles ])
+                    |> Async.RunImmediate
+
+                let errors2 = compileDiagnostics2 |> Array.filter (fun d -> d.Severity = FSharpDiagnosticSeverity.Error)
+                if errors2.Length > 0 then failwithf "Update compilation failed: %A" (errors2 |> Array.map (fun d -> d.Message))
+
+                // Emit delta
+                match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+                | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
+                | Ok delta ->
+                    Assert.NotEmpty(delta.Metadata)
+                    Assert.NotEmpty(delta.IL)
+
+                    let pdbBytes = delta.Pdb |> Option.defaultValue Array.empty
+
+                    printfn "[applyupdate-test] Applying delta: metadata=%d IL=%d PDB=%d" delta.Metadata.Length delta.IL.Length pdbBytes.Length
+
+                    // Apply the delta
+                    try
+                        MetadataUpdater.ApplyUpdate(assembly, delta.Metadata.AsSpan(), delta.IL.AsSpan(), pdbBytes.AsSpan())
+                        printfn "[applyupdate-test] ApplyUpdate succeeded!"
+                    with
+                    | :? InvalidOperationException as ex when ex.Message.Contains("not editable") ->
+                        failwithf "Assembly is NOT EnC-capable: %s" ex.Message
+                    | :? InvalidOperationException as ex ->
+                        failwithf "ApplyUpdate failed (delta rejected): %s" ex.Message
+
+                    // Verify updated method value
+                    let afterValue = method.Invoke(null, [||]) :?> int
+                    Assert.Equal(2, afterValue)
+                    printfn "[applyupdate-test] SUCCESS: value changed from %d to %d" beforeValue afterValue
+
+            finally
+                try checker.EndHotReloadSession() with _ -> ()
+                try checker.InvalidateAll() with _ -> ()
+                try Directory.Delete(projectDir, true) with _ -> ()
