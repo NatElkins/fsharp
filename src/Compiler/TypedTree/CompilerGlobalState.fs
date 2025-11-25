@@ -43,7 +43,7 @@ type NiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMaps opti
     member this.FreshCompilerGeneratedName (name, m: range) =
         this.FreshCompilerGeneratedNameOfBasicName (GetBasicNameOfPossibleCompilerGeneratedName name, m)
 
-    member _.IncrementOnly(name: string, m: range) = ensureOrdinal name m |> ignore
+    member _.IncrementOnly(name: string, m: range) = ensureOrdinal name m
 
     new () = NiceNameGenerator(fun () -> None)
 
