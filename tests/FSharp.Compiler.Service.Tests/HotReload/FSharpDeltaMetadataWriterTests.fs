@@ -1584,9 +1584,10 @@ module FSharpDeltaMetadataWriterTests =
         match name1 with
         | Some n -> Assert.Equal(baseName, name1)
         | None -> ()
-        Assert.Equal(expectedMvidOffset1, mvidOffset1)
-        Assert.Equal(0, encBaseOffset1)
-        Assert.Equal(expectedEncIdOffset1, encIdOffset1)
+        // GUID column values should match the combined heap entry indexes
+        Assert.Equal(expectedMvidIndex1, gen1RowMvidIdx)
+        Assert.Equal(0, gen1RowBaseIdx)  // EncBaseId should be 0 for gen1
+        Assert.Equal(expectedEncIdIndex1, gen1RowEncIdx)
         Assert.True(encIdGuid1Value.IsSome, "Gen1 EncId GUID should be readable from delta heap")
         Assert.NotEqual(baseMvidGuid, encIdGuid1Value)
         Assert.Equal(baseMvidGuid, gen1MvidGuidValue)

@@ -161,3 +161,250 @@ type Type =
         try
             Directory.Delete(projectDir, true)
         with _ -> ()
+
+    // -------------------------------------------------------------------------
+    // Rude Edit Rejection Tests
+    // -------------------------------------------------------------------------
+    // These tests verify that disallowed edits are properly rejected at the
+    // FSharpChecker API level, returning UnsupportedEdit errors.
+
+    let private signatureChangeBaseline =
+        """
+namespace Sample
+
+type Type =
+    static member GetValue(x: int) = x + 1
+"""
+
+    let private signatureChangeUpdated =
+        """
+namespace Sample
+
+type Type =
+    static member GetValue(x: string) = x.Length
+"""
+
+    [<Fact>]
+    let ``EmitHotReloadDelta rejects signature change`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-sig-change", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        File.WriteAllText(fsPath, signatureChangeBaseline)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath signatureChangeBaseline
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        // Change the method signature (int -> string parameter)
+        File.WriteAllText(fsPath, signatureChangeUpdated)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        let emitResult = checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate
+
+        match emitResult with
+        | Ok _ -> failwith "Expected signature change to be rejected"
+        | Error (FSharpHotReloadError.UnsupportedEdit msg) ->
+            Assert.Contains("Rude edits", msg, StringComparison.OrdinalIgnoreCase)
+        | Error other -> failwithf "Expected UnsupportedEdit error, got: %A" other
+
+        checker.EndHotReloadSession()
+        try Directory.Delete(projectDir, true) with _ -> ()
+
+    let private recordBaseline =
+        """
+namespace Sample
+
+type Person = { Name: string }
+
+module Helpers =
+    let greet (p: Person) = $"Hello, {p.Name}"
+"""
+
+    let private recordWithNewField =
+        """
+namespace Sample
+
+type Person = { Name: string; Age: int }
+
+module Helpers =
+    let greet (p: Person) = $"Hello, {p.Name}, age {p.Age}"
+"""
+
+    [<Fact>]
+    let ``EmitHotReloadDelta rejects record field addition`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-record-field", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        File.WriteAllText(fsPath, recordBaseline)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath recordBaseline
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        // Add a new field to the record (type layout change)
+        File.WriteAllText(fsPath, recordWithNewField)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        let emitResult = checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate
+
+        match emitResult with
+        | Ok _ -> failwith "Expected record field addition to be rejected"
+        | Error (FSharpHotReloadError.UnsupportedEdit msg) ->
+            // Should mention rude edits or structural edits
+            Assert.True(
+                msg.Contains("Rude", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("Structural", StringComparison.OrdinalIgnoreCase),
+                $"Expected rude/structural edit message, got: {msg}")
+        | Error other -> failwithf "Expected UnsupportedEdit error, got: %A" other
+
+        checker.EndHotReloadSession()
+        try Directory.Delete(projectDir, true) with _ -> ()
+
+    let private moduleBaseline =
+        """
+namespace Sample
+
+module Helpers =
+    let getValue () = 42
+"""
+
+    let private moduleWithNewFunction =
+        """
+namespace Sample
+
+module Helpers =
+    let getValue () = 42
+    let getOther () = 99
+"""
+
+    [<Fact>]
+    let ``EmitHotReloadDelta rejects new function addition`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-func-add", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        File.WriteAllText(fsPath, moduleBaseline)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath moduleBaseline
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        // Add a new function (declaration added)
+        File.WriteAllText(fsPath, moduleWithNewFunction)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        let emitResult = checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate
+
+        match emitResult with
+        | Ok _ -> failwith "Expected new function addition to be rejected"
+        | Error (FSharpHotReloadError.UnsupportedEdit msg) ->
+            // Should mention rude edits or structural edits
+            Assert.True(
+                msg.Contains("Rude", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("Structural", StringComparison.OrdinalIgnoreCase),
+                $"Expected rude/structural edit message, got: {msg}")
+        | Error other -> failwithf "Expected UnsupportedEdit error, got: %A" other
+
+        checker.EndHotReloadSession()
+        try Directory.Delete(projectDir, true) with _ -> ()
+
+    let private unionBaseline =
+        """
+namespace Sample
+
+type Shape =
+    | Circle of radius: float
+    | Square of side: float
+
+module Shapes =
+    let area shape =
+        match shape with
+        | Circle r -> System.Math.PI * r * r
+        | Square s -> s * s
+"""
+
+    let private unionWithNewCase =
+        """
+namespace Sample
+
+type Shape =
+    | Circle of radius: float
+    | Square of side: float
+    | Triangle of base': float * height: float
+
+module Shapes =
+    let area shape =
+        match shape with
+        | Circle r -> System.Math.PI * r * r
+        | Square s -> s * s
+        | Triangle (b, h) -> 0.5 * b * h
+"""
+
+    [<Fact>]
+    let ``EmitHotReloadDelta rejects union case addition`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-union-case", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        File.WriteAllText(fsPath, unionBaseline)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath unionBaseline
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        // Add a new union case (type layout change)
+        File.WriteAllText(fsPath, unionWithNewCase)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        let emitResult = checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate
+
+        match emitResult with
+        | Ok _ -> failwith "Expected union case addition to be rejected"
+        | Error (FSharpHotReloadError.UnsupportedEdit msg) ->
+            // Should mention rude edits or structural edits
+            Assert.True(
+                msg.Contains("Rude", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("Structural", StringComparison.OrdinalIgnoreCase),
+                $"Expected rude/structural edit message, got: {msg}")
+        | Error other -> failwithf "Expected UnsupportedEdit error, got: %A" other
+
+        checker.EndHotReloadSession()
+        try Directory.Delete(projectDir, true) with _ -> ()
