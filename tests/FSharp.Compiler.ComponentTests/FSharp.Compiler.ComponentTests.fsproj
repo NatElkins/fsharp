@@ -19,6 +19,7 @@
     <!-- allow testing of static methods in interfaces on .NET 6  -->
     <EnablePreviewFeatures>true</EnablePreviewFeatures>
     <EnableUnsafeBinaryFormatterSerialization>true</EnableUnsafeBinaryFormatterSerialization>
+    <RunSettingsFilePath>HotReload/HotReload.runsettings</RunSettingsFilePath>
 </PropertyGroup>
 
 <PropertyGroup Condition="'$(BUILDING_USING_DOTNET)' == 'true'">
@@ -69,9 +70,13 @@
     <Compile Include="Conformance\BasicGrammarElements\ModuleDefinitions\ModuleDefinitions.fs" />
     <Compile Include="HotReload\BaselineTests.fs" />
     <Compile Include="HotReload\NameMapTests.fs" />
+    <Compile Include="HotReload\TestEnv.fs" />
     <Compile Include="HotReload\TestHelpers.fs" />
     <Compile Include="HotReload\DeltaEmitterTests.fs" />
     <Compile Include="HotReload\PdbTests.fs" />
+    <Compile Include="HotReload\ApplyUpdateChild.fs" />
+    <Compile Include="HotReload\ApplyUpdateRunner.fs" />
+    <Compile Include="HotReload\ApplyUpdateConsole.fs" />
     <Compile Include="HotReload\RuntimeIntegrationTests.fs" />
     <Compile Include="HotReload\DefinitionMapTests.fs" />
     <Compile Include="HotReload\SymbolChangesTests.fs" />

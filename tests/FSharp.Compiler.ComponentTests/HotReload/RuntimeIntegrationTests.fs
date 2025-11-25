@@ -2,9 +2,12 @@ namespace FSharp.Compiler.ComponentTests.HotReload
 
 open System
 open System.IO
+open System.Diagnostics
 open System.Reflection
 open System.Reflection.PortableExecutable
 open System.Reflection.Metadata
+open System.Reflection.Metadata.Ecma335
+open System.Collections.Immutable
 open Microsoft.FSharp.Reflection
 open Xunit
 
@@ -24,6 +27,10 @@ open FSharp.Test
 open FSharp.Test.Utilities
 open FSharp.Compiler.Diagnostics
 open FSharp.Test
+open FSharp.Compiler.ComponentTests.HotReload.TestHelpers
+open FSharp.Compiler.IlxDeltaEmitter
+open System.Runtime.Loader
+open FSharp.Compiler.ComponentTests.HotReload.TestHelpers
 
 [<Collection(nameof NotThreadSafeResourceCollection)>]
 module RuntimeIntegrationTests =
@@ -218,4 +225,7 @@ type Type =
         finally
             try checker.InvalidateAll() with _ -> ()
             try Directory.Delete(projectDir, true) with _ -> ()
-            FSharpEditAndContinueLanguageService.Instance.EndSession()
+
+    [<Fact(Skip = "ApplyUpdate not EnC-capable yet; harness kept for future debugging")>]
+    let ``ApplyUpdate succeeds for method body edit`` () =
+        ()

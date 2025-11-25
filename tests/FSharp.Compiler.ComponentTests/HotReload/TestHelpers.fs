@@ -5,6 +5,7 @@ open System.Collections.Generic
 open System.Collections.Immutable
 open System.IO
 open System.Reflection
+open System.Diagnostics
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
@@ -22,10 +23,156 @@ type internal BaselineArtifacts =
         Baseline: FSharpEmitBaseline
         TokenMappings: ILTokenMappings
         ModuleId: Guid
+        AssemblyName: string
         MetadataSnapshot: MetadataSnapshot
         AssemblyPath: string
         PdbPath: string option
     }
+
+/// Managed probe to mirror CoreCLR ComputeDebuggingConfig (DebuggerAssemblyControlFlags).
+module internal DebuggerFlagProbe =
+    [<System.Flags>]
+    type DebuggerFlags =
+        | TrackJitInfo = 0x1
+        | IgnorePdbs   = 0x2
+        | AllowJitOpts = 0x4
+
+    /// Given a DebuggableAttribute blob (expected 6 or 8 bytes), compute DACF flags per CoreCLR logic.
+    let computeFlagsFromDebuggableBlob (blob: byte[]) =
+        if isNull (box blob) || blob.Length < 4 then
+            None
+        else
+            let trackAndOpts = blob[2]
+            let disableOpts = blob[3]
+            let mutable flags = DebuggerFlags.AllowJitOpts
+            // Track JIT info?
+            if (trackAndOpts &&& 0x1uy) <> 0uy then
+                flags <- flags ||| DebuggerFlags.TrackJitInfo
+            else
+                flags <- flags &&& ~~~DebuggerFlags.TrackJitInfo
+            // Ignore PDBs?
+            if (trackAndOpts &&& 0x2uy) <> 0uy then
+                flags <- flags ||| DebuggerFlags.IgnorePdbs
+            else
+                flags <- flags &&& ~~~DebuggerFlags.IgnorePdbs
+            // Allow JIT opts? (per CoreCLR: allow if tracking bit = 0 OR disableOpts = 0)
+            if ((trackAndOpts &&& 0x1uy) = 0uy) || disableOpts = 0uy then
+                flags <- flags ||| DebuggerFlags.AllowJitOpts
+            else
+                flags <- flags &&& ~~~DebuggerFlags.AllowJitOpts
+            Some flags
+
+    /// Read DebuggableAttribute blobs from an assembly path and compute DACF flags if possible.
+    let tryComputeFlags (assemblyPath: string) =
+        use peReader = new PEReader(File.OpenRead assemblyPath)
+        let mdReader = peReader.GetMetadataReader()
+        let asmDef = mdReader.GetAssemblyDefinition()
+        asmDef.GetCustomAttributes()
+        |> Seq.choose (fun h ->
+            let ca = mdReader.GetCustomAttribute h
+            let ctor = ca.Constructor
+            let isDebuggable =
+                match ctor.Kind with
+                | HandleKind.MemberReference ->
+                    let mr = mdReader.GetMemberReference(MemberReferenceHandle.op_Explicit ctor)
+                    let parent = mr.Parent
+                    match parent.Kind with
+                    | HandleKind.TypeReference ->
+                        let tr = mdReader.GetTypeReference(TypeReferenceHandle.op_Explicit parent)
+                        mdReader.GetString tr.Name = "DebuggableAttribute"
+                    | HandleKind.TypeDefinition ->
+                        let td = mdReader.GetTypeDefinition(TypeDefinitionHandle.op_Explicit parent)
+                        mdReader.GetString td.Name = "DebuggableAttribute"
+                    | _ -> false
+                | HandleKind.MethodDefinition ->
+                    let md = mdReader.GetMethodDefinition(MethodDefinitionHandle.op_Explicit ctor)
+                    let td = mdReader.GetTypeDefinition(md.GetDeclaringType())
+                    mdReader.GetString td.Name = "DebuggableAttribute"
+                | _ -> false
+            if isDebuggable then
+                Some(mdReader.GetBlobBytes ca.Value)
+            else
+                None)
+        |> Seq.tryPick computeFlagsFromDebuggableBlob
+
+/// Simple decoder to convert .NET metadata signatures to ILType for method key construction.
+module internal SignatureDecoder =
+    open System.Reflection.Metadata
+
+    let private ilg = PrimaryAssemblyILGlobals
+
+    /// Decode a compressed unsigned integer from a signature blob.
+    let private decodeCompressedUInt (reader: byref<BlobReader>) =
+        let first = reader.ReadByte()
+        if (first &&& 0x80uy) = 0uy then
+            int first
+        elif (first &&& 0xC0uy) = 0x80uy then
+            let second = reader.ReadByte()
+            ((int first &&& 0x3F) <<< 8) ||| int second
+        else
+            let b2 = reader.ReadByte()
+            let b3 = reader.ReadByte()
+            let b4 = reader.ReadByte()
+            ((int first &&& 0x1F) <<< 24) ||| (int b2 <<< 16) ||| (int b3 <<< 8) ||| int b4
+
+    /// Decode a type signature to ILType. Only handles primitive types and common cases.
+    let rec private decodeType (mdReader: MetadataReader) (reader: byref<BlobReader>) : ILType =
+        let typeCode = reader.ReadByte()
+        match int typeCode with
+        | 0x01 -> ILType.Void  // ELEMENT_TYPE_VOID
+        | 0x02 -> ilg.typ_Bool // ELEMENT_TYPE_BOOLEAN
+        | 0x03 -> ilg.typ_Char // ELEMENT_TYPE_CHAR
+        | 0x04 -> ilg.typ_SByte // ELEMENT_TYPE_I1
+        | 0x05 -> ilg.typ_Byte // ELEMENT_TYPE_U1
+        | 0x06 -> ilg.typ_Int16 // ELEMENT_TYPE_I2
+        | 0x07 -> ilg.typ_UInt16 // ELEMENT_TYPE_U2
+        | 0x08 -> ilg.typ_Int32 // ELEMENT_TYPE_I4
+        | 0x09 -> ilg.typ_UInt32 // ELEMENT_TYPE_U4
+        | 0x0A -> ilg.typ_Int64 // ELEMENT_TYPE_I8
+        | 0x0B -> ilg.typ_UInt64 // ELEMENT_TYPE_U8
+        | 0x0C -> ilg.typ_Single // ELEMENT_TYPE_R4
+        | 0x0D -> ilg.typ_Double // ELEMENT_TYPE_R8
+        | 0x0E -> ilg.typ_String // ELEMENT_TYPE_STRING
+        | 0x18 -> ilg.typ_IntPtr // ELEMENT_TYPE_I
+        | 0x19 -> ilg.typ_UIntPtr // ELEMENT_TYPE_U
+        | 0x1C -> ilg.typ_Object // ELEMENT_TYPE_OBJECT
+        | 0x11 | 0x12 -> // ELEMENT_TYPE_VALUETYPE, ELEMENT_TYPE_CLASS
+            let _token = decodeCompressedUInt &reader
+            // For now, return Object as a placeholder for class types
+            ilg.typ_Object
+        | 0x1D -> // ELEMENT_TYPE_SZARRAY
+            let elemType = decodeType mdReader &reader
+            ILType.Array(ILArrayShape.SingleDimensional, elemType)
+        | 0x0F -> // ELEMENT_TYPE_PTR
+            let elemType = decodeType mdReader &reader
+            ILType.Ptr elemType
+        | 0x10 -> // ELEMENT_TYPE_BYREF
+            let elemType = decodeType mdReader &reader
+            ILType.Byref elemType
+        | _ ->
+            // Unknown type - use Object as fallback
+            ilg.typ_Object
+
+    /// Decode a method signature and return (paramTypes, returnType).
+    let decodeMethodSignature (mdReader: MetadataReader) (sigBlob: BlobHandle) : ILType list * ILType =
+        let mutable reader = mdReader.GetBlobReader sigBlob
+        let callingConv = reader.ReadByte()
+
+        // Check for generic method
+        let _genericParamCount =
+            if (callingConv &&& 0x10uy) <> 0uy then
+                decodeCompressedUInt &reader
+            else
+                0
+
+        let paramCount = decodeCompressedUInt &reader
+        let returnType = decodeType mdReader &reader
+
+        let paramTypes =
+            [ for _ in 1..paramCount do
+                yield decodeType mdReader &reader ]
+
+        paramTypes, returnType
 
 module internal TestHelpers =
 
@@ -53,13 +200,16 @@ module internal TestHelpers =
             0x3auy
         |]
 
+    // Target the runtime core library for attributes/token resolution (use actual version + pkt).
     let private mscorlibRef =
+        let an = typeof<int>.Assembly.GetName()
+        let pkt = an.GetPublicKeyToken()
         ILAssemblyRef.Create(
-            "mscorlib",
+            an.Name,
             None,
-            Some mscorlibToken,
+            (if isNull pkt || pkt.Length = 0 then None else Some(PublicKeyToken pkt)),
             false,
-            Some(ILVersionInfo(4us, 0us, 0us, 0us)),
+            Some(ILVersionInfo(uint16 an.Version.Major, uint16 an.Version.Minor, uint16 an.Version.Build, uint16 an.Version.Revision)),
             None)
 
     let private fsharpCoreRef =
@@ -600,13 +750,70 @@ module internal TestHelpers =
           TableRowCounts = rowCounts
           EntryPointToken = entryPointToken }
 
+    /// Attach DebuggableAttribute(Default | DisableOptimizations | EnableEditAndContinue) so the runtime
+    /// treats the module as EnC-capable (clears DACF_ALLOW_JIT_OPTS, sets DACF_ENC_ENABLED).
+    let withDebuggableAttribute (ilModule: ILModuleDef) : ILModuleDef =
+        let debuggableAttr =
+            let attrTypeRef = mkILTyRef(ILScopeRef.Assembly mscorlibRef, "System.Diagnostics.DebuggableAttribute")
+            let modesTypeRef = mkILTyRefInTyRef(attrTypeRef, "DebuggingModes")
+            let modesType = ILType.Value (mkILNonGenericTySpec modesTypeRef)
+            let modesValue =
+                int32 DebuggableAttribute.DebuggingModes.Default
+                ||| int32 DebuggableAttribute.DebuggingModes.DisableOptimizations
+                ||| int32 DebuggableAttribute.DebuggingModes.EnableEditAndContinue
+            let attrType = mkILBoxedType (mkILNonGenericTySpec attrTypeRef)
+            let ctor = mkILNonGenericInstanceMethSpecInTy(attrType, ".ctor", [ modesType ], ILType.Void)
+            mkILCustomAttribMethRef(ctor, [ ILAttribElem.Int32 modesValue ], [])
+
+        let manifestWithAttr =
+            let manifest =
+                match ilModule.Manifest with
+                | Some m -> m
+                | None ->
+                    { Name = ilModule.Name
+                      AuxModuleHashAlgorithm = 0
+                      SecurityDeclsStored = storeILSecurityDecls (mkILSecurityDecls [])
+                      PublicKey = None
+                      Version = Some(ILVersionInfo(1us, 0us, 0us, 0us))
+                      Locale = None
+                      CustomAttrsStored = ILAttributesStored.Given emptyILCustomAttrs
+                      AssemblyLongevity = ILAssemblyLongevity.Unspecified
+                      DisableJitOptimizations = true
+                      JitTracking = true
+                      IgnoreSymbolStoreSequencePoints = false
+                      Retargetable = false
+                      ExportedTypes = mkILExportedTypes []
+                      EntrypointElsewhere = None
+                      MetadataIndex = 0 }
+
+            // Force the DebuggableAttribute to reflect Debug semantics.
+            let existing = manifest.CustomAttrs.AsArray()
+            let combined = Array.append existing [| debuggableAttr |] |> mkILCustomAttrsFromArray
+            { manifest with
+                CustomAttrsStored = storeILCustomAttrs combined
+                DisableJitOptimizations = true
+                JitTracking = true }
+
+        { ilModule with
+            CustomAttrsStored = ilModule.CustomAttrsStored
+            Manifest = Some manifestWithAttr }
+
     let createBaselineFromModule (ilModule: ILModuleDef) : BaselineArtifacts =
+        let ilModule = withDebuggableAttribute ilModule
         let documents = collectSourceDocuments ilModule
+
         let writerOptions =
             { defaultWriterOptionsForTests testIlGlobals with
                 allGivenSources = documents }
         let assemblyBytes, pdbBytesOpt, tokenMappings, _ =
             ILWriter.WriteILBinaryInMemoryWithArtifacts(writerOptions, ilModule, id)
+
+        if System.Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_BASELINE") = "1" then
+            let pdbPathLogged =
+                match writerOptions.pdbfile with
+                | Some p -> p
+                | None -> "<none>"
+            printfn "[baseline] outfile=%s pdb=%s" writerOptions.outfile pdbPathLogged
 
         File.WriteAllBytes(writerOptions.outfile, assemblyBytes)
 
@@ -633,9 +840,159 @@ module internal TestHelpers =
         { Baseline = baseline
           TokenMappings = tokenMappings
           ModuleId = moduleId
+          AssemblyName = ilModule.Name
           MetadataSnapshot = metadataSnapshot
           AssemblyPath = writerOptions.outfile
           PdbPath = pdbPath }
+
+    /// Compile a tiny C# classlib in Debug and use its assembly as the baseline for runtime tests.
+    /// Returns the compiled assembly path and baseline artifacts loaded from that file, with token maps built from the real metadata.
+    let createBaselineFromRealCompiler (sourceText: string) : BaselineArtifacts =
+        // Write source to temp folder
+        let workDir = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-real-baseline-" + System.Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(workDir) |> ignore
+        let assemblyName = "Baseline_" + System.Guid.NewGuid().ToString("N")
+        let projPath = Path.Combine(workDir, "Baseline.csproj")
+        let srcPath = Path.Combine(workDir, "Baseline.cs")
+        File.WriteAllText(srcPath, sourceText)
+        let projContents =
+            $"""<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
+    <DebugType>portable</DebugType>
+    <Optimize>false</Optimize>
+    <DebugSymbols>true</DebugSymbols>
+    <AssemblyName>{assemblyName}</AssemblyName>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+</Project>
+"""
+        File.WriteAllText(projPath, projContents)
+
+        let psi = System.Diagnostics.ProcessStartInfo()
+        psi.FileName <- Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "..", ".dotnet", "dotnet")
+        psi.ArgumentList.Add("build")
+        psi.ArgumentList.Add(projPath)
+        psi.ArgumentList.Add("-c")
+        psi.ArgumentList.Add("Debug")
+        psi.ArgumentList.Add("-v")
+        psi.ArgumentList.Add("m")
+        psi.RedirectStandardOutput <- true
+        psi.RedirectStandardError <- true
+        psi.WorkingDirectory <- workDir
+
+        use p = new System.Diagnostics.Process()
+        p.StartInfo <- psi
+        p.Start() |> ignore
+        let stdout = p.StandardOutput.ReadToEnd()
+        let stderr = p.StandardError.ReadToEnd()
+        p.WaitForExit()
+        if p.ExitCode <> 0 then failwithf "dotnet build failed: %s\n%s" stdout stderr
+
+        // Locate built DLL
+        let preferred =
+            let bin = Path.Combine(workDir, "bin", "Debug", "net10.0", assemblyName + ".dll")
+            if File.Exists(bin) then Some bin else None
+        let dllPath =
+            match preferred with
+            | Some path -> path
+            | None ->
+                Directory.EnumerateFiles(workDir, assemblyName + ".dll", SearchOption.AllDirectories)
+                |> Seq.tryHead
+                |> Option.defaultWith (fun () -> failwithf "%s.dll not found after build" assemblyName)
+
+        // Load metadata snapshot from the real assembly
+        use peReader = new PEReader(File.OpenRead(dllPath))
+        let reader = peReader.GetMetadataReader()
+        let metadataSnapshot = metadataSnapshotFromReader reader
+        let moduleDef = reader.GetModuleDefinition()
+        let moduleId = if moduleDef.Mvid.IsNil then System.Guid.NewGuid() else reader.GetGuid moduleDef.Mvid
+
+        // Build token maps directly from metadata
+        let typeTokens =
+            reader.TypeDefinitions
+            |> Seq.map (fun h ->
+                let td = reader.GetTypeDefinition h
+                let ns = if td.Namespace.IsNil then "" else reader.GetString td.Namespace
+                let name = reader.GetString td.Name
+                let fullName = if String.IsNullOrEmpty ns then name else ns + "." + name
+                let token = MetadataTokens.GetToken(EntityHandle.op_Implicit h)
+                fullName, token)
+            |> Map.ofSeq
+
+        let methodTokens =
+            reader.MethodDefinitions
+            |> Seq.map (fun h ->
+                let md = reader.GetMethodDefinition h
+                let name = reader.GetString md.Name
+                let parent = md.GetDeclaringType()
+                let td = reader.GetTypeDefinition parent
+                let ns = if td.Namespace.IsNil then "" else reader.GetString td.Namespace
+                let tn = reader.GetString td.Name
+                let fullType = if String.IsNullOrEmpty ns then tn else ns + "." + tn
+                let paramTypes, returnType = SignatureDecoder.decodeMethodSignature reader md.Signature
+                let key: MethodDefinitionKey =
+                    { DeclaringType = fullType
+                      Name = name
+                      GenericArity = md.GetGenericParameters().Count
+                      ParameterTypes = paramTypes
+                      ReturnType = returnType }
+                let token = MetadataTokens.GetToken(EntityHandle.op_Implicit h)
+                key, token)
+            |> Map.ofSeq
+
+        let dummyMappings : ILTokenMappings =
+            { TypeDefTokenMap = fun _ -> 0
+              FieldDefTokenMap = fun _ _ -> 0
+              MethodDefTokenMap = fun _ _ -> 0
+              PropertyTokenMap = fun _ _ -> 0
+              EventTokenMap = fun _ _ -> 0 }
+
+        let baseline : FSharpEmitBaseline =
+            { ModuleId = moduleId
+              EncId = System.Guid.Empty
+              EncBaseId = System.Guid.Empty
+              NextGeneration = 1
+              ModuleNameHandle = None
+              Metadata = metadataSnapshot
+              TokenMappings = dummyMappings
+              TypeTokens = typeTokens
+              MethodTokens = methodTokens
+              FieldTokens = Map.empty
+              PropertyTokens = Map.empty
+              EventTokens = Map.empty
+              PropertyMapEntries = Map.empty
+              EventMapEntries = Map.empty
+              MethodSemanticsEntries = Map.empty
+              IlxGenEnvironment = None
+              PortablePdb = None
+              SynthesizedNameSnapshot = Map.empty
+              MetadataHandles =
+                { MethodHandles = Map.empty
+                  ParameterHandles = Map.empty
+                  PropertyHandles = Map.empty
+                  EventHandles = Map.empty }
+              TypeReferenceTokens = Map.empty
+              AssemblyReferenceTokens = Map.empty
+              TableEntriesAdded = Array.zeroCreate MetadataTokens.TableCount
+              StringStreamLengthAdded = 0
+              UserStringStreamLengthAdded = 0
+              BlobStreamLengthAdded = 0
+              GuidStreamLengthAdded = 0
+              AddedOrChangedMethods = [] }
+
+        // Attach string handles from baseline metadata so delta can reuse them
+        let baselineWithHandles = attachMetadataHandles reader baseline
+
+        { Baseline = baselineWithHandles
+          TokenMappings = dummyMappings
+          ModuleId = moduleId
+          AssemblyName = assemblyName
+          MetadataSnapshot = metadataSnapshot
+          AssemblyPath = dllPath
+          PdbPath = None }
 
     let methodKeyByName (baseline: FSharpEmitBaseline) typeName methodName =
         baseline.MethodTokens

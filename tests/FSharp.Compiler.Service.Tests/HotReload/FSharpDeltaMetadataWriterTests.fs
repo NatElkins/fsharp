@@ -1541,32 +1541,32 @@ module FSharpDeltaMetadataWriterTests =
 
         // Expected offsets (encoded values) are baseline + prior generation heap sizes + entry offset.
         let baselineGuidBytes = artifacts.BaselineHeapSizes.GuidHeapSize
-        let gen1GuidBytes = guidBytes1
-        let gen2HeapStart = baselineGuidBytes + gen1GuidBytes
 
-        let expectedMvidOffset1 = baselineGuidBytes
-        let expectedEncIdOffset1 = baselineGuidBytes + 16
-        let expectedMvidOffset2 = gen2HeapStart
-        let expectedEncIdOffset2 = gen2HeapStart + 16
-        let expectedEncBaseOffset2 = gen2HeapStart + 32
+        let baselineGuidEntries = baselineGuidBytes / 16
 
-        // Row values should match the encoded offsets.
-        Assert.Equal(expectedMvidOffset1, gen1RowMvidIdx)
-        Assert.Equal(expectedEncIdOffset1, gen1RowEncIdx)
-        Assert.Equal(expectedMvidOffset2, gen2RowMvidIdx)
-        Assert.Equal(expectedEncIdOffset2, gen2RowEncIdx)
-        Assert.Equal(expectedEncBaseOffset2, gen2RowBaseIdx)
+        let expectedMvidIndex1 = baselineGuidEntries + 1
+        let expectedEncIdIndex1 = baselineGuidEntries + 2
+        let expectedMvidIndex2 = baselineGuidEntries + 1
+        let expectedEncIdIndex2 = baselineGuidEntries + 2
+        let expectedEncBaseIndex2 = baselineGuidEntries + 3
+
+        // Row values should match the combined Guid heap entry indexes (baseline entries + delta entry index).
+        Assert.Equal(expectedMvidIndex1, gen1RowMvidIdx)
+        Assert.Equal(expectedEncIdIndex1, gen1RowEncIdx)
+        Assert.Equal(expectedMvidIndex2, gen2RowMvidIdx)
+        Assert.Equal(expectedEncIdIndex2, gen2RowEncIdx)
+        Assert.Equal(expectedEncBaseIndex2, gen2RowBaseIdx)
 
         // Heap sizes (no sentinel): gen1 contains MVID + EncId, gen2 adds EncBaseId.
         Assert.True(guidBytes1 >= 32, "Guid heap should contain MVID + EncId")
         Assert.True(guidBytes2 >= 48, "Gen2 Guid heap should contain MVID + EncId + EncBaseId")
 
         // Decode GUIDs directly from the delta heaps using local offsets.
-        let gen1MvidLocal = expectedMvidOffset1 - baselineGuidBytes
-        let gen1EncIdLocal = expectedEncIdOffset1 - baselineGuidBytes
-        let gen2MvidLocal = expectedMvidOffset2 - gen2HeapStart
-        let gen2EncIdLocal = expectedEncIdOffset2 - gen2HeapStart
-        let gen2EncBaseLocal = expectedEncBaseOffset2 - gen2HeapStart
+        let gen1MvidLocal = (expectedMvidIndex1 - baselineGuidEntries - 1) * 16
+        let gen1EncIdLocal = (expectedEncIdIndex1 - baselineGuidEntries - 1) * 16
+        let gen2MvidLocal = (expectedMvidIndex2 - baselineGuidEntries - 1) * 16
+        let gen2EncIdLocal = (expectedEncIdIndex2 - baselineGuidEntries - 1) * 16
+        let gen2EncBaseLocal = (expectedEncBaseIndex2 - baselineGuidEntries - 1) * 16
 
         let gen1MvidGuidValue = readGuidAtOffset guidHeapBytes1 gen1MvidLocal
         let encIdGuid1Value = readGuidAtOffset guidHeapBytes1 gen1EncIdLocal

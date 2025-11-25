@@ -380,6 +380,11 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             let idx = guids.AddSharedEntry(value.ToByteArray())
             idx
 
+    /// Force-add a GUID to the heap, even if it's the nil GUID.
+    /// Returns the 1-based index in the delta's GUID heap.
+    let forceAddGuidValue (value: Guid) =
+        guids.AddSharedEntry(value.ToByteArray())
+
     let stringElement (token, isAbsolute) = if isAbsolute then rowElementStringAbsolute token else rowElementString token
     let blobElement (token, isAbsolute) = if isAbsolute then rowElementBlobAbsolute token else rowElementBlob token
 
@@ -421,23 +426,30 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         ms.ToArray()
     let buildUserStringHeapBytes () = userStrings.Bytes
 
-    member _.AddModuleRow(name: string, nameHandleOpt: StringHandle option, generation: int, _moduleId: Guid, encId: Guid, encBaseId: Guid) =
+    member _.AddModuleRow(name: string, nameHandleOpt: StringHandle option, generation: int, moduleId: Guid, encId: Guid, encBaseId: Guid) =
         if moduleRows.Count = 0 then
             let nameToken =
                 match nameHandleOpt with
                 | Some handle when not handle.IsNil -> MetadataTokens.GetHeapOffset handle, true
                 | _ -> addStringValue name, false
-            // Emit MVID and EncIds into delta guid heap (delta-relative); baseline offset applied during serialization.
-            let mvidIndex = addGuidValue _moduleId
-            let encIdIndex = addGuidValue encId
-            let encBaseIdIndex = addGuidValue encBaseId
+            // For EnC deltas (matching Roslyn's approach):
+            // - Delta GUID heap contains: nil at 1, MVID at 2, EncId at 3
+            // - All indices are delta-local absolute values (not adjusted by baseline)
+            // Force-add GUIDs in order to get predictable indices:
+            let _nilGuidIndex = forceAddGuidValue System.Guid.Empty  // Index 1 (nil placeholder)
+            let mvidIndex = forceAddGuidValue moduleId               // Index 2
+            let encIdIndex = forceAddGuidValue encId                 // Index 3
+            // EncBaseId is 0 (nil) for generation 1, otherwise reference previous EncId
+            let encBaseIdIndex =
+                if encBaseId = System.Guid.Empty then 0
+                else forceAddGuidValue encBaseId                     // Index 4 if not nil
             let row =
                 [|
                     rowElementUShort (uint16 generation)
                     stringElement nameToken
-                    rowElementGuid mvidIndex
-                    rowElementGuid encIdIndex
-                    rowElementGuid encBaseIdIndex
+                    rowElementGuidAbsolute mvidIndex      // MVID - delta-local absolute index
+                    rowElementGuidAbsolute encIdIndex     // EncId - delta-local absolute index
+                    rowElementGuidAbsolute encBaseIdIndex // EncBaseId - 0 or delta-local index
                 |]
             moduleRows.Add row
 

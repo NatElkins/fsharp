@@ -532,7 +532,7 @@ module DeltaEmitterTests =
     [<Fact>]
     let ``emitDelta records updated user strings`` () =
         let _, baseline = createStringBaseline "Message version 1 (invocation #%d)"
-        let updatedModule = createStringModule "Message version 2 (invocation #%d)"
+        let updatedModule = createStringModule "Message version 2 (invocation #%d)" |> TestHelpers.withDebuggableAttribute
         let key = methodKey baseline "GetMessage"
         let request : IlxDeltaRequest =
             { Baseline = baseline
@@ -561,7 +561,7 @@ module DeltaEmitterTests =
     [<Fact>]
     let ``emitDelta projects known tokens`` () =
         let _, baseline = createBaseline ()
-        let updatedModule = createModule 43
+        let updatedModule = createModule 43 |> TestHelpers.withDebuggableAttribute
         let request =
             {
                 IlxDeltaRequest.Baseline = baseline
@@ -592,11 +592,11 @@ module DeltaEmitterTests =
         Assert.True(bodyInfo.CodeLength > 0)
         Assert.NotEqual(System.Guid.Empty, delta.GenerationId)
         Assert.Equal(System.Guid.Empty, delta.BaseGenerationId)
+        // Updated methods do NOT emit Param rows - baseline already has them (matches Roslyn)
         let expectedEncLog =
             [|
                 (TableIndex.Module, 0x00000001, EditAndContinueOperation.Default)
                 (TableIndex.MethodDef, 0x00000001, EditAndContinueOperation.Default)
-                (TableIndex.Param, 0x00000001, EditAndContinueOperation.AddParameter)
             |]
 
         Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedEncLog, delta.EncLog)
@@ -605,7 +605,6 @@ module DeltaEmitterTests =
             [|
                 (TableIndex.Module, 0x00000001)
                 (TableIndex.MethodDef, 0x00000001)
-                (TableIndex.Param, 0x00000001)
             |]
 
         Assert.Equal<(TableIndex * int)[]>(expectedEncMap, delta.EncMap)
@@ -613,7 +612,7 @@ module DeltaEmitterTests =
     [<Fact>]
     let ``emitDelta sets generation 1 base id to Guid.Empty`` () =
         let _, baseline = createBaseline ()
-        let updatedModule = createModule 99
+        let updatedModule = createModule 99 |> TestHelpers.withDebuggableAttribute
 
         let request =
             {
@@ -642,7 +641,7 @@ module DeltaEmitterTests =
               UpdatedTypes = [ "Sample.Type" ]
               UpdatedMethods = [ methodKey baseline "GetValue" ]
               UpdatedAccessors = []
-              Module = createModule 101
+              Module = createModule 101 |> TestHelpers.withDebuggableAttribute
               SymbolChanges = None
               CurrentGeneration = 1
               PreviousGenerationId = None
@@ -662,7 +661,7 @@ module DeltaEmitterTests =
               UpdatedTypes = [ "Sample.Type" ]
               UpdatedMethods = [ methodKey baseline "GetValue" ]
               UpdatedAccessors = []
-              Module = createModule 102
+              Module = createModule 102 |> TestHelpers.withDebuggableAttribute
               SymbolChanges = None
               CurrentGeneration = 2
               PreviousGenerationId = Some delta1.GenerationId
@@ -676,7 +675,7 @@ module DeltaEmitterTests =
     [<Fact>]
     let ``emitDelta ignores unknown symbols`` () =
         let _, baseline = createBaseline ()
-        let updatedModule = createModule 43
+        let updatedModule = createModule 43 |> TestHelpers.withDebuggableAttribute
         let unknownMethod =
             {
                 DeclaringType = "Sample.Type"
@@ -710,7 +709,7 @@ module DeltaEmitterTests =
     [<Fact>]
     let ``emitDelta rejects added fields`` () =
         let _, baseline = createFieldHolderBaseline false
-        let updatedModule = createModuleWithOptionalField true
+        let updatedModule = createModuleWithOptionalField true |> TestHelpers.withDebuggableAttribute
         let request =
             {
                 IlxDeltaRequest.Baseline = baseline
@@ -731,7 +730,7 @@ module DeltaEmitterTests =
     let ``emitDelta updates multiple methods`` () =
         let methods = [ "GetValue" , 1; "GetOther", 2 ]
         let _, baseline = createBaselineWithMethods methods
-        let updatedModule = createModuleWithMethods [ "GetValue", 10; "GetOther", 20 ]
+        let updatedModule = createModuleWithMethods [ "GetValue", 10; "GetOther", 20 ] |> TestHelpers.withDebuggableAttribute
 
         let methodKeys = baseline.MethodTokens |> Map.toList |> List.map fst
 
@@ -754,13 +753,12 @@ module DeltaEmitterTests =
         Assert.Equal(2, List.length delta.UpdatedMethodTokens)
         Assert.Equal<int Set>(Set.ofList [0x06000001; 0x06000002], delta.UpdatedMethodTokens |> Set.ofList)
         Assert.True(delta.MethodBodies |> List.forall (fun body -> body.CodeLength > 0))
+        // Updated methods do NOT emit Param rows (matches Roslyn)
         let expectedLog =
             [|
                 (TableIndex.Module, 0x00000001, EditAndContinueOperation.Default)
                 (TableIndex.MethodDef, 0x00000001, EditAndContinueOperation.Default)
                 (TableIndex.MethodDef, 0x00000002, EditAndContinueOperation.Default)
-                (TableIndex.Param, 0x00000001, EditAndContinueOperation.AddParameter)
-                (TableIndex.Param, 0x00000002, EditAndContinueOperation.AddParameter)
             |]
         Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedLog, delta.EncLog)
 
@@ -769,8 +767,6 @@ module DeltaEmitterTests =
                 (TableIndex.Module, 0x00000001)
                 (TableIndex.MethodDef, 0x00000001)
                 (TableIndex.MethodDef, 0x00000002)
-                (TableIndex.Param, 0x00000001)
-                (TableIndex.Param, 0x00000002)
             |]
         Assert.Equal<(TableIndex * int)[]>(expectedMap, delta.EncMap)
         match delta.Pdb with
@@ -781,7 +777,7 @@ module DeltaEmitterTests =
     let ``emitDelta adds method metadata rows for new method`` () =
         let baselineArtifacts =
             TestHelpers.createBaselineFromModule (createModuleWithMethods [ "GetValue", 1 ])
-        let updatedModule = createModuleWithMethods [ "GetValue", 1; "GetExtra", 5 ]
+        let updatedModule = createModuleWithMethods [ "GetValue", 1; "GetExtra", 5 ] |> TestHelpers.withDebuggableAttribute
 
         let request =
             {
@@ -831,7 +827,7 @@ module DeltaEmitterTests =
     let ``emitDelta adds parameter metadata rows for new method`` () =
         let baselineArtifacts =
             TestHelpers.createBaselineFromModule (createModuleWithMethods [ "GetValue", 1 ])
-        let updatedModule = createModuleWithParameterizedMethod ()
+        let updatedModule = createModuleWithParameterizedMethod () |> TestHelpers.withDebuggableAttribute
 
         let request =
             {
@@ -871,11 +867,79 @@ module DeltaEmitterTests =
 
         Assert.Equal<int list>(expectedParamRows, actualRows)
 
+    /// Updated methods do NOT synthesize Param rows - baseline already has them (matches Roslyn)
+    [<Fact>]
+    let ``emitDelta does not add param row for updated parameterless method`` () =
+        let originalMessage = "Hello baseline"
+        let updatedMessage = "Hello updated"
+        let baselineModule = TestHelpers.createMethodModule originalMessage
+        let baselineArtifacts = TestHelpers.createBaselineFromModule baselineModule
+
+        let updatedModule = TestHelpers.createMethodModule updatedMessage |> TestHelpers.withDebuggableAttribute
+
+        let methodKey =
+            TestHelpers.methodKey "Sample.MethodDemo" "GetMessage" [] PrimaryAssemblyILGlobals.typ_String
+
+        let request =
+            { IlxDeltaRequest.Baseline = baselineArtifacts.Baseline
+              UpdatedTypes = [ "Sample.MethodDemo" ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = updatedModule
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta = emitDelta request
+
+        use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange delta.Metadata)
+        let reader = deltaProvider.GetMetadataReader()
+
+        Assert.Equal(1, reader.GetTableRowCount(TableIndex.MethodDef))
+        // Updated methods should NOT have Param rows in delta - baseline has them
+        Assert.Equal(0, reader.GetTableRowCount(TableIndex.Param))
+
+        // EncLog/EncMap should NOT have Param entries for updated methods
+        let hasParamAdd =
+            delta.EncLog
+            |> Array.exists (fun (table, _, _) -> table = TableIndex.Param)
+        Assert.False(hasParamAdd, "Updated method should not have Param EncLog entry.")
+
+    /// Updated methods have no Param rows in delta - param table is empty
+    [<Fact>]
+    let ``emitDelta param table is empty for updated method`` () =
+        let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createMethodModule "Hello baseline")
+        let updatedModule = TestHelpers.createMethodModule "Hello updated" |> TestHelpers.withDebuggableAttribute
+
+        let methodKey =
+            TestHelpers.methodKey "Sample.MethodDemo" "GetMessage" [] PrimaryAssemblyILGlobals.typ_String
+
+        let request =
+            { IlxDeltaRequest.Baseline = baselineArtifacts.Baseline
+              UpdatedTypes = [ "Sample.MethodDemo" ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = updatedModule
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta = emitDelta request
+
+        use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange delta.Metadata)
+        let reader = deltaProvider.GetMetadataReader()
+
+        // Updated method should have no Param rows in delta (baseline has them)
+        let paramTableCount = reader.GetTableRowCount(TableIndex.Param)
+        Assert.Equal(0, paramTableCount)
+
     [<Fact>]
     let ``emitDelta adds property metadata rows for new property`` () =
         let baselineArtifacts =
             TestHelpers.createBaselineFromModule (TestHelpers.createPropertyHostBaselineModule ())
-        let updatedModule = TestHelpers.createPropertyModule "Property addition message"
+        let updatedModule = TestHelpers.createPropertyModule "Property addition message" |> TestHelpers.withDebuggableAttribute
 
         let getterKey =
             TestHelpers.methodKey "Sample.PropertyDemo" "get_Message" [] PrimaryAssemblyILGlobals.typ_String
@@ -940,7 +1004,7 @@ module DeltaEmitterTests =
     let ``emitDelta adds event metadata rows for new event`` () =
         let baselineArtifacts =
             TestHelpers.createBaselineFromModule (TestHelpers.createEventHostBaselineModule ())
-        let updatedModule = TestHelpers.createEventModule "Event addition payload"
+        let updatedModule = TestHelpers.createEventModule "Event addition payload" |> TestHelpers.withDebuggableAttribute
 
         let addKey =
             TestHelpers.methodKey "Sample.EventDemo" "add_OnChanged" [ PrimaryAssemblyILGlobals.typ_Object ] ILType.Void
@@ -1016,7 +1080,7 @@ module DeltaEmitterTests =
     [<Fact>]
     let ``emitDelta metadata validates with mdv`` () =
         let _, baseline = createBaseline ()
-        let updatedModule = createModule 43
+        let updatedModule = createModule 43 |> TestHelpers.withDebuggableAttribute
         let request =
             {
                 IlxDeltaRequest.Baseline = baseline
@@ -1063,7 +1127,7 @@ module DeltaEmitterTests =
     [<Fact>]
     let ``emitDelta method body reflects updated IL`` () =
         let _, baseline = createBaseline ()
-        let updatedModule = createModule 100
+        let updatedModule = createModule 100 |> TestHelpers.withDebuggableAttribute
         let request =
             {
                 IlxDeltaRequest.Baseline = baseline
@@ -1092,7 +1156,7 @@ module DeltaEmitterTests =
     [<Fact>]
     let ``emitDelta reuses MemberRef tokens for unchanged external call`` () =
         let baselineArtifacts = TestHelpers.createBaselineFromModule (createConsoleCallModule false)
-        let updatedModule = createConsoleCallModule false
+        let updatedModule = createConsoleCallModule false |> TestHelpers.withDebuggableAttribute
 
         let methodKey = TestHelpers.methodKeyByName baselineArtifacts.Baseline "Sample.ConsoleDemo" "Log"
 
@@ -1132,6 +1196,19 @@ module DeltaEmitterTests =
         let deltaIl = delta.IL.AsSpan().Slice(instructionStart, bodyInfo.CodeLength).ToArray()
         let deltaCallToken = readCallOperand (ReadOnlySpan<byte>(deltaIl))
 
+        if baselineCallToken <> deltaCallToken then
+            printfn "[memberref-reuse-debug] baselinePath=%s" baselineArtifacts.AssemblyPath
+            printfn "[memberref-reuse-debug] baselineCallToken=0x%08X deltaCallToken=0x%08X" baselineCallToken deltaCallToken
+            printfn "[memberref-reuse-debug] delta IL bytes: %A" deltaIl
+            let dumpDir = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-memberref-" + System.Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(dumpDir) |> ignore
+            let mdPath = Path.Combine(dumpDir, "metadata.bin")
+            let ilPath = Path.Combine(dumpDir, "il.bin")
+            File.WriteAllBytes(mdPath, delta.Metadata)
+            File.WriteAllBytes(ilPath, delta.IL)
+            printfn "[memberref-reuse-debug] dumped delta to %s" dumpDir
+            printfn "[memberref-reuse-debug] mdv command:"
+            printfn "  cd metadata-tools && ../fsharp/.dotnet/dotnet run --project src/mdv/mdv.csproj --framework net10.0 -- %s \"/g:%s;%s\" /stats+ /md+ /il+" baselineArtifacts.AssemblyPath mdPath ilPath
         Assert.Equal(baselineCallToken, deltaCallToken)
 
     [<Fact>]
@@ -1145,6 +1222,7 @@ module DeltaEmitterTests =
             createLocalsModule
                 [ PrimaryAssemblyILGlobals.typ_Int32 ]
                 [| AI_ldc(DT_I4, ILConst.I4 7); I_ret |]
+            |> TestHelpers.withDebuggableAttribute
 
         let baselineArtifacts = TestHelpers.createBaselineFromModule baselineModule
         let methodKey = TestHelpers.methodKeyByName baselineArtifacts.Baseline "Sample.LocalsDemo" "Compute"
@@ -1206,6 +1284,7 @@ module DeltaEmitterTests =
                    I_ldloc 1us
                    AI_add
                    I_ret |]
+            |> TestHelpers.withDebuggableAttribute
 
         let baselineArtifacts = TestHelpers.createBaselineFromModule baselineModule
         let methodKey = TestHelpers.methodKeyByName baselineArtifacts.Baseline "Sample.LocalsDemo" "Compute"
@@ -1250,6 +1329,35 @@ module DeltaEmitterTests =
         Assert.Equal<byte>(expectedSig, signatureBlob.Blob)
         Assert.NotEqual<byte>(baselineSigBytes, signatureBlob.Blob)
 
+    [<Fact>]
+    let ``module row in delta has readable name and guid handles`` () =
+        let _, baseline = createBaseline ()
+        let methodKey = methodKey baseline "GetValue"
+
+        let request : IlxDeltaRequest =
+            { Baseline = baseline
+              UpdatedTypes = [ "Sample.Type" ]
+              UpdatedMethods = [ methodKey ]
+              UpdatedAccessors = []
+              Module = createModule 2 |> TestHelpers.withDebuggableAttribute
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta = emitDelta request
+
+        use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange delta.Metadata)
+        let reader = provider.GetMetadataReader()
+        let moduleDef = reader.GetModuleDefinition()
+
+        // Verify handles are non-nil; actual string/GUID resolution happens against the aggregated (baseline + delta) heaps.
+        Assert.False(moduleDef.Mvid.IsNil, "MVID handle should be present in delta metadata.")
+        Assert.False(moduleDef.GenerationId.IsNil, "GenerationId handle should be present in delta metadata.")
+        Assert.False(StringHandle.op_Implicit(moduleDef.Name).IsNil, "Module name handle should be present.")
+
+        ()
+
 
     [<Fact>]
     let ``HotReloadState persists EncId sequencing`` () =
@@ -1267,7 +1375,7 @@ module DeltaEmitterTests =
         Assert.Equal(1, session0.CurrentGeneration)
         Assert.True(session0.PreviousGenerationId |> Option.isNone)
 
-        let moduleGen1 = createModule 43
+        let moduleGen1 = createModule 43 |> TestHelpers.withDebuggableAttribute
         let requestGen1 =
             {
                 IlxDeltaRequest.Baseline = session0.Baseline
@@ -1295,7 +1403,7 @@ module DeltaEmitterTests =
         Assert.Equal(2, session1.CurrentGeneration)
         Assert.Equal<Guid option>(Some delta1.GenerationId, session1.PreviousGenerationId)
 
-        let moduleGen2 = createModule 44
+        let moduleGen2 = createModule 44 |> TestHelpers.withDebuggableAttribute
         let requestGen2 =
             {
                 IlxDeltaRequest.Baseline = session1.Baseline
@@ -1323,7 +1431,7 @@ module DeltaEmitterTests =
         service.StartSession baseline
 
         let request : DeltaEmissionRequest =
-            { IlModule = createModule 101
+            { IlModule = createModule 101 |> TestHelpers.withDebuggableAttribute
               UpdatedTypes = [ "Sample.Type" ]
               UpdatedMethods = [ methodKey baseline "GetValue" ]
               UpdatedAccessors = []
@@ -1380,7 +1488,7 @@ module DeltaEmitterTests =
     let ``IL delta fat header matches method body length`` () =
         // Baseline module with GetValue = 42, delta changes body to return 84.
         let _, baseline = createBaseline ()
-        let updatedModule = createModule 84
+        let updatedModule = createModule 84 |> TestHelpers.withDebuggableAttribute
 
         let request : IlxDeltaRequest =
             { Baseline = baseline
@@ -1425,7 +1533,7 @@ module DeltaEmitterTests =
         // Baseline module with GetValue = 42
         let _, baseline = createBaseline ()
         // Updated module changes GetValue body to return 84
-        let updatedModule = createModule 84
+        let updatedModule = createModule 84 |> TestHelpers.withDebuggableAttribute
 
         let request : IlxDeltaRequest =
             { Baseline = baseline

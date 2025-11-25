@@ -166,16 +166,18 @@ let private writeRowElement (writer: BinaryWriter) (indexSizes: DeltaIndexSizing
                 input.HeapOffsets.BlobHeapStart + input.BlobHeapOffsets.[value]
         writeHeapIndex writer indexSizes.BlobsBig offset
     elif tag = RowElementTags.Guid then
-        // Encode GUID columns as byte offsets into the GUID heap:
-        //   baseline offset (HeapOffsets.GuidHeapStart) + (index - 1) * 16
-        let baselineGuidBytes = input.HeapOffsets.GuidHeapStart
+        // Encode GUID columns as byte offsets into the *combined* Guid heap
+        // (baseline length + delta entries). Each Guid entry is 16 bytes.
+        // Absolute handles are already full offsets and are written verbatim.
         let adjusted =
             if element.IsAbsolute then
                 value
             elif value = 0 then
                 0
             else
-                baselineGuidBytes + ((value - 1) * 16)
+                // Guid heap indexes are entry counts (1-based), not byte offsets.
+                let baselineEntries = input.HeapOffsets.GuidHeapStart / 16
+                baselineEntries + value
         writeHeapIndex writer indexSizes.GuidsBig adjusted
     elif tag >= RowElementTags.SimpleIndexMin && tag <= RowElementTags.SimpleIndexMax then
         let tableIndex = tag - RowElementTags.SimpleIndexMin

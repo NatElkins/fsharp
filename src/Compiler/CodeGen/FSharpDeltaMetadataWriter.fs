@@ -232,10 +232,7 @@ let emitWithUserStrings
         metadataBuilder.SetCapacity(TableIndex.MethodSpec, 0)
         metadataBuilder.SetCapacity(TableIndex.GenericParamConstraint, 0)
 
-        let moduleNameTokenOpt =
-            match moduleNameHandle with
-            | Some handle when not handle.IsNil -> Some handle
-            | _ -> None
+        // Use baseline's module name handle if available; otherwise add to delta string heap.
         let moduleNameHandleOrAdded =
             match moduleNameHandle with
             | Some handle when not handle.IsNil -> handle
@@ -250,7 +247,7 @@ let emitWithUserStrings
         printfn "[emitWithUserStrings] generation=%d moduleId=%A encId=%A encBaseId=%A" generation moduleId encId encBaseId
         let _ = metadataBuilder.AddModule(generation, moduleNameHandleOrAdded, mvidHandle, encIdHandle, encBaseHandle)
         let tableMirror = DeltaMetadataTables(heapOffsets)
-        tableMirror.AddModuleRow(moduleName, moduleNameTokenOpt, generation, moduleId, encId, encBaseId)
+        tableMirror.AddModuleRow(moduleName, moduleNameHandle, generation, moduleId, encId, encBaseId)
 
         let entityHandleFromTable tableIndex rowId =
             MetadataTokens.Handle(tableIndex, rowId)

@@ -138,10 +138,11 @@ module MdvValidationTests =
                   "PropertyUpdate", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes }
                   "Event", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes }
                   "EventUpdate", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes }
-                  "Async", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes }
-                  "AsyncUpdate", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes }
-                  "Closure", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes }
-                  "ClosureUpdate", { StringBytes = metadataStringBytes; BlobBytes = metadataBlobBytes } ]
+                  // Async/Closure scenarios now carry module + DebuggableAttribute strings; allow modest growth.
+                  "Async", { StringBytes = 24; BlobBytes = metadataBlobBytes }
+                  "AsyncUpdate", { StringBytes = 24; BlobBytes = metadataBlobBytes }
+                  "Closure", { StringBytes = 24; BlobBytes = metadataBlobBytes }
+                  "ClosureUpdate", { StringBytes = 24; BlobBytes = metadataBlobBytes } ]
 
         let assertWithin (scenario: string) (metadata: byte[]) =
             match Map.tryFind scenario budgets with
@@ -799,6 +800,34 @@ module MdvValidationTests =
                 tryGetFirstTableRow methodBlock
                 |> Option.defaultWith (fun () -> failwith "Method table row missing.")
             Assert.DoesNotContain("<bad token range>", rowLine)
+            Assert.DoesNotContain("<bad metadata>", rowLine)
+
+    /// Validates the GUID heap format matches Roslyn's approach:
+    /// - Index 1: nil GUID (placeholder)
+    /// - Index 2: MVID
+    /// - Index 3: EncId
+    /// This is critical for runtime acceptance of EnC deltas.
+    [<Fact>]
+    let ``mdv generation 1 guid heap has correct format`` () =
+        match tryRunSimpleMethodGeneration1MdvOutput () with
+        | None ->
+            printfn "mdv not available; skipping GUID heap format validation."
+        | Some output ->
+            let slice = getGenerationSlice output 1
+            // Check GUID heap size is 48 bytes (3 entries x 16 bytes)
+            let guidBlock = getSectionBlock slice "#Guid ("
+            Assert.Contains("size = 48", guidBlock)
+            // Check that index 1 is the nil GUID
+            Assert.Contains("1: {00000000-0000-0000-0000-000000000000}", guidBlock)
+            // Check Module row references indices 2 and 3 for MVID and EncId
+            let moduleBlock = getSectionBlock slice "Module (0x00):"
+            let rowLine =
+                tryGetFirstTableRow moduleBlock
+                |> Option.defaultWith (fun () -> failwith "Module table row missing.")
+            // Module row should reference #2 for MVID and #3 for EncId
+            Assert.Contains("(#2)", rowLine)
+            Assert.Contains("(#3)", rowLine)
+            // Should not have <bad metadata> in the Module row
             Assert.DoesNotContain("<bad metadata>", rowLine)
 
     [<Fact>]
@@ -1792,7 +1821,10 @@ type EventDemo() =
             | None -> ()
 
     [<Fact>]
-    let ``mdv helper method delta emits param row`` () =
+    /// Updated methods do NOT emit Param rows - the baseline already has them.
+    /// Only ADDED methods need synthetic Param rows in the delta.
+    /// This matches Roslyn's behavior for EnC deltas.
+    let ``mdv helper method delta does not emit param row for updated method`` () =
         let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createMethodModule "Baseline helper message")
         let typeName = "Sample.MethodDemo"
         let methodKey = TestHelpers.methodKey typeName "GetMessage" [] PrimaryAssemblyILGlobals.typ_String
@@ -1810,16 +1842,18 @@ type EventDemo() =
 
         let delta = emitDelta request
 
+        // Updated methods should NOT have Param rows in the delta - baseline has them
         withMetadataReader delta.Metadata (fun reader ->
-            Assert.True(reader.GetTableRowCount TableIndex.Param > 0, "Expected Param table to have a row for the updated method"))
+            Assert.Equal(0, reader.GetTableRowCount TableIndex.Param))
 
+        // No Param EncLog/EncMap entries for updated methods
         let hasParamEncLog =
             delta.EncLog |> Array.exists (fun (t, _, _) -> t = TableIndex.Param)
-        Assert.True(hasParamEncLog, "Expected EncLog entry for Param table")
+        Assert.False(hasParamEncLog, "Updated method should not have EncLog entry for Param table")
 
         let hasParamEncMap =
             delta.EncMap |> Array.exists (fun (t, _) -> t = TableIndex.Param)
-        Assert.True(hasParamEncMap, "Expected EncMap entry for Param table")
+        Assert.False(hasParamEncMap, "Updated method should not have EncMap entry for Param table")
 
         if not (keepArtifacts ()) then
             try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()

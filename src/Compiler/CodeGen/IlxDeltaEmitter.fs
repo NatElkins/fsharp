@@ -1000,22 +1000,28 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         else
             parameterRowLookup[paramKey]
 
-    let ensureReturnParameterRow key =
+    let ensureReturnParameterRow key isAdded =
         let paramKey =
             { ParameterDefinitionKey.Method = key
               SequenceNumber = 0 }
         if parameterRowLookup.ContainsKey paramKey then
-            parameterRowLookup[paramKey]
+            Some parameterRowLookup[paramKey]
         else
             match baselineParameterHandles |> Map.tryFind paramKey |> Option.bind (fun info -> info.RowId) with
             | Some baselineRow when baselineRow > 0 ->
                 parameterRowLookup[paramKey] <- baselineRow
                 parameterDefinitionIndex.AddExisting paramKey
-                baselineRow
+                Some baselineRow
             | _ ->
-                let rowId = addSyntheticParameter key 0 ParameterAttributes.None
-                returnParameterKeys.Add paramKey |> ignore
-                rowId
+                // Only synthesize a return parameter row for ADDED methods.
+                // For existing methods being updated, if the baseline had no return param row,
+                // we shouldn't add one - that would change the method's ParamList incorrectly.
+                if isAdded then
+                    let rowId = addSyntheticParameter key 0 ParameterAttributes.None
+                    returnParameterKeys.Add paramKey |> ignore
+                    Some rowId
+                else
+                    None
 
     let enqueueParameters key methodHandle =
         let methodDef = metadataReader.GetMethodDefinition methodHandle
@@ -1058,7 +1064,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                                 printfn "[fsharp-hotreload][param-fallback] synthesized baseline entry method=%s::%s seq=%d row=%d" key.DeclaringType key.Name paramKey.SequenceNumber syntheticRow
             | _ -> ()
 
-        let _ = ensureReturnParameterRow key
+        let isAdded = methodDefinitionIndex.IsAdded key
+        let _ = ensureReturnParameterRow key isAdded
         ()
 
     orderedMethodInputs
@@ -1298,6 +1305,13 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
             if traceMethodUpdates.Value then
                 printfn "[fsharp-hotreload][method-rows] count=%d (missing=%d)" rows.Length missingRows.Length
+                printfn "[fsharp-hotreload][params] firstParamRowByMethod entries:"
+                for KeyValue(k, v) in firstParamRowByMethod do
+                    printfn "  %s::%s firstParamRowId=%d" k.DeclaringType k.Name v
+                printfn "[fsharp-hotreload][methods] FirstParameterRowId after merge:"
+                for row in rows do
+                    let fp = defaultArg row.FirstParameterRowId 0
+                    printfn "  method=%s::%s rowId=%d firstParam=%d isAdded=%b" row.Key.DeclaringType row.Key.Name row.RowId fp row.IsAdded
 
             rows
 
