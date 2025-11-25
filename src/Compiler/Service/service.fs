@@ -697,7 +697,17 @@ type FSharpChecker
                                     ilModule
                                 )
                             with
-                            | Ok result -> return Result.Ok(toPublicDelta result.Delta)
+                            | Ok result ->
+                                // Update currentBaselineState with the updated baseline so that
+                                // subsequent deltas chain correctly after session is restored
+                                // (compilation clears the session, so we need to preserve the
+                                // updated baseline for the next delta emission).
+                                match result.Delta.UpdatedBaseline with
+                                | Some updatedBaseline ->
+                                    lock hotReloadGate (fun () ->
+                                        currentBaselineState <- Some(updatedBaseline, optimizedImpls))
+                                | None -> ()
+                                return Result.Ok(toPublicDelta result.Delta)
                             | Error error -> return Result.Error(mapHotReloadError error)
         }
 
