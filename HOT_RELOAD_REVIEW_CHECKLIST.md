@@ -109,10 +109,10 @@ This checklist contains all issues identified during the 12-session code review 
   - Fix: Removed duplicate `remapToken` function, now uses `remapWith` consistently
   - Priority: Low (refactoring)
 
-- [ ] **Missing parameter row validation**
-  - File: `src/Compiler/CodeGen/IlxDeltaEmitter.fs`
+- [x] **Missing parameter row validation** ✅ FIXED
+  - File: `src/Compiler/CodeGen/DeltaMetadataTables.fs`
   - Issue: Parameter rows not validated before emission
-  - Fix: Add validation assertions
+  - Fix: Added validation in `AddParameterRow`: RowId must be > 0, SequenceNumber must be >= 0 (per ECMA-335 II.22.33)
   - Priority: Medium
 
 ---

@@ -505,6 +505,11 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         methodRows.Add rowElements
 
     member _.AddParameterRow(row: ParameterDefinitionRowInfo) =
+        // Validate parameter row per ECMA-335 II.22.33
+        if row.RowId <= 0 then
+            invalidArg "row" $"Parameter RowId must be > 0, got {row.RowId}"
+        if row.SequenceNumber < 0 then
+            invalidArg "row" $"Parameter SequenceNumber must be >= 0, got {row.SequenceNumber}"
         let nameToken = addExistingStringOptionHandle row.NameHandle row.Name
         let rowElements =
             [|
