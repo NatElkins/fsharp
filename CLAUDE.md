@@ -64,6 +64,29 @@ Make changes in small increments and run tests frequently. This prevents large r
 
 A single commit that "fixes 10 issues" can introduce subtle bugs (like the GUID index serialization regression) that are hard to trace back to their root cause.
 
+## Test Coverage Requirements
+
+**Add test coverage for every behavioral change** unless it doesn't make sense to do so. Examples:
+
+**DO add tests for:**
+- Bug fixes (test that the bug no longer occurs)
+- New detection logic (e.g., rude edit detection for constraint/mutable changes)
+- Error handling improvements (test that proper exceptions are raised)
+- ECMA-335 compliance fixes (test correct encoding)
+- Heap/offset calculations (test alignment, boundaries)
+
+**DON'T need tests for:**
+- Pure refactoring (extracting functions, renaming, reorganizing code)
+- Comment/documentation changes
+- Code style fixes
+- Removing dead code
+
+When in doubt, add a test. Future maintainers will thank you for the regression protection.
+
+**Test file locations:**
+- `tests/FSharp.Compiler.Service.Tests/HotReload/` - Unit tests for individual components
+- `tests/FSharp.Compiler.ComponentTests/HotReload/` - Integration tests, end-to-end scenarios
+
 ## Respecting Task Boundaries
 
 If the user specifies "one task at a time" or similar pacing instructions, **strictly adhere to this**:
