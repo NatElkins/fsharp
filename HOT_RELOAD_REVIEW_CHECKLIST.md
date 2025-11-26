@@ -217,10 +217,11 @@ This checklist contains all issues identified during the 12-session code review 
   - Priority: High
 
 ### Symbol Matching Issues
-- [ ] **Weak hash function in FSharpMetadataAggregator**
-  - File: `src/Compiler/HotReload/FSharpMetadataAggregator.fs:65-72`
+- [x] **Weak hash function in FSharpMetadataAggregator** ✅ FIXED
+  - File: `src/Compiler/HotReload/FSharpMetadataAggregator.fs:65-75`
   - Issue: `hash = (hash * 23) + int b` is weak, causes O(n) lookups
-  - Fix: Use FNV-1a or System.HashCode
+  - Fix: Replaced with FNV-1a hash algorithm (offset basis 0x811c9dc5, prime 0x01000193)
+    for proper collision resistance in byte array dictionary lookups.
   - Priority: Medium
 
 - [ ] **Unsafe nested type traversal in SymbolMatcher**

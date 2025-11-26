@@ -66,9 +66,12 @@ type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
                 if isNull (box value) then
                     0
                 else
-                    let mutable hash = 17
+                    // FNV-1a hash for better collision resistance
+                    // See: http://www.isthe.com/chongo/tech/comp/fnv/
+                    let mutable hash = 0x811c9dc5 // FNV offset basis
                     for b in value do
-                        hash <- (hash * 23) + int b
+                        hash <- hash ^^^ int b
+                        hash <- hash * 0x01000193 // FNV prime
                     hash }
     let baselineStringHandles =
         let dict = Dictionary<string, StringHandle>(StringComparer.Ordinal)
