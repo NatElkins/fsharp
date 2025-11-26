@@ -13,6 +13,10 @@ open FSharp.Compiler.Syntax.PrettyNaming
 
 let private tableCount = MetadataTokens.TableCount
 
+/// Align a size to a 4-byte boundary (stream alignment per ECMA-335).
+/// Used for Blob and UserString heap cumulative tracking, per Roslyn behavior.
+let private align4 value = (value + 3) &&& ~~~3
+
 /// <summary>Metadata describing a method body that was added or changed in a delta.</summary>
 type AddedOrChangedMethodInfo =
     {
@@ -491,10 +495,12 @@ let internal applyDelta
             previous + tableCounts.[i])
 
     let updatedMetadataSnapshot =
+        // Per Roslyn DeltaMetadataWriter.cs: Blob and UserString streams are concatenated
+        // aligned to 4-byte boundaries; String stream is concatenated unaligned.
         let updatedHeapSizes =
             { StringHeapSize = baseline.Metadata.HeapSizes.StringHeapSize + deltaHeapSizes.StringHeapSize
-              UserStringHeapSize = baseline.Metadata.HeapSizes.UserStringHeapSize + deltaHeapSizes.UserStringHeapSize
-              BlobHeapSize = baseline.Metadata.HeapSizes.BlobHeapSize + deltaHeapSizes.BlobHeapSize
+              UserStringHeapSize = baseline.Metadata.HeapSizes.UserStringHeapSize + align4 deltaHeapSizes.UserStringHeapSize
+              BlobHeapSize = baseline.Metadata.HeapSizes.BlobHeapSize + align4 deltaHeapSizes.BlobHeapSize
               GuidHeapSize = baseline.Metadata.HeapSizes.GuidHeapSize + deltaHeapSizes.GuidHeapSize }
 
         let updatedTableCountsAbsolute =
@@ -511,9 +517,11 @@ let internal applyDelta
         NextGeneration = baseline.NextGeneration + 1
         ModuleNameHandle = baseline.ModuleNameHandle
         TableEntriesAdded = updatedTableEntries
+        // Per Roslyn DeltaMetadataWriter.cs: String stream is concatenated unaligned,
+        // Blob and UserString streams are concatenated aligned to 4-byte boundaries.
         StringStreamLengthAdded = baseline.StringStreamLengthAdded + deltaHeapSizes.StringHeapSize
-        UserStringStreamLengthAdded = baseline.UserStringStreamLengthAdded + deltaHeapSizes.UserStringHeapSize
-        BlobStreamLengthAdded = baseline.BlobStreamLengthAdded + deltaHeapSizes.BlobHeapSize
+        UserStringStreamLengthAdded = baseline.UserStringStreamLengthAdded + align4 deltaHeapSizes.UserStringHeapSize
+        BlobStreamLengthAdded = baseline.BlobStreamLengthAdded + align4 deltaHeapSizes.BlobHeapSize
         GuidStreamLengthAdded = baseline.GuidStreamLengthAdded + deltaHeapSizes.GuidHeapSize
         Metadata = updatedMetadataSnapshot
         SynthesizedNameSnapshot =

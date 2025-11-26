@@ -154,11 +154,13 @@ This checklist contains all issues identified during the 12-session code review 
   - Fix: Changed `failwithf` to `invalidArg "element"` with tag and value in message
   - Priority: Medium
 
-- [ ] **Missing heap alignment for baseline tracking**
-  - File: `src/Compiler/CodeGen/FSharpDeltaMetadataWriter.fs` (not present)
-  - Issue: Roslyn tracks aligned heap sizes for Blob/UserString streams; F# doesn't
+- [x] **Missing heap alignment for baseline tracking** ✅ FIXED
+  - File: `src/Compiler/CodeGen/HotReloadBaseline.fs`
+  - Issue: Roslyn tracks aligned heap sizes for Blob/UserString streams; F# didn't
   - Impact: Generation 2+ deltas may have corrupt heap offsets
-  - Fix: Add GetAlignedHeapSize equivalent, track cumulative padding
+  - Fix: Added `align4` helper, applied 4-byte alignment to Blob and UserString heap sizes
+    when updating baseline (per Roslyn DeltaMetadataWriter.cs:234-241). String stream
+    remains unaligned as per Roslyn behavior.
   - Priority: High
 
 - [ ] **Property/Event Map InvalidOp exceptions**
