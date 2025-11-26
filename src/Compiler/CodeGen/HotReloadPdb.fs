@@ -47,8 +47,8 @@ let emitDelta
     (updatedPdbBytes: byte[])
     (addedOrChangedMethods: AddedOrChangedMethodInfo list)
     (deltaToUpdatedMethodToken: IReadOnlyDictionary<int, int>)
-    (metadataEncLog: (TableIndex * int * EditAndContinueOperation) array)
-    (metadataEncMap: (TableIndex * int) array)
+    (_metadataEncLog: (TableIndex * int * EditAndContinueOperation) array)
+    (_metadataEncMap: (TableIndex * int) array)
     : byte[] option =
     match baseline.PortablePdb with
     | None -> None
@@ -67,6 +67,7 @@ let emitDelta
             let reader = provider.GetMetadataReader()
             let metadata = MetadataBuilder()
             let documentMap = Dictionary<DocumentHandle, DocumentHandle>()
+            let emittedMethodRows = ResizeArray<int>()
             let mutable emitted = false
 
             let getOrAddDocument (sourceHandle: DocumentHandle) =
@@ -141,6 +142,7 @@ let emitDelta
                                     metadata.GetOrAddBlob(reader.GetBlobBytes methodInfo.SequencePointsBlob)
 
                             metadata.AddMethodDebugInformation(targetDocument, sequencePointsHandle) |> ignore
+                            emittedMethodRows.Add(methodRow)
                             emitted <- true
                         else
                             // Newly added methods may not have debug info in the updated PDB if their row
@@ -154,17 +156,16 @@ let emitDelta
                                 token
                                 sourceToken
 
-            // Mirror metadata EncLog/EncMap so PDB delta stays in lockstep with metadata delta tables.
-            for (table, rowId, operation) in metadataEncLog do
-                let handle = MetadataTokens.EntityHandle(table, rowId)
-                metadata.AddEncLogEntry(handle, operation)
-
-            for (table, rowId) in metadataEncMap do
-                let handle = MetadataTokens.EntityHandle(table, rowId)
-                metadata.AddEncMapEntry(handle)
-
-            if not emitted && (metadataEncLog.Length > 0 || metadataEncMap.Length > 0) then
-                emitted <- true
+            // Per Roslyn DeltaMetadataWriter.cs: PDB delta EncMap should contain MethodDebugInformation
+            // entries (which correspond 1:1 to MethodDef), not metadata table entries. The PDB EncLog
+            // is not used - only EncMap with MethodDebugInformation handles.
+            // MethodDebugInformationHandle is a PDB-specific handle that doesn't implicitly convert
+            // to EntityHandle, so we construct the EntityHandle from the table/row token directly.
+            // Token format: (table_index << 24) | row_number, where MethodDebugInformation = 0x31
+            for methodRow in emittedMethodRows |> Seq.distinct |> Seq.sort do
+                let token = (int TableIndex.MethodDebugInformation <<< 24) ||| methodRow
+                let entityHandle = MetadataTokens.EntityHandle token
+                metadata.AddEncMapEntry entityHandle
 
             if not emitted then
                 printfn "[hotreload-pdb] no method debug info emitted for tokens %A" distinctTokens

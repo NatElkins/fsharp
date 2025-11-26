@@ -207,11 +207,13 @@ This checklist contains all issues identified during the 12-session code review 
   - TODO: Future work to emit placeholder debug info for newly added methods
   - Priority: High (deferred)
 
-- [ ] **PDB EncLog/EncMap mirrors METADATA tables instead of PDB tables**
-  - File: `src/Compiler/CodeGen/HotReloadPdb.fs:147-158`
-  - Issue: Roslyn's PDB delta EncLog contains PDB-specific tables (Document, MethodDebugInformation, LocalScope), not metadata tables
-  - Impact: Debuggers cannot correlate PDB entries with metadata updates
-  - Fix: Remove metadata table mirroring or emit PDB-specific entries
+- [x] **PDB EncLog/EncMap mirrors METADATA tables instead of PDB tables** ✅ FIXED
+  - File: `src/Compiler/CodeGen/HotReloadPdb.fs:159-168`
+  - Issue: Was mirroring metadata EncLog/EncMap (TypeRef, MemberRef, etc.) instead of PDB-specific entries
+  - Fix: Per Roslyn's DeltaMetadataWriter.cs:1367-1384, the PDB delta EncMap should contain only
+    MethodDebugInformation entries (which correspond 1:1 with MethodDef). Removed metadata table
+    mirroring, now emits sorted MethodDebugInformation entity handles for each emitted method.
+    Token format: (TableIndex.MethodDebugInformation << 24) | methodRow. PDB EncLog is not used.
   - Priority: High
 
 ### Symbol Matching Issues
