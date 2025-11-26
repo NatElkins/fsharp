@@ -50,6 +50,29 @@ dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.
 3. **Medium (22 issues)** - Post-merge acceptable
 4. **Low (15 issues)** - Technical debt
 
+## Debugging Unexpected Test Failures
+
+If a test fails unexpectedly (especially one that was previously passing):
+
+1. **Use git bisect** to find which commit introduced the regression:
+   ```bash
+   git bisect start
+   git bisect bad HEAD
+   git bisect good <known-good-commit>
+   # At each step: clean build, run test, mark good/bad
+   ```
+
+2. **Always do clean builds** when bisecting to avoid stale artifacts:
+   ```bash
+   rm -rf artifacts/bin artifacts/obj
+   dotnet build tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj
+   dotnet test ... --no-build
+   ```
+
+3. **Check the last 5-10 commits** - regressions are often recent
+
+4. Once found, **diff the breaking commit** to understand the root cause
+
 ## Current Progress
 
 Track progress in `HOT_RELOAD_REVIEW_CHECKLIST.md` by checking off completed items.
