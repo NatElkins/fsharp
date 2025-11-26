@@ -16,7 +16,11 @@ When working through the `HOT_RELOAD_REVIEW_CHECKLIST.md`:
    - Describe what was wrong and how it was fixed
    - Note any ECMA-335 references if applicable
    - Example: `fix(hot-reload): implement all 21 HasCustomAttribute parent types per ECMA-335 II.24.2.6`
-6. **Move to next issue** - Continue top-to-bottom through the checklist
+6. **Push to upstream** - After every commit, push to the upstream hot-reload branch:
+   ```bash
+   git push upstream hot-reload
+   ```
+7. **Move to next issue** - Continue top-to-bottom through the checklist
 
 ## Build Commands
 
