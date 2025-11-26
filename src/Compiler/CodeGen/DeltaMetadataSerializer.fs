@@ -222,7 +222,7 @@ let private writeRowElement (writer: BinaryWriter) (indexSizes: DeltaIndexSizing
         let subTag = tag - RowElementTags.ResolutionScopeMin
         writeTaggedIndex writer 2 indexSizes.ResolutionScopeBig subTag value
     else
-        failwithf "Unsupported row element tag: %d" tag
+        invalidArg "element" $"Unsupported row element tag: {tag} (value={value})"
 
 let private align4 value = (value + 3) &&& ~~~3
 

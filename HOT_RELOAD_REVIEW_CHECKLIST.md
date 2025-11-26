@@ -148,10 +148,10 @@ This checklist contains all issues identified during the 12-session code review 
   - Fix: Added clarifying XML doc comment explaining the absolute→relative conversion
   - Priority: High
 
-- [ ] **Unsafe failwithf in table serialization**
+- [x] **Unsafe failwithf in table serialization** ✅ FIXED
   - File: `src/Compiler/CodeGen/DeltaMetadataSerializer.fs:225`
   - Issue: Unsupported row element tags cause crash
-  - Fix: Use invalidArg with better context
+  - Fix: Changed `failwithf` to `invalidArg "element"` with tag and value in message
   - Priority: Medium
 
 - [ ] **Missing heap alignment for baseline tracking**
