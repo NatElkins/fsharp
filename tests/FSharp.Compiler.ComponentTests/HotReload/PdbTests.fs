@@ -283,7 +283,10 @@ module PdbTests =
         assertPdbContainsMethodToken pdbBytes methodToken
 
     [<Fact>]
-    let ``PDB EncLog/EncMap matches metadata Enc tables`` () =
+    let ``PDB EncMap contains only MethodDebugInformation entries`` () =
+        // Per Roslyn's DeltaMetadataWriter.cs:1367-1384, PDB delta EncMap should contain
+        // MethodDebugInformation entries (which correspond 1:1 to MethodDef), not metadata tables.
+        // PDB EncLog is not used.
         let _, baseline = createBaselineWithArtifacts 42
         let methodKey = baselineMethodKey baseline "GetValue"
         let updatedModule = createModuleWithSeqPoints 100
@@ -308,19 +311,17 @@ module PdbTests =
 
         let pdbEncLog, pdbEncMap = readEncTablesFromPdb pdbBytes
 
-        let expectedLog =
-            delta.EncLog
-            |> Array.sortBy (fun (t, r, op) -> int t, r, int op)
+        // PDB EncLog should be empty (Roslyn doesn't use it for PDB deltas)
+        Assert.Empty(pdbEncLog)
 
-        let expectedMap =
-            delta.EncMap
-            |> Array.sortBy (fun (t, r) -> int t, r)
+        // PDB EncMap should contain ONLY MethodDebugInformation entries (table index 0x31 = 49)
+        // It should NOT mirror metadata tables like TypeRef, MemberRef, etc.
+        let methodDebugInfoTable = TableIndex.MethodDebugInformation
+        for (table, _rowId) in pdbEncMap do
+            Assert.Equal(methodDebugInfoTable, table)
 
-        let actualLog = pdbEncLog |> Array.sortBy (fun (t, r, op) -> int t, r, int op)
-        let actualMap = pdbEncMap |> Array.sortBy (fun (t, r) -> int t, r)
-
-        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(expectedLog, actualLog)
-        Assert.Equal<(TableIndex * int)[]>(expectedMap, actualMap)
+        // Verify we have at least one MethodDebugInformation entry for the updated method
+        Assert.NotEmpty(pdbEncMap)
 
     [<Fact>]
     let ``PDB delta includes only updated methods and stable documents`` () =

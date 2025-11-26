@@ -1876,7 +1876,10 @@ type EventDemo() =
             | None -> ()
 
     [<Fact>]
-    let ``pdb enc tables mirror metadata enc tables for method update`` () =
+    let ``pdb enc tables contain MethodDebugInformation entries for method update`` () =
+        // Per Roslyn's DeltaMetadataWriter.cs:1367-1384, PDB delta EncMap should contain
+        // MethodDebugInformation entries (which correspond 1:1 to MethodDef), not metadata tables.
+        // PDB EncLog is not used.
         let baselineArtifacts = TestHelpers.createBaselineFromModule (TestHelpers.createMethodModule "Baseline helper message")
         let typeName = "Sample.MethodDemo"
         let methodKey = TestHelpers.methodKey typeName "GetMessage" [] PrimaryAssemblyILGlobals.typ_String
@@ -1899,11 +1902,19 @@ type EventDemo() =
             | Some bytes -> bytes
             | None -> failwith "Expected PDB delta to be emitted"
 
-        let metaLog, metaMap = getEncTablesFromMetadata delta.Metadata
         let pdbLog, pdbMap = getEncTablesFromPdb pdbBytes
 
-        Assert.Equal<(TableIndex * int * EditAndContinueOperation)[]>(sortEncLogEntries metaLog, sortEncLogEntries pdbLog)
-        Assert.Equal<(TableIndex * int)[]>(sortEncMapEntries metaMap, sortEncMapEntries pdbMap)
+        // PDB EncLog should be empty (Roslyn doesn't use it for PDB deltas)
+        Assert.Empty(pdbLog)
+
+        // PDB EncMap should contain ONLY MethodDebugInformation entries (table index 0x31 = 49)
+        // It should NOT mirror metadata tables like TypeRef, MemberRef, etc.
+        let methodDebugInfoTable = TableIndex.MethodDebugInformation
+        for (table, _rowId) in pdbMap do
+            Assert.Equal(methodDebugInfoTable, table)
+
+        // Verify we have at least one MethodDebugInformation entry for the updated method
+        Assert.NotEmpty(pdbMap)
 
         if not (keepArtifacts ()) then
             try File.Delete(baselineArtifacts.AssemblyPath) with _ -> ()
