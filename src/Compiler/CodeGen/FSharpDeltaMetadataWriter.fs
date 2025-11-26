@@ -87,6 +87,10 @@ type MetadataDelta =
         TableBitMasks: TableBitMasks
         IndexSizes: DeltaIndexSizing.CodedIndexSizes
         TableStream: DeltaTableStream
+        /// The EncId GUID for this generation (used as EncBaseId for subsequent generations)
+        GenerationId: Guid
+        /// The EncBaseId GUID (EncId of the previous generation, or Empty for generation 1)
+        BaseGenerationId: Guid
     }
 
 let emitWithUserStrings
@@ -151,7 +155,9 @@ let emitWithUserStrings
           TableStream =
             { Bytes = Array.empty
               UnpaddedSize = 0
-              PaddedSize = 0 } }
+              PaddedSize = 0 }
+          GenerationId = encId
+          BaseGenerationId = encBaseId }
     else
 
         // Ensure tables not emitted in the current delta remain empty to satisfy metadata writer invariants.
@@ -659,7 +665,9 @@ let emitWithUserStrings
           Tables = tableMirror.TableRows
           TableBitMasks = tableBitMasks
           IndexSizes = indexSizes
-          TableStream = tableStream }
+          TableStream = tableStream
+          GenerationId = encId
+          BaseGenerationId = encBaseId }
 
 let emitWithReferences
     (metadataBuilder: MetadataBuilder)

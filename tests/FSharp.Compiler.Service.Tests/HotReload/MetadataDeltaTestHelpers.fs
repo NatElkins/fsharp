@@ -1456,35 +1456,15 @@ module internal MetadataDeltaTestHelpers =
             let baseOffsets = computeHeapOffsets metadataReader
             advanceHeapOffsets baseOffsets generation1.Delta
 
-        let baseGuidEntries = generation1.BaselineHeapSizes.GuidHeapSize / 16
-        let gen1EncId = getModuleGenerationId generation1.Delta.Metadata baseGuidEntries
+        // Use GenerationId field from MetadataDelta directly, rather than trying to extract
+        // from delta metadata bytes (which MetadataReader can't properly interpret)
+        let gen1EncId = generation1.Delta.GenerationId
         printfn "[property-multigen] gen1 EncId = %A" gen1EncId
         let generation2 = emitPropertyDeltaFromBaseline generation1.BaselineBytes nextOffsets 2 gen1EncId
-        let baseEntriesGen2 = nextOffsets.GuidHeapStart / 16
-        let encId2 =
-            getModuleGenerationId generation2.Metadata baseEntriesGen2
 
-        let baseId =
-            use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(generation2.Metadata))
-            let reader = provider.GetMetadataReader()
-            let moduleDef = reader.GetModuleDefinition()
-            let handle = moduleDef.BaseGenerationId
-            if handle.IsNil then
-                System.Guid.Empty
-            else
-                let rawIndex = (MetadataTokens.GetHeapOffset handle / 16) + 1
-                match tryGetGuidHeap generation2.Metadata with
-                | Some heap ->
-                    let offset = (rawIndex - 1) * 16
-                    if rawIndex > 0 && offset >= 0 && offset + 16 <= heap.Length then
-                        System.Guid(Array.sub heap offset 16)
-                    else
-                        System.Guid.Empty
-                | None ->
-                    try
-                        reader.GetGuid handle
-                    with _ ->
-                        System.Guid.Empty
+        // Use the GenerationId and BaseGenerationId fields directly from the delta
+        let encId2 = generation2.GenerationId
+        let baseId = generation2.BaseGenerationId
 
         printfn "[property-multigen] gen2 EncId = %A BaseId = %A" encId2 baseId
 

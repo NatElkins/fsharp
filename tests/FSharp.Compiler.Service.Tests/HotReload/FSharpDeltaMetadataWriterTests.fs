@@ -1539,34 +1539,36 @@ module FSharpDeltaMetadataWriterTests =
             gen2HeapFlags
             (BitConverter.ToString(gen2RowBytes))
 
-        // Expected offsets (encoded values) are baseline + prior generation heap sizes + entry offset.
-        let baselineGuidBytes = artifacts.BaselineHeapSizes.GuidHeapSize
+        // With rowElementGuidAbsolute, the module row stores delta-local indices directly.
+        // Delta GUID heap layout with nil sentinel:
+        //   Index 1 = nil (bytes 0-15)
+        //   Index 2 = MVID (bytes 16-31)
+        //   Index 3 = EncId (bytes 32-47)
+        //   Index 4 = EncBaseId [gen2 only] (bytes 48-63)
+        let expectedMvidIndex1 = 2    // Delta-local index for MVID
+        let expectedEncIdIndex1 = 3   // Delta-local index for EncId
+        let expectedMvidIndex2 = 2    // Same for gen2
+        let expectedEncIdIndex2 = 3   // Same for gen2
+        let expectedEncBaseIndex2 = 4 // EncBaseId points to gen1's EncId GUID stored in gen2's heap
 
-        let baselineGuidEntries = baselineGuidBytes / 16
-
-        let expectedMvidIndex1 = baselineGuidEntries + 1
-        let expectedEncIdIndex1 = baselineGuidEntries + 2
-        let expectedMvidIndex2 = baselineGuidEntries + 1
-        let expectedEncIdIndex2 = baselineGuidEntries + 2
-        let expectedEncBaseIndex2 = baselineGuidEntries + 3
-
-        // Row values should match the combined Guid heap entry indexes (baseline entries + delta entry index).
+        // Row values should match the delta-local GUID heap indices.
         Assert.Equal(expectedMvidIndex1, gen1RowMvidIdx)
         Assert.Equal(expectedEncIdIndex1, gen1RowEncIdx)
         Assert.Equal(expectedMvidIndex2, gen2RowMvidIdx)
         Assert.Equal(expectedEncIdIndex2, gen2RowEncIdx)
         Assert.Equal(expectedEncBaseIndex2, gen2RowBaseIdx)
 
-        // Heap sizes (no sentinel): gen1 contains MVID + EncId, gen2 adds EncBaseId.
-        Assert.True(guidBytes1 >= 32, "Guid heap should contain MVID + EncId")
-        Assert.True(guidBytes2 >= 48, "Gen2 Guid heap should contain MVID + EncId + EncBaseId")
+        // Heap sizes (with nil sentinel): gen1 = nil+MVID+EncId, gen2 = nil+MVID+EncId+EncBaseId.
+        Assert.True(guidBytes1 >= 48, "Gen1 Guid heap should contain nil + MVID + EncId (48 bytes)")
+        Assert.True(guidBytes2 >= 64, "Gen2 Guid heap should contain nil + MVID + EncId + EncBaseId (64 bytes)")
 
-        // Decode GUIDs directly from the delta heaps using local offsets.
-        let gen1MvidLocal = (expectedMvidIndex1 - baselineGuidEntries - 1) * 16
-        let gen1EncIdLocal = (expectedEncIdIndex1 - baselineGuidEntries - 1) * 16
-        let gen2MvidLocal = (expectedMvidIndex2 - baselineGuidEntries - 1) * 16
-        let gen2EncIdLocal = (expectedEncIdIndex2 - baselineGuidEntries - 1) * 16
-        let gen2EncBaseLocal = (expectedEncBaseIndex2 - baselineGuidEntries - 1) * 16
+        // Decode GUIDs directly from the delta heaps using delta-local indices.
+        // Index is 1-based, so byte offset = (index - 1) * 16
+        let gen1MvidLocal = (expectedMvidIndex1 - 1) * 16      // Index 2 -> offset 16
+        let gen1EncIdLocal = (expectedEncIdIndex1 - 1) * 16    // Index 3 -> offset 32
+        let gen2MvidLocal = (expectedMvidIndex2 - 1) * 16      // Index 2 -> offset 16
+        let gen2EncIdLocal = (expectedEncIdIndex2 - 1) * 16    // Index 3 -> offset 32
+        let gen2EncBaseLocal = (expectedEncBaseIndex2 - 1) * 16 // Index 4 -> offset 48
 
         let gen1MvidGuidValue = readGuidAtOffset guidHeapBytes1 gen1MvidLocal
         let encIdGuid1Value = readGuidAtOffset guidHeapBytes1 gen1EncIdLocal
@@ -1584,7 +1586,7 @@ module FSharpDeltaMetadataWriterTests =
         match name1 with
         | Some n -> Assert.Equal(baseName, name1)
         | None -> ()
-        // GUID column values should match the combined heap entry indexes
+        // GUID column values should match the delta-local heap indices
         Assert.Equal(expectedMvidIndex1, gen1RowMvidIdx)
         Assert.Equal(0, gen1RowBaseIdx)  // EncBaseId should be 0 for gen1
         Assert.Equal(expectedEncIdIndex1, gen1RowEncIdx)
