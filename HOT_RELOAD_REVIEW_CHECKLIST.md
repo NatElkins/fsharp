@@ -262,18 +262,21 @@ This checklist contains all issues identified during the 12-session code review 
     with `lock sessionLock (fun () -> ...)` to ensure atomic read-modify-write operations.
   - Priority: **CRITICAL** (merge blocker)
 
-- [ ] **Dual state without coordination**
+- [x] **Dual state without coordination** ✅ FIXED
   - Files: `src/Compiler/HotReload/HotReloadState.fs` and `src/Compiler/HotReload/EditAndContinueLanguageService.fs:22`
   - Issue: `HotReloadState.session` and `lastBaselineState` updated independently
   - Impact: States can become inconsistent
-  - Fix: Consolidate to single source of truth or coordinate updates
+  - Fix: Added `stateLock` object to EditAndContinueLanguageService and wrapped all updates
+    to both `HotReloadState` and `lastBaselineState` in `lock stateLock` calls (StartSession,
+    EmitDelta updateBaseline, EmitDeltaForCompilation restore). Both states now update atomically.
   - Priority: High
 
-- [ ] **Non-atomic check-then-act (TOCTOU) in EmitDeltaForCompilation**
-  - File: `src/Compiler/HotReload/EditAndContinueLanguageService.fs:159-167`
+- [x] **Non-atomic check-then-act (TOCTOU) in EmitDeltaForCompilation** ✅ FIXED
+  - File: `src/Compiler/HotReload/EditAndContinueLanguageService.fs:164-175`
   - Issue: `tryGetSession()` then `setBaseline()` not atomic, another thread could interfere
   - Impact: Stale baseline restoration, overwrites newer state
-  - Fix: Make atomic with locking
+  - Fix: Wrapped entire check-then-restore block in `lock stateLock` to ensure atomic operation.
+    Comment added explaining the TOCTOU prevention.
   - Priority: **CRITICAL** (merge blocker)
 
 ### Validation and Error Handling

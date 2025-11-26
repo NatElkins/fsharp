@@ -19,6 +19,8 @@ open FSharp.Compiler.SynthesizedTypeMaps
 type internal FSharpEditAndContinueLanguageService private () =
 
     static let lazyInstance = lazy FSharpEditAndContinueLanguageService()
+    /// Lock to coordinate updates between HotReloadState.session and lastBaselineState
+    static let stateLock = obj ()
     static let mutable lastBaselineState : (FSharpEmitBaseline * CheckedAssemblyAfterOptimization) option = None
     static let shouldTraceMetadata () =
         match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METADATA") with
@@ -43,8 +45,9 @@ type internal FSharpEditAndContinueLanguageService private () =
                 Activity.Tags.hotReloadAction, "baseline"
             |]
 
-        FSharp.Compiler.HotReloadState.setBaseline baseline (CheckedAssemblyAfterOptimization [])
-        lastBaselineState <- Some(baseline, CheckedAssemblyAfterOptimization [])
+        lock stateLock (fun () ->
+            FSharp.Compiler.HotReloadState.setBaseline baseline (CheckedAssemblyAfterOptimization [])
+            lastBaselineState <- Some(baseline, CheckedAssemblyAfterOptimization []))
 
     member _.StartSession(baseline: FSharpEmitBaseline, implementationFiles: CheckedAssemblyAfterOptimization) =
         use _ =
@@ -53,8 +56,9 @@ type internal FSharpEditAndContinueLanguageService private () =
                 Activity.Tags.hotReloadAction, "baseline+impl"
             |]
 
-        FSharp.Compiler.HotReloadState.setBaseline baseline implementationFiles
-        lastBaselineState <- Some(baseline, implementationFiles)
+        lock stateLock (fun () ->
+            FSharp.Compiler.HotReloadState.setBaseline baseline implementationFiles
+            lastBaselineState <- Some(baseline, implementationFiles))
 
     /// <summary>Attempts to fetch the current baseline.</summary>
     member _.TryGetBaseline() =
@@ -129,8 +133,9 @@ type internal FSharpEditAndContinueLanguageService private () =
                             delta.GenerationId
                             delta.BaseGenerationId
                             updatedBaseline.EncId
-                    FSharp.Compiler.HotReloadState.updateBaseline updatedBaseline
-                    lastBaselineState <- Some(updatedBaseline, session.ImplementationFiles)
+                    lock stateLock (fun () ->
+                        FSharp.Compiler.HotReloadState.updateBaseline updatedBaseline
+                        lastBaselineState <- Some(updatedBaseline, session.ImplementationFiles))
                 | None -> ()
                 Ok { Delta = delta }
             with
@@ -156,15 +161,18 @@ type internal FSharpEditAndContinueLanguageService private () =
         updatedImplementation: CheckedAssemblyAfterOptimization,
         ilModule: ILModuleDef
     ) : Result<DeltaEmissionResult, HotReloadError> =
+        // Atomic check-then-restore to prevent TOCTOU race between tryGetSession
+        // returning ValueNone and setBaseline being called by another thread
         let sessionOpt =
-            match FSharp.Compiler.HotReloadState.tryGetSession() with
-            | ValueNone ->
-                match lastBaselineState with
-                | Some(baseline, implementationFiles) ->
-                    FSharp.Compiler.HotReloadState.setBaseline baseline implementationFiles
-                    FSharp.Compiler.HotReloadState.tryGetSession()
-                | None -> ValueNone
-            | ValueSome _ as session -> session
+            lock stateLock (fun () ->
+                match FSharp.Compiler.HotReloadState.tryGetSession() with
+                | ValueNone ->
+                    match lastBaselineState with
+                    | Some(baseline, implementationFiles) ->
+                        FSharp.Compiler.HotReloadState.setBaseline baseline implementationFiles
+                        FSharp.Compiler.HotReloadState.tryGetSession()
+                    | None -> ValueNone
+                | ValueSome _ as session -> session)
 
         match sessionOpt with
         | ValueNone -> Error HotReloadError.NoActiveSession
