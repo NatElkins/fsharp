@@ -94,10 +94,13 @@ This checklist contains all issues identified during the 12-session code review 
   - Priority: High
 
 ### Code Quality
-- [ ] **emitDelta function is 2200+ lines**
+- [x] **emitDelta function is 2200+ lines** ✅ PARTIALLY FIXED
   - File: `src/Compiler/CodeGen/IlxDeltaEmitter.fs`
   - Issue: Monolithic function difficult to maintain and test
   - Fix: Extract sub-functions for each concern (types, methods, params, etc.)
+  - Progress: Extracted `isEnvVarTruthy` helper + 4 trace flags, `dedupeMethodKeys` to module level
+  - Note: Further extraction complex due to closure capture - would require context/state object pattern
+  - Remaining: Function still ~1900 lines; deeper refactoring deferred to future work
   - Priority: Low (refactoring)
 
 - [ ] **Token remapping logic is complex and duplicated**

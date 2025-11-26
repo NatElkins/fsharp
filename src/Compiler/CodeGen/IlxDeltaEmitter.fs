@@ -137,6 +137,29 @@ let private opCodeLookup : Lazy<Dictionary<int, OpCode>> =
                  dict[value] <- op
          dict)
 
+/// Helper to check if an environment variable is set to a truthy value ("1" or "true")
+let private isEnvVarTruthy (name: string) : Lazy<bool> =
+    lazy (
+        match System.Environment.GetEnvironmentVariable(name) with
+        | null -> false
+        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+        | _ -> false
+    )
+
+/// Trace flags for hot reload debugging - controlled via environment variables
+let private traceUserStringUpdates = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_STRINGS"
+let private traceSynthesizedMappings = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_SYNTHESIZED"
+let private traceMethodUpdates = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_METHODS"
+let private traceMetadata = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_METADATA"
+
+/// Deduplicates method keys while preserving order
+let private dedupeMethodKeys (keys: MethodDefinitionKey list) =
+    let seen = HashSet<MethodDefinitionKey>(HashIdentity.Structural)
+    keys
+    |> List.fold (fun acc key -> if seen.Add key then key :: acc else acc) []
+    |> List.rev
+
 let private rewriteMethodBody (remapUserString: int -> int) (remapEntityToken: int -> int) (body: MethodBodyBlock) =
     let ilBytes = body.GetILBytes().ToArray()
     let rewritten = Array.copy ilBytes
@@ -267,38 +290,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let ilg = mkILGlobals (primaryScopeRef, [], fsharpCoreScopeRef)
 
-    let traceUserStringUpdates =
-        lazy (
-            match System.Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_STRINGS") with
-            | null -> false
-            | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
-            | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
-            | _ -> false
-        )
-    let traceSynthesizedMappings =
-        lazy (
-            match System.Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_SYNTHESIZED") with
-            | null -> false
-            | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
-            | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
-            | _ -> false
-        )
-    let traceMethodUpdates =
-        lazy (
-            match System.Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METHODS") with
-            | null -> false
-            | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
-            | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
-            | _ -> false
-        )
-    let traceMetadata =
-        lazy (
-            match System.Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METADATA") with
-            | null -> false
-            | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
-            | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
-            | _ -> false
-        )
     let writerOptions = defaultWriterOptions ilg HashAlgorithm.Sha256
     let assemblyBytes, pdbBytesOpt, emittedTokenMappings, _ =
         ILWriter.WriteILBinaryInMemoryWithArtifacts(writerOptions, request.Module, id)
@@ -591,12 +582,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         addedMethodTokens
         |> Seq.map (fun kvp -> kvp.Key)
         |> Seq.toList
-
-    let dedupeMethodKeys (keys: MethodDefinitionKey list) =
-        let seen = HashSet<MethodDefinitionKey>(HashIdentity.Structural)
-        keys
-        |> List.fold (fun acc key -> if seen.Add key then key :: acc else acc) []
-        |> List.rev
 
     let allUpdatedMethods =
         (request.UpdatedMethods @ addedMethodKeys)
