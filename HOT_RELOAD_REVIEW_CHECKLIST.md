@@ -192,10 +192,10 @@ This checklist contains all issues identified during the 12-session code review 
 ## Session 6: PDB Delta & Symbol Matching
 
 ### PDB Emission Issues
-- [ ] **Unsafe dictionary access in getOrAddDocument**
-  - File: `src/Compiler/CodeGen/HotReloadPdb.fs:72-105`
-  - Issue: `reader.GetBlobBytes` can throw `BadImageFormatException` on corrupted metadata
-  - Fix: Wrap blob/GUID accesses in try-catch
+- [x] **Unsafe dictionary access in getOrAddDocument** ✅ FIXED
+  - File: `src/Compiler/CodeGen/HotReloadPdb.fs:72-111`
+  - Issue: `reader.GetBlobBytes` and `reader.GetGuid` can throw `BadImageFormatException` on corrupted metadata
+  - Fix: Wrapped document reading in try-catch for `BadImageFormatException`, returns empty `DocumentHandle()` on failure with warning message
   - Priority: High
 
 - [ ] **Missing PDB for newly added methods**

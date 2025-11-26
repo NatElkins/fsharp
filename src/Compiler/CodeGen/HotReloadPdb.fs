@@ -73,36 +73,42 @@ let emitDelta
                 match documentMap.TryGetValue sourceHandle with
                 | true, handle -> handle
                 | _ ->
-                    let document = reader.GetDocument sourceHandle
-                    let nameBytes = reader.GetBlobBytes document.Name
-                    let hashBytes =
-                        if document.Hash.IsNil then
-                            Array.empty<byte>
-                        else
-                            reader.GetBlobBytes document.Hash
+                    try
+                        let document = reader.GetDocument sourceHandle
+                        let nameBytes = reader.GetBlobBytes document.Name
+                        let hashBytes =
+                            if document.Hash.IsNil then
+                                Array.empty<byte>
+                            else
+                                reader.GetBlobBytes document.Hash
 
-                    let hashAlgorithmGuid =
-                        if document.HashAlgorithm.IsNil then
-                            Guid.Empty
-                        else
-                            reader.GetGuid document.HashAlgorithm
+                        let hashAlgorithmGuid =
+                            if document.HashAlgorithm.IsNil then
+                                Guid.Empty
+                            else
+                                reader.GetGuid document.HashAlgorithm
 
-                    let languageGuid =
-                        if document.Language.IsNil then
-                            Guid.Empty
-                        else
-                            reader.GetGuid document.Language
+                        let languageGuid =
+                            if document.Language.IsNil then
+                                Guid.Empty
+                            else
+                                reader.GetGuid document.Language
 
-                    let nameHandle = metadata.GetOrAddBlob nameBytes
-                    let hashHandle = metadata.GetOrAddBlob hashBytes
-                    let hashAlgorithmHandle = metadata.GetOrAddGuid hashAlgorithmGuid
-                    let languageHandle = metadata.GetOrAddGuid languageGuid
+                        let nameHandle = metadata.GetOrAddBlob nameBytes
+                        let hashHandle = metadata.GetOrAddBlob hashBytes
+                        let hashAlgorithmHandle = metadata.GetOrAddGuid hashAlgorithmGuid
+                        let languageHandle = metadata.GetOrAddGuid languageGuid
 
-                    let added =
-                        metadata.AddDocument(nameHandle, hashAlgorithmHandle, hashHandle, languageHandle)
+                        let added =
+                            metadata.AddDocument(nameHandle, hashAlgorithmHandle, hashHandle, languageHandle)
 
-                    documentMap[sourceHandle] <- added
-                    added
+                        documentMap[sourceHandle] <- added
+                        added
+                    with
+                    | :? BadImageFormatException as ex ->
+                        // Corrupted PDB metadata - skip this document gracefully
+                        printfn "[hotreload-pdb] warning: could not read document (handle=%A): %s" sourceHandle ex.Message
+                        DocumentHandle()
 
             for token in distinctTokens do
                 let sourceToken =
