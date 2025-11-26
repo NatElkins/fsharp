@@ -940,11 +940,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         if not raiser.IsNil then
             eventAccessorLookup[raiser] <- eventHandle
 
-    let remapToken (map: Dictionary<int, int>) token =
-        match map.TryGetValue token with
-        | true, mapped -> mapped
-        | _ -> token
-
     let methodDefinitionRowsRaw = methodDefinitionIndex.Rows
 
     let orderedMethodInputs =
@@ -1087,7 +1082,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             if traceMethodUpdates.Value then
                 printfn "[fsharp-hotreload][accessor] property handle matched token=0x%08X" (MetadataTokens.GetToken(EntityHandle.op_Implicit propertyHandle))
             let associationToken = MetadataTokens.GetToken(EntityHandle.op_Implicit propertyHandle)
-            let baselineToken = remapToken propertyTokenMap associationToken
+            let baselineToken = remapWith propertyTokenMap associationToken
             match propertyTokenToKey.TryGetValue(baselineToken) with
             | true, key ->
                 let baselineHandle = MetadataTokens.PropertyDefinitionHandle baselineToken
@@ -1099,7 +1094,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             match eventAccessorLookup.TryGetValue methodHandle with
             | true, eventHandle ->
                 let associationToken = MetadataTokens.GetToken(EntityHandle.op_Implicit eventHandle)
-                let baselineToken = remapToken eventTokenMap associationToken
+                let baselineToken = remapWith eventTokenMap associationToken
                 match eventTokenToKey.TryGetValue(baselineToken) with
                 | true, key ->
                     let baselineHandle = MetadataTokens.EventDefinitionHandle baselineToken

@@ -103,10 +103,10 @@ This checklist contains all issues identified during the 12-session code review 
   - Remaining: Function still ~1900 lines; deeper refactoring deferred to future work
   - Priority: Low (refactoring)
 
-- [ ] **Token remapping logic is complex and duplicated**
+- [x] **Token remapping logic is complex and duplicated** ✅ FIXED
   - File: `src/Compiler/CodeGen/IlxDeltaEmitter.fs`
   - Issue: Multiple similar token remapping paths
-  - Fix: Consolidate into single remapping helper
+  - Fix: Removed duplicate `remapToken` function, now uses `remapWith` consistently
   - Priority: Low (refactoring)
 
 - [ ] **Missing parameter row validation**

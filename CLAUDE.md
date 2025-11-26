@@ -60,6 +60,17 @@ Make changes in small increments and run tests frequently. This prevents large r
 
 A single commit that "fixes 10 issues" can introduce subtle bugs (like the GUID index serialization regression) that are hard to trace back to their root cause.
 
+## Respecting Task Boundaries
+
+If the user specifies "one task at a time" or similar pacing instructions, **strictly adhere to this**:
+
+- Complete the current task fully (including tests and commit)
+- **Stop and wait** for direction before starting the next task
+- Do not begin investigating or working on the next item proactively
+- The user controls the pace; don't assume they want to continue immediately
+
+This is important because the user may want to review changes, take a break, or change priorities between tasks.
+
 ## Reporting Test Results Accurately
 
 **Never say "all tests pass" if any tests fail.** Even if failures seem unrelated or infrastructure-caused, report the actual numbers:
