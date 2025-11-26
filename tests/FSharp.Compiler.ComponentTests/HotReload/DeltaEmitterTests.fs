@@ -1564,3 +1564,38 @@ module DeltaEmitterTests =
 
         // MethodDef.RVA should point at the emitted method body offset
         Assert.Equal(bodyInfo.CodeOffset, methodDef.RelativeVirtualAddress)
+
+    [<Fact>]
+    let ``HotReloadUnsupportedEditException is raised for unsupported edits with context`` () =
+        // Verify that unsupported edits raise HotReloadUnsupportedEditException (not failwith)
+        // with a meaningful message. This tests the error handling pattern used in IlxDeltaEmitter.fs
+        // at lines 1775 (AsyncStateMachineAttribute resolution) and 1847 (NullableContextAttribute resolution).
+        //
+        // Note: The specific attribute resolution failures are hard to trigger in tests because
+        // they require missing runtime types. This test verifies the exception pattern is used
+        // consistently by testing the field addition rejection path which uses the same pattern.
+
+        let _, baseline = createFieldHolderBaseline false
+        let updatedModule = createModuleWithOptionalField true |> TestHelpers.withDebuggableAttribute
+
+        let request =
+            {
+                IlxDeltaRequest.Baseline = baseline
+                UpdatedTypes = [ "Sample.FieldHolder" ]
+                UpdatedMethods = [ methodKey baseline "GetValue" ]
+                UpdatedAccessors = []
+                Module = updatedModule
+                SymbolChanges = None
+                CurrentGeneration = 1
+                PreviousGenerationId = None
+                SynthesizedNames = None
+            }
+
+        // Verify the exception type is HotReloadUnsupportedEditException (not a generic exception)
+        let ex = Assert.Throws<HotReloadUnsupportedEditException>(fun () -> emitDelta request |> ignore)
+
+        // Verify the message contains useful context (type and field name)
+        Assert.NotNull(ex.Message)
+        Assert.True(ex.Message.Length > 0, "Exception message should not be empty")
+        Assert.Contains("Sample.FieldHolder", ex.Message)
+        Assert.Contains("trackedField", ex.Message)

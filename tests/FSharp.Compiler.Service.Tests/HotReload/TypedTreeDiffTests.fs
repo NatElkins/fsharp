@@ -164,3 +164,41 @@ module TypedTreeDiffTests =
         Assert.Empty(result.SemanticEdits)
         Assert.Single(result.RudeEdits) |> ignore
         Assert.Equal(RudeEditKind.TypeLayoutChange, result.RudeEdits[0].Kind)
+
+    [<Fact>]
+    let ``generic constraint change triggers rude edit`` () =
+        // Test that adding/removing generic constraints is detected as a rude edit
+        // (SignatureChange) since constraints affect runtime behavior.
+        use harness = new DiffTestHarness()
+        let baseline_source = "module Library\nlet identity<'T> (x: 'T) = x\n"
+        let updated_source = "module Library\nlet identity<'T when 'T :> System.IDisposable> (x: 'T) = x\n"
+
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        // Should produce a rude edit (signature change) not a semantic edit
+        Assert.NotEmpty(result.RudeEdits)
+        Assert.Equal(RudeEditKind.SignatureChange, result.RudeEdits[0].Kind)
+
+    [<Fact>]
+    let ``mutable field change triggers rude edit`` () =
+        // Test that toggling mutable on a field is detected as a type layout change
+        // since it affects the runtime representation of the type.
+        use harness = new DiffTestHarness()
+        let baseline_source = "module Library\ntype MyRecord = { Value: int }\n"
+        let updated_source = "module Library\ntype MyRecord = { mutable Value: int }\n"
+
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        // Should produce a rude edit (type layout change) since mutability affects representation
+        Assert.NotEmpty(result.RudeEdits)
+        Assert.Equal(RudeEditKind.TypeLayoutChange, result.RudeEdits[0].Kind)
