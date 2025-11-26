@@ -50,6 +50,16 @@ dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.
 3. **Medium (22 issues)** - Post-merge acceptable
 4. **Low (15 issues)** - Technical debt
 
+## Making Changes Incrementally
+
+Make changes in small increments and run tests frequently. This prevents large regressions that are hard to debug. For example:
+
+- Fix one issue, run tests, commit
+- Don't batch multiple unrelated fixes into one commit
+- If tests fail after a change, you know exactly which change caused it
+
+A single commit that "fixes 10 issues" can introduce subtle bugs (like the GUID index serialization regression) that are hard to trace back to their root cause.
+
 ## Reporting Test Results Accurately
 
 **Never say "all tests pass" if any tests fail.** Even if failures seem unrelated or infrastructure-caused, report the actual numbers:
