@@ -224,10 +224,11 @@ This checklist contains all issues identified during the 12-session code review 
     for proper collision resistance in byte array dictionary lookups.
   - Priority: Medium
 
-- [ ] **Unsafe nested type traversal in SymbolMatcher**
-  - File: `src/Compiler/HotReload/SymbolMatcher.fs:80-85`
+- [x] **Unsafe nested type traversal in SymbolMatcher** ✅ FIXED
+  - File: `src/Compiler/HotReload/SymbolMatcher.fs:46-58,91,98`
   - Issue: No depth limit for nested type traversal, could infinite loop on malformed IL
-  - Fix: Add depth limit (e.g., max 100 levels)
+  - Fix: Added `MaxNestedTypeDepth = 100` constant and depth parameter to `addTypeMatches`.
+    Throws descriptive exception if exceeded. Protects against stack overflow on malformed IL.
   - Priority: Medium
 
 - [ ] **Incorrect synthesized name prefix calculation**

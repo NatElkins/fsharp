@@ -43,13 +43,19 @@ module FSharpSymbolMatcher =
               TypeDef = typeDef
               MethodDef = methodDef }
 
+    [<Literal>]
+    let private MaxNestedTypeDepth = 100
+
     let rec private addTypeMatches
         (synthesizedBuckets: Dictionary<string, string[]> option)
         (enclosing: ILTypeDef list)
         (types: Dictionary<string, TypeMatch>)
         (methods: Dictionary<MethodDefinitionKey, MethodMatch>)
+        (depth: int)
         (typeDef: ILTypeDef)
         =
+        if depth > MaxNestedTypeDepth then
+            failwithf "Exceeded maximum nested type depth (%d) while processing type '%s'. Possible malformed IL." MaxNestedTypeDepth typeDef.Name
         let typeRef = mkRefForNestedILTypeDef ILScopeRef.Local (enclosing, typeDef)
         types[typeRef.FullName] <-
             { EnclosingTypes = enclosing
@@ -82,14 +88,14 @@ module FSharpSymbolMatcher =
             addMethodMatch typeRef enclosing typeDef methodDef methods)
 
         typeDef.NestedTypes.AsList()
-        |> List.iter (fun nested -> addTypeMatches synthesizedBuckets (enclosing @ [ typeDef ]) types methods nested)
+        |> List.iter (fun nested -> addTypeMatches synthesizedBuckets (enclosing @ [ typeDef ]) types methods (depth + 1) nested)
 
     let private createInternal (moduleDef: ILModuleDef) (synthesized: Dictionary<string, string[]> option) : FSharpSymbolMatcher =
         let typeMatches = Dictionary<string, TypeMatch>()
         let methodMatches = Dictionary<MethodDefinitionKey, MethodMatch>()
 
         moduleDef.TypeDefs.AsList()
-        |> List.iter (addTypeMatches synthesized [] typeMatches methodMatches)
+        |> List.iter (addTypeMatches synthesized [] typeMatches methodMatches 0)
 
         { TypeMatches = typeMatches :> IReadOnlyDictionary<string, TypeMatch>
           MethodMatches = methodMatches :> IReadOnlyDictionary<MethodDefinitionKey, MethodMatch> }
