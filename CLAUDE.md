@@ -59,6 +59,20 @@ dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.
 
 If failures are infrastructure-related, investigate or note them separately, but don't claim success when there are failures.
 
+## Rebuilding After Clean Builds
+
+After deleting `artifacts/bin` or `artifacts/obj` (e.g., during git bisect), some tests may fail with missing file errors like:
+```
+Couldn't find "fsi/Debug/net10.0/fsi.dll"
+Couldn't find "fsc/Debug/net10.0/fsc.dll"
+```
+
+Rebuild these infrastructure projects:
+```bash
+dotnet build src/fsi/fsiProject/fsi.fsproj
+dotnet build src/fsc/fscProject/fsc.fsproj
+```
+
 ## Debugging Unexpected Test Failures
 
 If a test fails unexpectedly (especially one that was previously passing):
