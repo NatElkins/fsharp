@@ -139,10 +139,13 @@ This checklist contains all issues identified during the 12-session code review 
   - Note: The pre-existing test failure for encBaseId=0 is a separate baseline chaining issue documented below
   - Priority: High
 
-- [ ] **UserString heap offset contradicts absolute offset design**
-  - File: `src/Compiler/CodeGen/DeltaMetadataTables.fs:737-741`
+- [x] **UserString heap offset contradicts absolute offset design** ✅ VERIFIED CORRECT
+  - File: `src/Compiler/CodeGen/DeltaMetadataTables.fs:774-779`
   - Issue: Subtracts baseline offset to make relative, but design doc says absolute
-  - Fix: Clarify semantics and fix if needed
+  - Analysis: Both are correct in context. IL tokens use ABSOLUTE offsets (baseline + delta). Delta heap bytes
+    use RELATIVE positions (starting from 0). The code correctly converts between them. Runtime resolves:
+    `absolute_token - stream_header_offset = position_in_delta_bytes`.
+  - Fix: Added clarifying XML doc comment explaining the absolute→relative conversion
   - Priority: High
 
 - [ ] **Unsafe failwithf in table serialization**

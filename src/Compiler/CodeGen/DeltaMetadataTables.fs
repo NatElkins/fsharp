@@ -766,6 +766,11 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         counts[int TableIndex.EncMap] <- encMapRows.Count
         counts
 
+    /// Add a user string literal to the delta's #US heap.
+    /// The offset parameter is the ABSOLUTE offset from IL tokens (baseline size + delta-local offset).
+    /// We convert to RELATIVE offset within the delta heap bytes, since the delta heap starts at 0
+    /// but the stream header will indicate it represents data starting at heapOffsets.UserStringHeapStart.
+    /// This matches how the runtime resolves tokens: absolute_token - stream_header_offset = position_in_delta_bytes.
     member _.AddUserStringLiteral(offset: int, value: string) =
         let relativeOffset =
             let start = heapOffsets.UserStringHeapStart
