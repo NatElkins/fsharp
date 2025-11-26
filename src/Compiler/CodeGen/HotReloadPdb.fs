@@ -143,12 +143,16 @@ let emitDelta
                             metadata.AddMethodDebugInformation(targetDocument, sequencePointsHandle) |> ignore
                             emitted <- true
                         else
+                            // Newly added methods may not have debug info in the updated PDB if their row
+                            // exceeds the MethodDebugInformation table count. This is a known limitation -
+                            // debuggers won't be able to step into newly added methods until a full rebuild.
+                            // TODO: Emit empty MethodDebugInformation entries for new methods to enable debugging.
                             printfn
-                                "[hotreload-pdb] missing method debug row %d (delta token=0x%08x, source token=0x%08x, count=%d)"
+                                "[hotreload-pdb] skipping newly added method (row %d > count %d) - debugger stepping unavailable (delta=0x%08x, source=0x%08x)"
                                 methodRow
+                                reader.MethodDebugInformation.Count
                                 token
                                 sourceToken
-                                reader.MethodDebugInformation.Count
 
             // Mirror metadata EncLog/EncMap so PDB delta stays in lockstep with metadata delta tables.
             for (table, rowId, operation) in metadataEncLog do

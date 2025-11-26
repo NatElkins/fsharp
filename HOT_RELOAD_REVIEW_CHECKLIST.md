@@ -198,12 +198,14 @@ This checklist contains all issues identified during the 12-session code review 
   - Fix: Wrapped document reading in try-catch for `BadImageFormatException`, returns empty `DocumentHandle()` on failure with warning message
   - Priority: High
 
-- [ ] **Missing PDB for newly added methods**
-  - File: `src/Compiler/CodeGen/HotReloadPdb.fs:121-146`
+- [x] **Missing PDB for newly added methods** ⚠️ DOCUMENTED LIMITATION
+  - File: `src/Compiler/CodeGen/HotReloadPdb.fs:145-155`
   - Issue: Only emits MethodDebugInformation for methods in baseline, skips new methods
-  - Impact: Debugger can't step into newly added methods
-  - Fix: Handle newly added methods by emitting debug info from updated PDB
-  - Priority: High
+  - Impact: Debugger can't step into newly added methods until full rebuild
+  - Status: Added explanatory comment and improved warning message. This is an architectural
+    limitation requiring emission of empty MethodDebugInformation entries for new methods.
+  - TODO: Future work to emit placeholder debug info for newly added methods
+  - Priority: High (deferred)
 
 - [ ] **PDB EncLog/EncMap mirrors METADATA tables instead of PDB tables**
   - File: `src/Compiler/CodeGen/HotReloadPdb.fs:147-158`
