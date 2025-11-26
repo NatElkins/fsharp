@@ -1772,7 +1772,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     let scope =
                         match tryGetAssemblyScope () with
                         | Some value -> value
-                        | None -> failwith "Unable to locate System.Runtime/mscorlib assembly reference for AsyncStateMachineAttribute."
+                        | None ->
+                            raise (HotReloadUnsupportedEditException "Unable to locate System.Runtime/mscorlib assembly reference for AsyncStateMachineAttribute. Please rebuild.")
                     let nextRowId = nextTypeRefRowId + 1
                     nextTypeRefRowId <- nextRowId
                     typeReferenceRows.Add(
@@ -1844,7 +1845,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         let scope =
                             match tryGetAssemblyScope () with
                             | Some value -> value
-                            | None -> failwith "Unable to locate System.Runtime/mscorlib assembly reference for NullableContextAttribute."
+                            | None ->
+                                raise (HotReloadUnsupportedEditException "Unable to locate System.Runtime/mscorlib assembly reference for NullableContextAttribute. Please rebuild.")
                         let nextRowId = nextTypeRefRowId + 1
                         nextTypeRefRowId <- nextRowId
                         typeReferenceRows.Add(

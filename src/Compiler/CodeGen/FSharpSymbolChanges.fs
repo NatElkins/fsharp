@@ -3,17 +3,10 @@ module internal FSharp.Compiler.HotReload.SymbolChanges
 open FSharp.Compiler.HotReload.DefinitionMap
 open FSharp.Compiler.TypedTreeDiff
 
-/// Categorises the kind of change applied to a synthesized member.
-[<RequireQualifiedAccess>]
-type SynthesizedMemberEditKind =
-    | Added
-    | Updated of SemanticEditKind
-    | Deleted
-
 /// Represents a single synthesized member edit along with hash metadata.
 type SynthesizedMemberChange =
     { Symbol: SymbolId
-      EditKind: SynthesizedMemberEditKind
+      EditKind: SymbolEditKind
       BaselineHash: int option
       UpdatedHash: int option
       ContainingEntity: string option }
@@ -38,14 +31,8 @@ module FSharpSymbolChanges =
             definitionMap
             |> FSharpDefinitionMap.synthesized
             |> List.map (fun change ->
-                let editKind =
-                    match change.EditKind with
-                    | SymbolEditKind.Added -> SynthesizedMemberEditKind.Added
-                    | SymbolEditKind.Updated kind -> SynthesizedMemberEditKind.Updated kind
-                    | SymbolEditKind.Deleted -> SynthesizedMemberEditKind.Deleted
-
                 { Symbol = change.Symbol
-                  EditKind = editKind
+                  EditKind = change.EditKind
                   BaselineHash = change.BaselineHash
                   UpdatedHash = change.UpdatedHash
                   ContainingEntity = change.ContainingEntity })
@@ -90,7 +77,7 @@ module FSharpSymbolChanges =
         changes.Synthesized
         |> List.choose (fun change ->
             match change.EditKind with
-            | SynthesizedMemberEditKind.Added -> Some change.Symbol
+            | SymbolEditKind.Added -> Some change.Symbol
             | _ -> None)
 
     /// Extracts synthesized members classified as updated.
@@ -98,7 +85,7 @@ module FSharpSymbolChanges =
         changes.Synthesized
         |> List.choose (fun change ->
             match change.EditKind with
-            | SynthesizedMemberEditKind.Updated kind -> Some(change.Symbol, kind)
+            | SymbolEditKind.Updated kind -> Some(change.Symbol, kind)
             | _ -> None)
 
     /// Extracts synthesized members classified as deleted.
@@ -106,7 +93,7 @@ module FSharpSymbolChanges =
         changes.Synthesized
         |> List.choose (fun change ->
             match change.EditKind with
-            | SynthesizedMemberEditKind.Deleted -> Some change.Symbol
+            | SymbolEditKind.Deleted -> Some change.Symbol
             | _ -> None)
 
     let private isPropertySymbol symbol =

@@ -325,11 +325,37 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             | _ -> invalidArg (nameof kind) "Unsupported member ref parent"
         rowElement (RowElementTags.MemberRefParentMin + tagValue) rowId
 
+    /// HasCustomAttribute coded index per ECMA-335 II.24.2.6.
+    /// Tags: MethodDef(0), Field(1), TypeRef(2), TypeDef(3), Param(4), InterfaceImpl(5),
+    ///       MemberRef(6), Module(7), DeclSecurity(8), Property(9), Event(10), StandAloneSig(11),
+    ///       ModuleRef(12), TypeSpec(13), Assembly(14), AssemblyRef(15), File(16), ExportedType(17),
+    ///       ManifestResource(18), GenericParam(19), GenericParamConstraint(20), MethodSpec(21)
     let rowElementHasCustomAttribute kind rowId =
         let tagValue =
             match kind with
             | HandleKind.MethodDefinition -> 0
-            | _ -> invalidArg (nameof kind) "Unsupported custom attribute parent"
+            | HandleKind.FieldDefinition -> 1
+            | HandleKind.TypeReference -> 2
+            | HandleKind.TypeDefinition -> 3
+            | HandleKind.Parameter -> 4
+            | HandleKind.InterfaceImplementation -> 5
+            | HandleKind.MemberReference -> 6
+            | HandleKind.ModuleDefinition -> 7
+            // DeclSecurity (8) - not directly exposed via HandleKind, use DeclarativeSecurityAttribute if needed
+            | HandleKind.PropertyDefinition -> 9
+            | HandleKind.EventDefinition -> 10
+            | HandleKind.StandaloneSignature -> 11
+            | HandleKind.ModuleReference -> 12
+            | HandleKind.TypeSpecification -> 13
+            | HandleKind.AssemblyDefinition -> 14
+            | HandleKind.AssemblyReference -> 15
+            | HandleKind.AssemblyFile -> 16
+            | HandleKind.ExportedType -> 17
+            | HandleKind.ManifestResource -> 18
+            | HandleKind.GenericParameter -> 19
+            | HandleKind.GenericParameterConstraint -> 20
+            | HandleKind.MethodSpecification -> 21
+            | _ -> invalidArg (nameof kind) $"Unsupported custom attribute parent: {kind}"
         rowElement (RowElementTags.HasCustomAttributeMin + tagValue) rowId
 
     let rowElementCustomAttributeType kind rowId =

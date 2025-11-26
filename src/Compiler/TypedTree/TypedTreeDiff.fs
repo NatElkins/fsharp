@@ -80,13 +80,16 @@ type TypedTreeDiffResult =
 // ---------------------------------------------------------------------------
 
 let private stableHash (text: string) =
-    let mutable hash = 23
+    if String.IsNullOrEmpty text then
+        0
+    else
+        // FNV-1a hash for better collision resistance
+        let mutable hash = 2166136261u // FNV offset basis
 
-    if not (String.IsNullOrEmpty text) then
         for ch in text do
-            hash <- (hash * 31) + int ch
+            hash <- (hash ^^^ uint32 ch) * 16777619u // FNV prime
 
-    hash
+        int hash
 
 let private hashCombine (seed: int) (value: int) = (seed * 16777619) ^^^ value
 
@@ -158,6 +161,37 @@ let private normalizeTypeString (text: string) =
 let private tyToString (_: DisplayEnv) (ty: TType) =
     normalizeTypeString (ty.ToString())
 
+/// Generates a stable digest of type parameter constraints for change detection.
+let private constraintDigest (denv: DisplayEnv) (constraint_: TyparConstraint) =
+    match constraint_ with
+    | TyparConstraint.CoercesTo(ty, _) -> "coerces:" + tyToString denv ty
+    | TyparConstraint.DefaultsTo(priority, ty, _) -> $"defaults:{priority}:{tyToString denv ty}"
+    | TyparConstraint.SupportsNull _ -> "null"
+    | TyparConstraint.NotSupportsNull _ -> "notnull"
+    | TyparConstraint.MayResolveMember(traitInfo, _) -> "member:" + traitInfo.MemberLogicalName
+    | TyparConstraint.IsNonNullableStruct _ -> "struct"
+    | TyparConstraint.IsReferenceType _ -> "class"
+    | TyparConstraint.SimpleChoice(tys, _) -> "choice:" + (tys |> List.map (tyToString denv) |> String.concat ",")
+    | TyparConstraint.RequiresDefaultConstructor _ -> "new"
+    | TyparConstraint.IsEnum(ty, _) -> "enum:" + tyToString denv ty
+    | TyparConstraint.IsDelegate(ty1, ty2, _) -> "delegate:" + tyToString denv ty1 + "," + tyToString denv ty2
+    | TyparConstraint.SupportsComparison _ -> "comparison"
+    | TyparConstraint.SupportsEquality _ -> "equality"
+    | TyparConstraint.IsUnmanaged _ -> "unmanaged"
+    | TyparConstraint.AllowsRefStruct _ -> "allowsrefstruct"
+
+/// Generates a stable digest of all type parameter constraints for a value.
+let private typarConstraintsDigest (denv: DisplayEnv) (typars: Typar list) =
+    if List.isEmpty typars then
+        ""
+    else
+        typars
+        |> List.collect (fun tp ->
+            tp.Constraints
+            |> List.map (fun c -> tp.DisplayName + ":" + constraintDigest denv c))
+        |> List.sort
+        |> String.concat ";"
+
 let private constDigest (c: Const) =
     match c with
     | Const.Bool v -> if v then "true" else "false"
@@ -178,6 +212,67 @@ let private constDigest (c: Const) =
     | Const.Decimal v -> v.ToString("g", Globalization.CultureInfo.InvariantCulture)
     | Const.Unit -> "()"
     | Const.Zero -> "zero"
+
+/// Generates a stable digest for TOp operations, handling F#-specific constructs
+/// that have non-informative ToString() output.
+let private opDigest (denv: DisplayEnv) (op: TOp) =
+    match op with
+    | TOp.UnionCase ucref -> "UnionCase:" + ucref.CaseName
+    | TOp.ExnConstr ecref -> "ExnConstr:" + ecref.LogicalName
+    | TOp.Tuple (TupInfo.Const isStruct) ->
+        let kind = if isStruct then "struct" else "ref"
+        "Tuple:" + kind
+    | TOp.AnonRecd anonInfo ->
+        // Include anonymous record field names for stability
+        let fields = anonInfo.SortedNames |> String.concat ","
+        "AnonRecd:" + fields
+    | TOp.AnonRecdGet (anonInfo, idx) ->
+        let fields = anonInfo.SortedNames |> String.concat ","
+        "AnonRecdGet:" + fields + ":" + string idx
+    | TOp.Array -> "Array"
+    | TOp.Bytes bytes ->
+        // Hash the actual byte content
+        let bytesHash = bytes |> Array.fold (fun acc b -> hashCombine acc (int b)) 17
+        "Bytes:" + string bytesHash
+    | TOp.UInt16s arr ->
+        // Hash the actual uint16 content
+        let arrHash = arr |> Array.fold (fun acc v -> hashCombine acc (int v)) 17
+        "UInt16s:" + string arrHash
+    | TOp.While (_, marker) -> "While:" + string marker
+    | TOp.IntegerForLoop (_, _, style) -> "IntegerForLoop:" + string style
+    | TOp.TryWith _ -> "TryWith"
+    | TOp.TryFinally _ -> "TryFinally"
+    | TOp.Recd (info, tcref) -> "Recd:" + string info + ":" + tcref.LogicalName
+    | TOp.ValFieldSet rfref -> "ValFieldSet:" + rfref.FieldName
+    | TOp.ValFieldGet rfref -> "ValFieldGet:" + rfref.FieldName
+    | TOp.ValFieldGetAddr (rfref, readonly) -> "ValFieldGetAddr:" + rfref.FieldName + ":" + string readonly
+    | TOp.UnionCaseTagGet tcref -> "UnionCaseTagGet:" + tcref.LogicalName
+    | TOp.UnionCaseProof ucref -> "UnionCaseProof:" + ucref.CaseName
+    | TOp.UnionCaseFieldGet (ucref, idx) -> "UnionCaseFieldGet:" + ucref.CaseName + ":" + string idx
+    | TOp.UnionCaseFieldGetAddr (ucref, idx, readonly) ->
+        "UnionCaseFieldGetAddr:" + ucref.CaseName + ":" + string idx + ":" + string readonly
+    | TOp.UnionCaseFieldSet (ucref, idx) -> "UnionCaseFieldSet:" + ucref.CaseName + ":" + string idx
+    | TOp.ExnFieldGet (tcref, idx) -> "ExnFieldGet:" + tcref.LogicalName + ":" + string idx
+    | TOp.ExnFieldSet (tcref, idx) -> "ExnFieldSet:" + tcref.LogicalName + ":" + string idx
+    | TOp.TupleFieldGet (TupInfo.Const isStruct, idx) ->
+        let kind = if isStruct then "struct" else "ref"
+        "TupleFieldGet:" + kind + ":" + string idx
+    | TOp.ILAsm (instrs, retTypes) ->
+        let instrsStr = instrs |> List.map (fun i -> i.ToString()) |> String.concat ";"
+        let retStr = retTypes |> List.map (tyToString denv) |> String.concat ","
+        "ILAsm:" + instrsStr + ":" + retStr
+    | TOp.RefAddrGet readonly -> "RefAddrGet:" + string readonly
+    | TOp.Coerce -> "Coerce"
+    | TOp.Reraise -> "Reraise"
+    | TOp.Return -> "Return"
+    | TOp.Goto label -> "Goto:" + string label
+    | TOp.Label label -> "Label:" + string label
+    | TOp.TraitCall traitInfo -> "TraitCall:" + traitInfo.MemberLogicalName
+    | TOp.LValueOp (lvOp, vref) -> "LValueOp:" + string lvOp + ":" + vref.LogicalName
+    | TOp.ILCall (isVirtual, isProtected, isStruct, isCtor, valUseFlag, isProperty, noTailCall, ilMethRef, _, _, _) ->
+        "ILCall:" + string isVirtual + ":" + string isProtected + ":" + string isStruct + ":" +
+        string isCtor + ":" + string valUseFlag + ":" + string isProperty + ":" + string noTailCall +
+        ":" + ilMethRef.DeclaringTypeRef.FullName + "." + ilMethRef.Name
 
 let rec private exprDigest (denv: DisplayEnv) (expr: Expr) =
     let recurse = exprDigest denv
@@ -236,7 +331,7 @@ let rec private exprDigest (denv: DisplayEnv) (expr: Expr) =
 
         hashCombine 9 targetsHash
     | Expr.Op (op, typeArgs, args, _) ->
-        let opHash = stableHash (op.ToString())
+        let opHash = stableHash (opDigest denv op)
         let argsHash = args |> List.map recurse |> hashList
         let tyHash =
             typeArgs
@@ -290,6 +385,7 @@ type private BindingSnapshot =
     { Symbol: SymbolId
       InlineInfo: ValInline
       SignatureText: string
+      ConstraintsText: string
       BodyHash: int
       IsSynthesized: bool
       ContainingEntity: string option }
@@ -353,6 +449,7 @@ and private tryGetContainingEntityFullName (var: Val) =
 
 and private snapshotBinding denv path (TBind (var, expr, _)) =
     let signature = tyToString denv var.Type
+    let constraints = typarConstraintsDigest denv var.Typars
     let bodyHash = exprDigest denv expr
     let containingEntity = tryGetContainingEntityFullName var
     let memberKind = memberKindOfVal var
@@ -361,6 +458,7 @@ and private snapshotBinding denv path (TBind (var, expr, _)) =
     { Symbol = symbol
       InlineInfo = var.InlineInfo
       SignatureText = signature
+      ConstraintsText = constraints
       BodyHash = bodyHash
       IsSynthesized = var.IsCompilerGenerated
       ContainingEntity = containingEntity }: BindingSnapshot
@@ -395,6 +493,7 @@ and private snapshotTycon denv path (tycon: Tycon) =
                 |> Array.iter (fun field ->
                     sb.Append("|field:") |> ignore
                     sb.Append(field.LogicalName) |> ignore
+                    if field.IsMutable then sb.Append("[mutable]") |> ignore
                     sb.Append("=") |> ignore
                     sb.Append(tyToString denv field.FormalType) |> ignore)
             | FSharpTyconKind.TFSharpDelegate slotSig ->
@@ -456,6 +555,13 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
                       Kind = RudeEditKind.SignatureChange
                       Message =
                         $"Signature changed from '{baselineBinding.SignatureText}' to '{updatedBinding.SignatureText}'." }
+                )
+            elif baselineBinding.ConstraintsText <> updatedBinding.ConstraintsText then
+                rude.Add(
+                    { Symbol = Some baselineBinding.Symbol
+                      Kind = RudeEditKind.SignatureChange
+                      Message =
+                        $"Type parameter constraints changed from '{baselineBinding.ConstraintsText}' to '{updatedBinding.ConstraintsText}'." }
                 )
             elif baselineBinding.InlineInfo <> updatedBinding.InlineInfo then
                 rude.Add(

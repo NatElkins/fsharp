@@ -145,15 +145,18 @@ let compute
             [| TableIndex.Field
                TableIndex.Param |]
 
+    // ECMA-335 II.24.2.6: HasDeclSecurity - TypeDef(0), MethodDef(1), Assembly(2)
     let hasDeclSecurityBig =
         coded 2
             [| TableIndex.TypeDef
                TableIndex.MethodDef
                TableIndex.Assembly |]
 
+    // ECMA-335 II.24.2.6: MemberRefParent - TypeDef(0), TypeRef(1), ModuleRef(2), MethodDef(3), TypeSpec(4)
     let memberRefParentBig =
         coded 3
-            [| TableIndex.TypeRef
+            [| TableIndex.TypeDef
+               TableIndex.TypeRef
                TableIndex.ModuleRef
                TableIndex.MethodDef
                TableIndex.TypeSpec |]
