@@ -74,16 +74,21 @@ This checklist contains all issues identified during the 12-session code review 
   - Priority: High
 
 ### Validation Gaps
-- [ ] **No generic constraint validation in delta emission**
-  - File: `src/Compiler/CodeGen/IlxDeltaEmitter.fs`
+- [x] **No generic constraint validation in delta emission** ✅ ALREADY FIXED (Session 2)
+  - File: `src/Compiler/TypedTree/TypedTreeDiff.fs` (not IlxDeltaEmitter.fs)
   - Issue: Generic constraints not validated when emitting delta, could produce invalid IL
-  - Fix: Add constraint validation before emission
+  - Fix: Constraint validation happens in TypedTreeDiff.fs (lines 559-565) where changes are detected and flagged as RudeEditKind.SignatureChange. EditAndContinueLanguageService.fs (line 179-180) rejects all RudeEdits before calling the emitter.
+  - Note: Fixed as part of Session 2 work adding `constraintDigest` and `typarConstraintsDigest` functions
   - Priority: High
 
-- [ ] **Fragile async state machine attribute emission**
+- [x] **Fragile async state machine attribute emission** ✅ VERIFIED
   - File: `src/Compiler/CodeGen/IlxDeltaEmitter.fs`
   - Issue: Uses naming pattern `methodKey.Name + "@hotreload"` which may not match runtime expectations
-  - Fix: Verify attribute naming matches Roslyn/runtime requirements
+  - Verification: The `@hotreload` naming pattern is intentional and correct for F# hot reload. This is tested in:
+    - `NameMapTests.fs:138`: "Expected async-generated types to use @hotreload naming"
+    - `MdvValidationTests.fs:2543`: "mdv validates method-body edit with async state machine"
+    - `PdbTests.fs:939`: "emitDelta emits portable PDB deltas across async helper generations"
+  - The runtime doesn't require specific type names; what matters is that AsyncStateMachineAttribute correctly references the generated type
   - Priority: High
 
 ### Code Quality
@@ -110,10 +115,10 @@ This checklist contains all issues identified during the 12-session code review 
 ## Session 4: Metadata Table Generation
 
 ### ECMA-335 Compliance
-- [ ] **Parameter EncLog mismatch**
-  - File: `src/Compiler/CodeGen/FSharpDeltaMetadataWriter.fs:160-162, 319-330`
-  - Issue: `parameterEncCount` excludes SequenceNumber=0 (return value) but loop includes all
-  - Fix: Make count and loop consistent (either both include or both exclude seq 0)
+- [x] **Parameter EncLog mismatch** ✅ FIXED
+  - File: `src/Compiler/CodeGen/FSharpDeltaMetadataWriter.fs:160-162, 204-207`
+  - Issue: `parameterEncCount` excluded SequenceNumber=0 (return value) but the loop at lines 319-330 added ALL parameter rows to EncLog/EncMap, causing capacity mismatch
+  - Fix: Removed unused `parameterEncCount` calculation and use `parameterUpdateCount` consistently for both Param table capacity and EncLog/EncMap capacity
   - Priority: High
 
 - [x] **CustomAttribute parent encoding incomplete (1 of 21 types)** ✅ FIXED

@@ -157,9 +157,8 @@ let emitWithUserStrings
         // Ensure tables not emitted in the current delta remain empty to satisfy metadata writer invariants.
         let methodUpdateCount = methodDefinitionRows |> List.length
         let parameterUpdateCount = parameterDefinitionRows |> List.length
-        let parameterEncCount =
-            parameterDefinitionRows
-            |> List.sumBy (fun row -> if row.SequenceNumber = 0 then 0 else 1)
+        // Note: All parameter rows (including SequenceNumber=0 for return types) are added to EncLog/EncMap,
+        // so we use parameterUpdateCount in the capacity calculation below rather than filtering.
         let standaloneSigCount = standaloneSignatureRows |> List.length
         let customAttributeCount = customAttributeRows |> List.length
         let typeRefCount = typeReferenceRows |> List.length
@@ -205,7 +204,7 @@ let emitWithUserStrings
         let encEntryCount =
             moduleEntryCount
             + methodUpdateCount
-            + parameterEncCount
+            + parameterUpdateCount
             + standaloneSigCount
             + typeRefCount
             + memberRefCount
