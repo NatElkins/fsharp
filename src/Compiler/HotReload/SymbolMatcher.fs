@@ -66,12 +66,18 @@ module FSharpSymbolMatcher =
             let basicName = GetBasicNameOfPossibleCompilerGeneratedName typeDef.Name
             match buckets.TryGetValue basicName with
             | true, aliases when aliases.Length > 0 ->
-                let fullName = typeRef.FullName
+                // Compute prefix directly from typeRef structure rather than string manipulation
+                // on FullName, which can fail for generic types or mangled names
                 let prefix =
-                    if fullName.EndsWith(typeDef.Name, StringComparison.Ordinal) then
-                        fullName.Substring(0, fullName.Length - typeDef.Name.Length)
-                    else
-                        fullName
+                    match typeRef.Enclosing with
+                    | [] ->
+                        // Top-level type: Name may include namespace (e.g., "Namespace.TypeName")
+                        match typeRef.Name.LastIndexOf('.') with
+                        | -1 -> ""
+                        | idx -> typeRef.Name.Substring(0, idx + 1)
+                    | enclosing ->
+                        // Nested type: prefix is enclosing path + "."
+                        String.concat "." enclosing + "."
 
                 for alias in aliases do
                     if alias <> typeDef.Name then

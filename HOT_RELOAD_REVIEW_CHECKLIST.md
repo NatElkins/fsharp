@@ -231,11 +231,13 @@ This checklist contains all issues identified during the 12-session code review 
     Throws descriptive exception if exceeded. Protects against stack overflow on malformed IL.
   - Priority: Medium
 
-- [ ] **Incorrect synthesized name prefix calculation**
-  - File: `src/Compiler/HotReload/SymbolMatcher.fs:58-78`
+- [x] **Incorrect synthesized name prefix calculation** ✅ FIXED
+  - File: `src/Compiler/HotReload/SymbolMatcher.fs:68-80`
   - Issue: Prefix calculation fails for generic types or mangled names
   - Example: `fullName = "Namespace.Outer`1+Closure@123"`, `typeDef.Name = "Closure@123-1"` produces wrong prefix
-  - Fix: Use ILTypeRef.Namespace and ILTypeRef.Name directly
+  - Fix: Replaced string manipulation on FullName with direct use of ILTypeRef.Enclosing structure.
+    For nested types: prefix = enclosing path + ".". For top-level: extract namespace from Name.
+    This is structurally correct regardless of name encoding.
   - Priority: High
 
 - [ ] **Misleading error message in MetadataAggregator constructor**
