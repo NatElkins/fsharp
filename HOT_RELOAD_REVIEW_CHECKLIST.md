@@ -163,10 +163,10 @@ This checklist contains all issues identified during the 12-session code review 
     remains unaligned as per Roslyn behavior.
   - Priority: High
 
-- [ ] **Property/Event Map InvalidOp exceptions**
-  - File: `src/Compiler/CodeGen/FSharpDeltaMetadataWriter.fs:462, 476`
-  - Issue: `invalidOp` for missing FirstPropertyRowId/FirstEventRowId crashes vs graceful error
-  - Fix: Add validation earlier or use failwith with context
+- [x] **Property/Event Map InvalidOp exceptions** ✅ FIXED
+  - File: `src/Compiler/CodeGen/FSharpDeltaMetadataWriter.fs:467, 481`
+  - Issue: `invalidOp` for missing FirstPropertyRowId/FirstEventRowId crashed without context
+  - Fix: Changed to `invalidArg` with row ID and TypeDef info in error message
   - Priority: Medium
 
 ---

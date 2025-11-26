@@ -464,7 +464,7 @@ let emitWithUserStrings
                     let propertyListHandle =
                         match row.FirstPropertyRowId with
                         | Some deltaRowId -> MetadataTokens.PropertyDefinitionHandle deltaRowId
-                        | None -> invalidOp "Property map rows marked as added require a property list pointer."
+                        | None -> invalidArg "row" $"PropertyMap row {row.RowId} (TypeDef={row.TypeDefRowId}) marked as added requires a FirstPropertyRowId"
                     metadataBuilder.AddPropertyMap(parentHandle, propertyListHandle) |> ignore
 
                 encLog.Add(struct (TableIndex.PropertyMap, row.RowId, EditAndContinueOperation.AddProperty))
@@ -478,7 +478,7 @@ let emitWithUserStrings
                     let eventListHandle =
                         match row.FirstEventRowId with
                         | Some deltaRowId -> MetadataTokens.EventDefinitionHandle deltaRowId
-                        | None -> invalidOp "Event map rows marked as added require an event list pointer."
+                        | None -> invalidArg "row" $"EventMap row {row.RowId} (TypeDef={row.TypeDefRowId}) marked as added requires a FirstEventRowId"
                     metadataBuilder.AddEventMap(parentHandle, eventListHandle) |> ignore
 
                 encLog.Add(struct (TableIndex.EventMap, row.RowId, EditAndContinueOperation.AddEvent))
