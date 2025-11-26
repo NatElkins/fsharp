@@ -253,11 +253,13 @@ This checklist contains all issues identified during the 12-session code review 
 ## Session 7: Session Management & Service Layer
 
 ### Thread-Safety Bugs
-- [ ] **HotReloadState.session unsynchronized mutable state**
-  - File: `src/Compiler/HotReload/HotReloadState.fs:15`
+- [x] **HotReloadState.session unsynchronized mutable state** ✅ FIXED
+  - File: `src/Compiler/HotReload/HotReloadState.fs:15-82`
   - Issue: `let mutable private session` accessed by multiple threads without locks
   - Impact: Torn reads, lost updates, data corruption in IDE scenarios
-  - Fix: Add `lock sessionLock (fun () -> ...)` wrapper
+  - Fix: Added `sessionLock` object and wrapped all functions (setBaseline, clearBaseline,
+    tryGetBaseline, tryGetSession, updateImplementationFiles, updateBaseline, recordDeltaApplied)
+    with `lock sessionLock (fun () -> ...)` to ensure atomic read-modify-write operations.
   - Priority: **CRITICAL** (merge blocker)
 
 - [ ] **Dual state without coordination**

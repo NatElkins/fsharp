@@ -12,63 +12,71 @@ type HotReloadSession =
         PreviousGenerationId: Guid option
     }
 
+let private sessionLock = obj ()
 let mutable private session: HotReloadSession voption = ValueNone
 
 let setBaseline (value: FSharpEmitBaseline) (implementationFiles: CheckedAssemblyAfterOptimization) =
-    let previousGenerationId =
-        if value.EncId = Guid.Empty then
-            None
-        else
-            Some value.EncId
+    lock sessionLock (fun () ->
+        let previousGenerationId =
+            if value.EncId = Guid.Empty then
+                None
+            else
+                Some value.EncId
 
-    session <-
-        ValueSome
-            {
-                Baseline = value
-                ImplementationFiles = implementationFiles
-                CurrentGeneration = max 1 value.NextGeneration
-                PreviousGenerationId = previousGenerationId
-            }
+        session <-
+            ValueSome
+                {
+                    Baseline = value
+                    ImplementationFiles = implementationFiles
+                    CurrentGeneration = max 1 value.NextGeneration
+                    PreviousGenerationId = previousGenerationId
+                })
 
-let clearBaseline () = session <- ValueNone
+let clearBaseline () =
+    lock sessionLock (fun () -> session <- ValueNone)
 
 let tryGetBaseline () =
-    match session with
-    | ValueSome s -> ValueSome s.Baseline
-    | ValueNone -> ValueNone
+    lock sessionLock (fun () ->
+        match session with
+        | ValueSome s -> ValueSome s.Baseline
+        | ValueNone -> ValueNone)
 
-let tryGetSession () = session
+let tryGetSession () =
+    lock sessionLock (fun () -> session)
 
 let updateImplementationFiles (implementationFiles: CheckedAssemblyAfterOptimization) =
-    match session with
-    | ValueSome state ->
-        session <-
-            ValueSome
-                {
-                    state with
-                        ImplementationFiles = implementationFiles
-                }
-    | ValueNone -> ()
+    lock sessionLock (fun () ->
+        match session with
+        | ValueSome state ->
+            session <-
+                ValueSome
+                    {
+                        state with
+                            ImplementationFiles = implementationFiles
+                    }
+        | ValueNone -> ())
 
 let updateBaseline (baseline: FSharpEmitBaseline) =
-    match session with
-    | ValueSome state ->
-        session <-
-            ValueSome
-                {
-                    state with
-                        Baseline = baseline
-                }
-    | ValueNone -> ()
+    lock sessionLock (fun () ->
+        match session with
+        | ValueSome state ->
+            session <-
+                ValueSome
+                    {
+                        state with
+                            Baseline = baseline
+                    }
+        | ValueNone -> ())
 
 let recordDeltaApplied (generationId: Guid) =
-    match session with
-    | ValueSome state ->
-        session <-
-            ValueSome
-                {
-                    state with
-                        CurrentGeneration = state.CurrentGeneration + 1
-                        PreviousGenerationId = Some generationId
-                }
-    | ValueNone -> ()
+    lock sessionLock (fun () ->
+        match session with
+        | ValueSome state ->
+            session <-
+                ValueSome
+                    {
+                        state with
+                            CurrentGeneration = state.CurrentGeneration + 1
+                            PreviousGenerationId = Some generationId
+                    }
+        | ValueNone -> ())
