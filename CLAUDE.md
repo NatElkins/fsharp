@@ -50,6 +50,15 @@ dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.
 3. **Medium (22 issues)** - Post-merge acceptable
 4. **Low (15 issues)** - Technical debt
 
+## Reporting Test Results Accurately
+
+**Never say "all tests pass" if any tests fail.** Even if failures seem unrelated or infrastructure-caused, report the actual numbers:
+
+- Bad: "130 HotReload service tests: All pass (4 fail due to infrastructure)"
+- Good: "130 pass, 4 fail (infrastructure - missing fsi.dll from clean build)"
+
+If failures are infrastructure-related, investigate or note them separately, but don't claim success when there are failures.
+
 ## Debugging Unexpected Test Failures
 
 If a test fails unexpectedly (especially one that was previously passing):
