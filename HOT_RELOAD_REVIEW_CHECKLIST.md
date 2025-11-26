@@ -4,6 +4,18 @@ This checklist contains all issues identified during the 12-session code review 
 
 ---
 
+## Pre-existing Test Failures
+
+- [ ] **Failing test: module rows chain enc ids and reuse name/mvid across generations**
+  - File: `tests/FSharp.Compiler.Service.Tests/HotReload/FSharpDeltaMetadataWriterTests.fs:1558`
+  - Issue: `gen2RowBaseIdx` is 0 but expected 4 (`baselineGuidEntries + 3`)
+  - Root cause: Generation 2 deltas not setting EncBaseId GUID index correctly in module row
+  - Debug output shows `encBaseIndex=1` and `baseOffset=0` instead of proper chained index
+  - Impact: Multi-generation delta GUID heap indexing broken
+  - Priority: High (affects generation 2+ deltas)
+
+---
+
 ## Session 1: Architecture & Type Inventory
 
 ### Type Duplication
