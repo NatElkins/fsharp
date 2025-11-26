@@ -16,7 +16,9 @@ open Microsoft.FSharp.Collections
 [<Sealed>]
 type FSharpMetadataAggregator(readers: ImmutableArray<MetadataReader>) =
     do
-        if readers.IsDefaultOrEmpty then
+        if readers.IsDefault then
+            invalidArg (nameof readers) "Readers array is uninitialized (default struct value)."
+        elif readers.IsEmpty then
             invalidArg (nameof readers) "At least one metadata reader is required."
 
     let readersArray = readers.ToArray()

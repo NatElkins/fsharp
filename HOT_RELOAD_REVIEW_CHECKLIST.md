@@ -240,10 +240,12 @@ This checklist contains all issues identified during the 12-session code review 
     This is structurally correct regardless of name encoding.
   - Priority: High
 
-- [ ] **Misleading error message in MetadataAggregator constructor**
-  - File: `src/Compiler/HotReload/FSharpMetadataAggregator.fs:17-20`
+- [x] **Misleading error message in MetadataAggregator constructor** ✅ FIXED
+  - File: `src/Compiler/HotReload/FSharpMetadataAggregator.fs:17-22`
   - Issue: Doesn't distinguish uninitialized vs empty readers array
-  - Fix: Separate error messages for `IsDefault` vs `IsEmpty`
+  - Fix: Separated `IsDefaultOrEmpty` into two checks:
+    - `IsDefault`: "Readers array is uninitialized (default struct value)"
+    - `IsEmpty`: "At least one metadata reader is required"
   - Priority: Low
 
 ---
