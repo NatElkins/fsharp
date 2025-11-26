@@ -127,10 +127,11 @@ This checklist contains all issues identified during the 12-session code review 
   - Fix: Implemented all 21 coded index tags per ECMA-335 II.24.2.6: MethodDef(0), Field(1), TypeRef(2), TypeDef(3), Param(4), InterfaceImpl(5), MemberRef(6), Module(7), Property(9), Event(10), StandAloneSig(11), ModuleRef(12), TypeSpec(13), Assembly(14), AssemblyRef(15), File(16), ExportedType(17), ManifestResource(18), GenericParam(19), GenericParamConstraint(20), MethodSpec(21). Note: DeclSecurity(8) not directly exposed via HandleKind.
   - Priority: **CRITICAL** (merge blocker)
 
-- [ ] **GUID heap index calculation potential off-by-one**
-  - File: `src/Compiler/CodeGen/DeltaMetadataSerializer.fs:172-181`
-  - Issue: Adjustment logic for delta-local vs absolute indices may be incorrect
-  - Fix: Verify GUID indices are correctly marked as IsAbsolute in all code paths
+- [x] **GUID heap index calculation potential off-by-one** ✅ FIXED
+  - File: `src/Compiler/CodeGen/DeltaMetadataTables.fs:476-479`
+  - Issue: Module row GUID indices used `rowElementGuidAbsolute` which wrote delta-local indices directly, but runtime expects combined heap indices (baseline + delta-local)
+  - Fix: Changed to `rowElementGuid` so the serializer properly adjusts by adding `baselineEntries` to get combined indices. Module row now correctly writes mvid=2, enc=3 instead of mvid=1, enc=1.
+  - Note: The pre-existing test failure for encBaseId=0 is a separate baseline chaining issue documented below
   - Priority: High
 
 - [ ] **UserString heap offset contradicts absolute offset design**

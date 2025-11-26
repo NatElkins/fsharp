@@ -460,7 +460,8 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
                 | _ -> addStringValue name, false
             // For EnC deltas (matching Roslyn's approach):
             // - Delta GUID heap contains: nil at 1, MVID at 2, EncId at 3
-            // - All indices are delta-local absolute values (not adjusted by baseline)
+            // - Indices are delta-local; the serializer adjusts by adding baseline entries
+            //   to get combined heap indices that the runtime expects
             // Force-add GUIDs in order to get predictable indices:
             let _nilGuidIndex = forceAddGuidValue System.Guid.Empty  // Index 1 (nil placeholder)
             let mvidIndex = forceAddGuidValue moduleId               // Index 2
@@ -473,9 +474,9 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
                 [|
                     rowElementUShort (uint16 generation)
                     stringElement nameToken
-                    rowElementGuidAbsolute mvidIndex      // MVID - delta-local absolute index
-                    rowElementGuidAbsolute encIdIndex     // EncId - delta-local absolute index
-                    rowElementGuidAbsolute encBaseIdIndex // EncBaseId - 0 or delta-local index
+                    rowElementGuid mvidIndex      // MVID - serializer adds baseline entries
+                    rowElementGuid encIdIndex     // EncId - serializer adds baseline entries
+                    rowElementGuid encBaseIdIndex // EncBaseId - 0 or serializer-adjusted index
                 |]
             moduleRows.Add row
 
