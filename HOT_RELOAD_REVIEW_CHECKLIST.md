@@ -353,11 +353,13 @@ This checklist contains all issues identified during the 12-session code review 
   - Priority: High
 
 ### Compilation Issues
-- [ ] **Double emission in fsc.fs baseline capture**
-  - File: `src/Compiler/Driver/fsc.fs:1222-1259`
+- [x] **Double emission in fsc.fs baseline capture** ✅ FIXED
+  - File: `src/Compiler/Driver/fsc.fs:1226-1275`
   - Issue: Assembly emitted to disk, then emitted again in-memory for baseline
   - Impact: 2x compilation time, potential GUID mismatch between disk and baseline
-  - Fix: Emit once, use same artifacts for both
+  - Fix: In hot reload capture mode, now emits once via `WriteILBinaryInMemoryWithArtifacts`,
+    writes the bytes to disk via `File.WriteAllBytes`, and uses the same bytes for baseline.
+    Normal compilation still uses `WriteILBinaryFile` directly.
   - Priority: High
 
 - [x] **Unsynchronized CompilerGlobalState.SynthesizedTypeMaps** ✅ FIXED

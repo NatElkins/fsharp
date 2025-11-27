@@ -1223,11 +1223,17 @@ let main6
                             pathMap = tcConfig.pathMap
                         }
 
-                    ILBinaryWriter.WriteILBinaryFile(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
-
                     if tcConfig.hotReloadCapture then
+                        // Emit once in-memory, write to disk, and use same artifacts for baseline.
+                        // This avoids double emission (previously WriteILBinaryFile then WriteILBinaryInMemoryWithArtifacts).
                         let assemblyBytes, pdbBytesOpt, tokenMappings, _ =
                             ILBinaryWriter.WriteILBinaryInMemoryWithArtifacts(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
+
+                        // Write the emitted bytes to disk
+                        File.WriteAllBytes(outfile, assemblyBytes)
+                        match pdbfile, pdbBytesOpt with
+                        | Some pdbPath, Some pdbBytes -> File.WriteAllBytes(pdbPath, pdbBytes)
+                        | _ -> ()
 
                         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
 
@@ -1264,6 +1270,9 @@ let main6
                         match tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps with
                         | Some map -> map.BeginSession()
                         | None -> ()
+                    else
+                        // Normal compilation without hot reload capture
+                        ILBinaryWriter.WriteILBinaryFile(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
                 with Failure msg ->
                     error (Error(FSComp.SR.fscProblemWritingBinary (outfile, msg), rangeCmdArgs))
         with e ->
