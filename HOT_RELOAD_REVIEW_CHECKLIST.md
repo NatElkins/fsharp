@@ -280,10 +280,11 @@ This checklist contains all issues identified during the 12-session code review 
   - Priority: **CRITICAL** (merge blocker)
 
 ### Validation and Error Handling
-- [ ] **Missing generation counter validation**
-  - File: `src/Compiler/HotReload/HotReloadState.fs:64-74`
+- [x] **Missing generation counter validation** ✅ FIXED
+  - File: `src/Compiler/HotReload/HotReloadState.fs:71-86`
   - Issue: `recordDeltaApplied` silently no-ops if no session, no GUID validation
-  - Fix: Error if no session, validate generationId matches expected
+  - Fix: Added validation for empty GUID (invalidArg) and throws invalidOp if no session exists.
+    This prevents silent failures when attempting to record a delta with no active session.
   - Priority: Medium
 
 - [ ] **Exception swallowing in trace logging**

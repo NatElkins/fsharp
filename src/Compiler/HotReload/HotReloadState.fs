@@ -69,6 +69,9 @@ let updateBaseline (baseline: FSharpEmitBaseline) =
         | ValueNone -> ())
 
 let recordDeltaApplied (generationId: Guid) =
+    if generationId = Guid.Empty then
+        invalidArg (nameof generationId) "Generation ID cannot be empty GUID."
+
     lock sessionLock (fun () ->
         match session with
         | ValueSome state ->
@@ -79,4 +82,5 @@ let recordDeltaApplied (generationId: Guid) =
                             CurrentGeneration = state.CurrentGeneration + 1
                             PreviousGenerationId = Some generationId
                     }
-        | ValueNone -> ())
+        | ValueNone ->
+            invalidOp "Cannot record delta applied: no active hot reload session.")
