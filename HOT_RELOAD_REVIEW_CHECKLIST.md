@@ -449,10 +449,12 @@ This checklist contains all issues identified during the 12-session code review 
     (per-file vs global) so maintaining both caused drift. Added test to verify behavior.
   - Priority: Medium
 
-- [ ] **Missing snapshot validation**
-  - File: `src/Compiler/TypedTree/SynthesizedTypeMaps.fs`
+- [x] **Missing snapshot validation** ✅ FIXED
+  - File: `src/Compiler/TypedTree/SynthesizedTypeMaps.fs:23-28`
   - Issue: No validation that snapshot names match expected pattern
-  - Fix: Add validation that names start with basicName
+  - Fix: Added `validateName` function in `LoadSnapshot` that verifies each name starts
+    with `basicName@`. Added 3 tests for valid snapshots, basicName mismatch, and
+    missing @ marker.
   - Priority: Low
 
 ---

@@ -59,3 +59,34 @@ module NameMapTests =
 
         Assert.Equal<string>(first, replayFirst)
         Assert.Equal<string>(second, replaySecond)
+
+    [<Fact>]
+    let ``LoadSnapshot validates name prefix`` () =
+        let map = FSharpSynthesizedTypeMaps()
+
+        // Valid snapshots with different suffixes should work
+        let validSnapshot = [|
+            ("test", [| "test@hotreload"; "test@hotreload-1" |])
+            ("Name", [| "Name@" |])  // Simple marker suffix
+            ("Circle", [| "Circle@DebugTypeProxy" |])  // Debug proxy
+        |]
+        map.LoadSnapshot validSnapshot // Should not throw
+
+    [<Fact>]
+    let ``LoadSnapshot rejects basicName mismatch`` () =
+        let map = FSharpSynthesizedTypeMaps()
+
+        // Name doesn't start with basicName@
+        let mismatchedSnapshot = [| ("foo", [| "bar@hotreload" |]) |]
+        let ex = Assert.Throws<System.ArgumentException>(fun () -> map.LoadSnapshot mismatchedSnapshot)
+        Assert.Contains("foo@", ex.Message)
+        Assert.Contains("bar@hotreload", ex.Message)
+
+    [<Fact>]
+    let ``LoadSnapshot rejects name without marker`` () =
+        let map = FSharpSynthesizedTypeMaps()
+
+        // Name missing the @ marker entirely
+        let invalidSnapshot = [| ("test", [| "testhotreload" |]) |]
+        let ex = Assert.Throws<System.ArgumentException>(fun () -> map.LoadSnapshot invalidSnapshot)
+        Assert.Contains("test@", ex.Message)

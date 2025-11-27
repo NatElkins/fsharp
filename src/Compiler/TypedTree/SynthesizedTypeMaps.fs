@@ -20,6 +20,13 @@ type FSharpSynthesizedTypeMaps() =
     let computeName basicName index =
         makeHotReloadName basicName index
 
+    /// Validates that a generated name starts with the basicName followed by '@'.
+    let validateName basicName (name: string) index =
+        // Names should start with basicName + "@" (the compiler-generated marker)
+        let expectedPrefix = basicName + "@"
+        if not (name.StartsWith(expectedPrefix, System.StringComparison.Ordinal)) then
+            invalidArg "snapshot" $"Name '{name}' at index {index} should start with '{expectedPrefix}' for basicName '{basicName}'"
+
     member _.GetOrAddName(basicName: string) =
         let bucket = buckets.GetOrAdd(basicName, fun _ -> ResizeArray())
         let nextOrdinal = ordinals.AddOrUpdate(basicName, 1, fun _ value -> value + 1)
@@ -53,6 +60,8 @@ type FSharpSynthesizedTypeMaps() =
             ordinals.Clear()
 
             for (basicName, names) in snapshot do
+                // Validate each name matches expected pattern
+                names |> Array.iteri (fun i name -> validateName basicName name i)
                 let bucket = createBucket names
                 buckets[basicName] <- bucket
                 ordinals[basicName] <- 0)
