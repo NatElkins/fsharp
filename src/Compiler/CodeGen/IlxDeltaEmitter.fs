@@ -11,7 +11,6 @@ open System.Reflection
 open System.Reflection.Emit
 open System.Reflection.PortableExecutable
 open FSharp.Compiler.AbstractIL.IL
-open FSharp.Compiler.AbstractIL.ILDelta
 open FSharp.Compiler.AbstractIL.ILPdbWriter
 open FSharp.Compiler.HotReload
 open FSharp.Compiler.HotReload.SymbolChanges

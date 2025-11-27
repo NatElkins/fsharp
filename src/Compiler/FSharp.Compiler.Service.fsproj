@@ -237,7 +237,6 @@
     <Compile Include="AbstractIL\ilread.fs" />
     <Compile Include="AbstractIL\ilwritepdb.fsi" />
     <Compile Include="AbstractIL\ilwritepdb.fs" />
-    <Compile Include="AbstractIL\ilDelta.fs" />
     <Compile Include="AbstractIL\ilwrite.fsi" />
     <Compile Include="AbstractIL\ilwrite.fs" />
     <Compile Include="AbstractIL\ilreflect.fsi" />

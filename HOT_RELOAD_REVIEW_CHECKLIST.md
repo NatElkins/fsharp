@@ -307,22 +307,25 @@ This checklist contains all issues identified during the 12-session code review 
 ## Session 8: AbstractIL Integration
 
 ### Dead/Incomplete Code
-- [ ] **Dead code: ilDelta.buildEncTables never called**
-  - File: `src/Compiler/AbstractIL/ilDelta.fs:7-22`
+- [x] **Dead code: ilDelta.buildEncTables never called** ✅ FIXED
+  - File: `src/Compiler/AbstractIL/ilDelta.fs` (DELETED)
   - Issue: Function defined but never invoked anywhere
-  - Fix: Delete file and remove import from IlxDeltaEmitter.fs
+  - Fix: Deleted the file, removed import from IlxDeltaEmitter.fs, removed from fsproj.
+    The actual EncLog/EncMap implementation is in FSharpDeltaMetadataWriter.fs which is correct.
   - Priority: Low (code quality)
 
-- [ ] **ilDelta.buildEncTables incomplete (if it were used)**
-  - File: `src/Compiler/AbstractIL/ilDelta.fs`
+- [x] **ilDelta.buildEncTables incomplete (if it were used)** ✅ FIXED
+  - File: `src/Compiler/AbstractIL/ilDelta.fs` (DELETED)
   - Issue: Only handles TypeDef/MethodDef, missing Module, Param, TypeRef, MemberRef, etc.
   - Note: Actual impl in FSharpDeltaMetadataWriter.fs is correct
+  - Fix: File deleted since it was dead code.
   - Priority: Low (dead code)
 
-- [ ] **ilDelta.buildEncTables uses wrong operation codes (if it were used)**
-  - File: `src/Compiler/AbstractIL/ilDelta.fs:10-11`
+- [x] **ilDelta.buildEncTables uses wrong operation codes (if it were used)** ✅ FIXED
+  - File: `src/Compiler/AbstractIL/ilDelta.fs` (DELETED)
   - Issue: All operations use Default(0), should use AddMethod(1), AddField(2), etc. for added rows
   - Note: Actual impl in FSharpDeltaMetadataWriter.fs is correct
+  - Fix: File deleted since it was dead code.
   - Priority: Low (dead code)
 
 ---
