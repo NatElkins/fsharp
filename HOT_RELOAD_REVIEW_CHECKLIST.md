@@ -371,11 +371,12 @@ This checklist contains all issues identified during the 12-session code review 
   - Priority: **CRITICAL** (merge blocker)
 
 ### File I/O Issues
-- [ ] **Unreliable file change detection (1 second timeout)**
+- [x] **Unreliable file change detection (1 second timeout)** ✅ FIXED
   - File: `src/Compiler/Service/service.fs:355-379`
   - Issue: 40 attempts * 25ms = 1 second may not be enough for slow I/O
   - Impact: Reads corrupted/partial files
-  - Fix: Increase timeout, add retry with exponential backoff, check file locks
+  - Fix: Implemented exponential backoff (25ms→50ms→100ms→200ms, capped) with 5 second total
+    timeout (vs 500ms/1s before). Both `waitForStableFile` and `waitForFileChange` updated.
   - Priority: High
 
 - [ ] **Missing error check in HotReloadOptimizationData**

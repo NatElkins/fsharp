@@ -313,13 +313,15 @@ type FSharpChecker
         |> Array.filter (fun diagnostic -> diagnostic.Severity = FSharpDiagnosticSeverity.Error)
 
     let waitForStableFile path =
-        let maxAttempts = 20
-        let sleepMillis = 25
-        let mutable attempts = 0
+        // Use exponential backoff: 25ms, 50ms, 100ms, 200ms, 200ms, ...
+        // Total max wait ~5 seconds (vs 500ms before) for slow I/O scenarios.
+        let maxTotalWaitMs = 5000
+        let mutable totalWaited = 0
+        let mutable sleepMillis = 25
         let mutable stableCount = 0
         let mutable lastWrite = DateTime.MinValue
         let mutable lastSize = -1L
-        while attempts < maxAttempts && stableCount < 2 do
+        while totalWaited < maxTotalWaitMs && stableCount < 2 do
             let exists = File.Exists path
             let currentWrite =
                 if exists then File.GetLastWriteTimeUtc path else DateTime.MinValue
@@ -333,7 +335,8 @@ type FSharpChecker
                 lastSize <- currentSize
             if stableCount < 2 then
                 Thread.Sleep sleepMillis
-            attempts <- attempts + 1
+                totalWaited <- totalWaited + sleepMillis
+                sleepMillis <- min 200 (sleepMillis * 2) // Exponential backoff, capped at 200ms
 
     let shouldTraceHotReload () =
         match System.Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_STRINGS") with
@@ -353,12 +356,14 @@ type FSharpChecker
             None
 
     let waitForFileChange path previousTimestamp previousHash =
-        let maxAttempts = 40
-        let sleepMillis = 25
-        let mutable attempts = 0
+        // Use exponential backoff: 25ms, 50ms, 100ms, 200ms, 200ms, ...
+        // Total max wait ~5 seconds (vs 1 second before) for slow I/O scenarios.
+        let maxTotalWaitMs = 5000
+        let mutable totalWaited = 0
+        let mutable sleepMillis = 25
         let mutable observedChange = false
         let trace = shouldTraceHotReload ()
-        while attempts < maxAttempts && not observedChange do
+        while totalWaited < maxTotalWaitMs && not observedChange do
             let current =
                 if File.Exists path then File.GetLastWriteTimeUtc path else DateTime.MinValue
             if current <> previousTimestamp then
@@ -374,7 +379,8 @@ type FSharpChecker
                     observedChange <- true
                 | _ ->
                     Thread.Sleep sleepMillis
-                    attempts <- attempts + 1
+                    totalWaited <- totalWaited + sleepMillis
+                    sleepMillis <- min 200 (sleepMillis * 2) // Exponential backoff, capped at 200ms
         if observedChange then
             waitForStableFile path
 
