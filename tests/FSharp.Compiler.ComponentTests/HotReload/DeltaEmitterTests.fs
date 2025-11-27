@@ -1599,3 +1599,21 @@ module DeltaEmitterTests =
         Assert.True(ex.Message.Length > 0, "Exception message should not be empty")
         Assert.Contains("Sample.FieldHolder", ex.Message)
         Assert.Contains("trackedField", ex.Message)
+
+    [<Fact>]
+    let ``recordDeltaApplied throws for empty GUID`` () =
+        // Ensure no session is active
+        FSharp.Compiler.HotReloadState.clearBaseline()
+
+        let ex = Assert.Throws<ArgumentException>(fun () ->
+            FSharp.Compiler.HotReloadState.recordDeltaApplied System.Guid.Empty)
+        Assert.Contains("empty GUID", ex.Message)
+
+    [<Fact>]
+    let ``recordDeltaApplied throws when no session active`` () =
+        // Ensure no session is active
+        FSharp.Compiler.HotReloadState.clearBaseline()
+
+        let ex = Assert.Throws<InvalidOperationException>(fun () ->
+            FSharp.Compiler.HotReloadState.recordDeltaApplied (System.Guid.NewGuid()))
+        Assert.Contains("no active hot reload session", ex.Message)

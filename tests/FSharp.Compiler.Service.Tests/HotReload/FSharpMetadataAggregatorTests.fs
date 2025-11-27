@@ -865,3 +865,16 @@ module FSharpMetadataAggregatorTests =
         Assert.Equal(0, generation)
         let baselineEvent = findEvent baselineReader
         Assert.Equal(baselineEvent, translated)
+
+    [<Fact>]
+    let ``aggregator constructor throws for uninitialized readers array`` () =
+        let ex = Assert.Throws<ArgumentException>(fun () ->
+            // ImmutableArray default value (uninitialized)
+            FSharpMetadataAggregator(Unchecked.defaultof<ImmutableArray<MetadataReader>>) |> ignore)
+        Assert.Contains("uninitialized", ex.Message)
+
+    [<Fact>]
+    let ``aggregator constructor throws for empty readers array`` () =
+        let ex = Assert.Throws<ArgumentException>(fun () ->
+            FSharpMetadataAggregator(ImmutableArray<MetadataReader>.Empty) |> ignore)
+        Assert.Contains("At least one", ex.Message)
