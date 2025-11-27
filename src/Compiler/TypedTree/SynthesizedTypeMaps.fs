@@ -7,6 +7,7 @@ open FSharp.Compiler.GeneratedNames
 
 /// <summary>Provides stable compiler-generated names across hot reload sessions.</summary>
 type FSharpSynthesizedTypeMaps() =
+    let syncLock = obj ()
     let buckets = ConcurrentDictionary<string, ResizeArray<string>>()
     let ordinals = ConcurrentDictionary<string, int>()
 
@@ -34,25 +35,27 @@ type FSharpSynthesizedTypeMaps() =
 
     /// <summary>Resets allocation state so subsequent edits reuse the original name ordering.</summary>
     member _.BeginSession() =
-        for KeyValue(key, _) in buckets do
-            ordinals[key] <- 0
+        lock syncLock (fun () ->
+            for KeyValue(key, _) in buckets do
+                ordinals[key] <- 0)
 
     /// <summary>Captures the current stable names grouped by compiler-generated base name.</summary>
     member _.Snapshot: seq<string * string[]> =
-        seq {
-            for KeyValue(key, bucket) in buckets do
-                yield key, bucket.ToArray()
-        }
+        lock syncLock (fun () ->
+            // Materialize the snapshot under the lock to avoid race conditions
+            [| for KeyValue(key, bucket) in buckets do yield key, bucket.ToArray() |]
+            :> seq<string * string[]>)
 
     /// <summary>Loads a previously captured snapshot, replacing any existing allocation state.</summary>
     member _.LoadSnapshot(snapshot: seq<string * string[]>) =
-        buckets.Clear()
-        ordinals.Clear()
+        lock syncLock (fun () ->
+            buckets.Clear()
+            ordinals.Clear()
 
-        for (basicName, names) in snapshot do
-            let bucket = createBucket names
-            buckets[basicName] <- bucket
-            ordinals[basicName] <- 0
+            for (basicName, names) in snapshot do
+                let bucket = createBucket names
+                buckets[basicName] <- bucket
+                ordinals[basicName] <- 0)
 
 /// <summary>Retrieves a stable compiler-generated name or falls back to the provided generator.</summary>
 let nextName mapOpt basicName generate =

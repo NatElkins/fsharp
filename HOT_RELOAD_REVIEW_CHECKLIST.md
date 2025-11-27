@@ -396,16 +396,18 @@ This checklist contains all issues identified during the 12-session code review 
 ## Session 10: Name Generation & Synthesized Types
 
 ### Thread-Safety Bugs
-- [ ] **Race condition in BeginSession()**
-  - File: `src/Compiler/TypedTree/SynthesizedTypeMaps.fs:36-38`
+- [x] **Race condition in BeginSession()** ✅ FIXED
+  - File: `src/Compiler/TypedTree/SynthesizedTypeMaps.fs:36-40`
   - Issue: Iterates buckets and mutates ordinals without synchronization
-  - Fix: Add `lock buckets (fun () -> ...)`
+  - Fix: Added `syncLock` object and wrapped BeginSession in `lock syncLock`. Also
+    locked Snapshot and LoadSnapshot for comprehensive thread safety.
   - Priority: **CRITICAL** (merge blocker)
 
-- [ ] **Race condition in LoadSnapshot()**
-  - File: `src/Compiler/TypedTree/SynthesizedTypeMaps.fs:48-55`
+- [x] **Race condition in LoadSnapshot()** ✅ FIXED
+  - File: `src/Compiler/TypedTree/SynthesizedTypeMaps.fs:49-58`
   - Issue: `Clear()` then repopulate not atomic, concurrent calls corrupt state
-  - Fix: Add locking around entire operation
+  - Fix: Wrapped entire LoadSnapshot operation in `lock syncLock` to ensure atomicity.
+    Also materialized Snapshot under lock to avoid iteration races.
   - Priority: **CRITICAL** (merge blocker)
 
 ### Name Stability Issues
