@@ -88,7 +88,8 @@ type internal FSharpEditAndContinueLanguageService private () =
             try
                 let path = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-service.log")
                 File.AppendAllText(path, message)
-            with _ -> ()
+            with :? IOException as ex ->
+                eprintfn "[fsharp-hotreload][service] Failed to write trace log: %s" ex.Message
         match FSharp.Compiler.HotReloadState.tryGetSession() with
         | ValueNone -> Error HotReloadError.NoActiveSession
         | ValueSome session ->
@@ -124,7 +125,8 @@ type internal FSharpEditAndContinueLanguageService private () =
                     try
                         let path = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-service.log")
                         File.AppendAllText(path, line)
-                    with _ -> ()
+                    with :? IOException as ex ->
+                        eprintfn "[fsharp-hotreload][service] Failed to write trace log: %s" ex.Message
                 match delta.UpdatedBaseline with
                 | Some updatedBaseline ->
                     if trace then
@@ -162,11 +164,19 @@ type internal FSharpEditAndContinueLanguageService private () =
         ilModule: ILModuleDef
     ) : Result<DeltaEmissionResult, HotReloadError> =
         // Atomic check-then-restore to prevent TOCTOU race between tryGetSession
-        // returning ValueNone and setBaseline being called by another thread
+        // returning ValueNone and setBaseline being called by another thread.
+        //
+        // State restoration rationale: In some IDE scenarios, the HotReloadState.session
+        // may be cleared by EndSession() while a compilation is still in progress. The
+        // lastBaselineState serves as a backup to restore the session state, allowing
+        // delta emission to proceed even if the primary state was reset. This ensures
+        // continuous delta emission during rapid recompilation cycles without requiring
+        // explicit session restart by the host.
         let sessionOpt =
             lock stateLock (fun () ->
                 match FSharp.Compiler.HotReloadState.tryGetSession() with
                 | ValueNone ->
+                    // Restore from backup if primary session was cleared
                     match lastBaselineState with
                     | Some(baseline, implementationFiles) ->
                         FSharp.Compiler.HotReloadState.setBaseline baseline implementationFiles

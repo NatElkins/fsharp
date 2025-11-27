@@ -287,16 +287,19 @@ This checklist contains all issues identified during the 12-session code review 
     This prevents silent failures when attempting to record a delta with no active session.
   - Priority: Medium
 
-- [ ] **Exception swallowing in trace logging**
-  - File: `src/Compiler/HotReload/EditAndContinueLanguageService.fs:84-87, 120-123`
+- [x] **Exception swallowing in trace logging** ✅ FIXED
+  - File: `src/Compiler/HotReload/EditAndContinueLanguageService.fs:88-92, 125-129`
   - Issue: `with _ -> ()` swallows ALL exceptions in logging
-  - Fix: At minimum log that logging failed
+  - Fix: Changed to catch only `IOException` and report the failure message to stderr.
+    Non-IO exceptions now propagate properly rather than being silently swallowed.
   - Priority: Low
 
-- [ ] **Undocumented state restoration logic**
-  - File: `src/Compiler/HotReload/EditAndContinueLanguageService.fs:159-167`
+- [x] **Undocumented state restoration logic** ✅ FIXED
+  - File: `src/Compiler/HotReload/EditAndContinueLanguageService.fs:166-185`
   - Issue: Auto-restores session from lastBaselineState without documentation
-  - Fix: Document why this exists or remove if it's a workaround
+  - Fix: Added detailed comment explaining the purpose: lastBaselineState serves as a
+    backup to restore session state in IDE scenarios where EndSession() may be called
+    during an in-progress compilation, enabling continuous delta emission.
   - Priority: Low
 
 ---
