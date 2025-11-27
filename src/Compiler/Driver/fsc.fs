@@ -964,6 +964,14 @@ let main4
     if tcConfig.standalone && generatedCcu.UsesFSharp20PlusQuotations then
         error (Error(FSComp.SR.fscQuotationLiteralsStaticLinking0 (), rangeStartup))
 
+    // Validate hot reload option compatibility
+    if tcConfig.hotReloadCapture then
+        if not tcConfig.debuginfo then
+            error (Error(FSComp.SR.fscHotReloadRequiresDebugInfo (), rangeStartup))
+
+        if tcConfig.optSettings.LocalOptimizationsEnabled then
+            error (Error(FSComp.SR.fscHotReloadIncompatibleWithOptimization (), rangeStartup))
+
     // Compute a static linker, it gets called later.
     let staticLinker = StaticLink(ctok, tcConfig, tcImports, tcGlobals)
 

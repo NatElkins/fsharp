@@ -394,10 +394,12 @@ This checklist contains all issues identified during the 12-session code review 
   - Fix: Use TcConfig.outputFile if available
   - Priority: Low
 
-- [ ] **No validation for incompatible compiler options**
-  - File: `src/Compiler/Driver/CompilerOptions.fs:1290`
+- [x] **No validation for incompatible compiler options** ✅ FIXED
+  - File: `src/Compiler/Driver/fsc.fs:967-973`
   - Issue: No error if `--enable:hotreloaddeltas` with `--optimize+` or `--debug-`
-  - Fix: Add validation that errors on incompatible combinations
+  - Fix: Added validation in fsc.fs that errors if hotReloadCapture is true and:
+    - `debuginfo` is false (error 2026: fscHotReloadRequiresDebugInfo)
+    - `LocalOptimizationsEnabled` is true (error 2027: fscHotReloadIncompatibleWithOptimization)
   - Priority: Medium
 
 ---
