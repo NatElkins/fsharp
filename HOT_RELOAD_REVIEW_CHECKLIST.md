@@ -355,11 +355,12 @@ This checklist contains all issues identified during the 12-session code review 
   - Fix: Emit once, use same artifacts for both
   - Priority: High
 
-- [ ] **Unsynchronized CompilerGlobalState.SynthesizedTypeMaps**
-  - File: `src/Compiler/TypedTree/CompilerGlobalState.fs:88-90`
+- [x] **Unsynchronized CompilerGlobalState.SynthesizedTypeMaps** ✅ FIXED
+  - File: `src/Compiler/TypedTree/CompilerGlobalState.fs:70-92`
   - Issue: Property get/set not synchronized, accessed from multiple threads
   - Impact: Name collisions if fsc and FSharpChecker run concurrently
-  - Fix: Add synchronization or make thread-local
+  - Fix: Added `synthesizedTypeMapsLock` object and wrapped all accesses (get, set, and
+    internal `getSynthesizedMap` closure) with `lock` to ensure thread-safe access.
   - Priority: **CRITICAL** (merge blocker)
 
 ### File I/O Issues

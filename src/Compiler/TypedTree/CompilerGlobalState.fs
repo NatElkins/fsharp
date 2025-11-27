@@ -67,9 +67,11 @@ type StableNiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMap
 
 type internal CompilerGlobalState () =
     /// A global generator of compiler generated names
+    let synthesizedTypeMapsLock = obj ()
     let mutable synthesizedTypeMaps: FSharpSynthesizedTypeMaps option = None
 
-    let getSynthesizedMap () = synthesizedTypeMaps
+    let getSynthesizedMap () =
+        lock synthesizedTypeMapsLock (fun () -> synthesizedTypeMaps)
 
     let globalNng = NiceNameGenerator(getSynthesizedMap)
 
@@ -86,8 +88,8 @@ type internal CompilerGlobalState () =
     member _.IlxGenNiceNameGenerator = ilxgenGlobalNng
 
     member _.SynthesizedTypeMaps
-        with get () = synthesizedTypeMaps
-        and set value = synthesizedTypeMaps <- value
+        with get () = lock synthesizedTypeMapsLock (fun () -> synthesizedTypeMaps)
+        and set value = lock synthesizedTypeMapsLock (fun () -> synthesizedTypeMaps <- value)
 
 /// Unique name generator for stamps attached to lambdas and object expressions
 type Unique = int64
