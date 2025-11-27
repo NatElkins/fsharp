@@ -435,10 +435,13 @@ This checklist contains all issues identified during the 12-session code review 
   - Priority: High
 
 ### Code Quality
-- [ ] **Unused infrastructure: Structured name generators**
-  - File: `src/Compiler/Syntax/GeneratedNames.fs`
+- [x] **Unused infrastructure: Structured name generators** ✅ FIXED
+  - File: `src/Compiler/Generated/GeneratedNames.fs`
   - Issue: `makeStateMachineTypeName`, `makeLambdaClosureTypeName`, etc. never called
-  - Fix: Wire up to actual generation sites or remove
+  - Fix: Removed dead code: `MethodGeneratedNameInfo`, `EntityGeneratedNameInfo`,
+    `methodScopedSuffix`, `makeCompilerGeneratedValueName`, `makeStateMachineTypeName`,
+    `makeLambdaClosureTypeName`, `makeLambdaMethodName`, `makeStaticFieldName`,
+    `makeLocalValueName`. Only `makeHotReloadName` is actually used.
   - Priority: Low
 
 - [x] **Counter inconsistency in NiceNameGenerator** ✅ FIXED
