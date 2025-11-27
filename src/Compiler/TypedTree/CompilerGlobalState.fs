@@ -44,8 +44,9 @@ type NiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMaps opti
     member _.FreshCompilerGeneratedNameOfBasicName (basicName, m: range) =
         match getSynthesizedMap() with
         | Some map ->
-            // Maintain internal counters so we fall back consistently when hot reload is disabled.
-            let _ = ensureOrdinal basicName m
+            // When hot reload is enabled, use only the map's ordinals.
+            // Don't increment basicNameCounts - the counters have different keys
+            // (per-file vs global) and would drift out of sync.
             map.GetOrAddName basicName
         | None ->
             let ordinal = ensureOrdinal basicName m

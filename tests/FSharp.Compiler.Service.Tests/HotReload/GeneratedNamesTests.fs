@@ -42,3 +42,30 @@ module GeneratedNamesTests =
 
         Assert.Equal<string[]>(snapshot, [| first; second |])
         Assert.Equal<string[]>(snapshot, [| replayFirst; replaySecond |])
+
+    [<Fact>]
+    let ``NiceNameGenerator counters not incremented during hot reload mode`` () =
+        // This test verifies that when hot reload is enabled, the internal
+        // basicNameCounts counter is NOT incremented. This prevents counter drift
+        // between the per-file basicNameCounts and the global map ordinals.
+        let mutable mapEnabled = true
+        let map = FSharpSynthesizedTypeMaps()
+        map.BeginSession()
+
+        let generator = NiceNameGenerator(fun () -> if mapEnabled then Some map else None)
+
+        // Generate names while hot reload is enabled
+        let _ = generator.FreshCompilerGeneratedName("test", zeroRange)
+        let _ = generator.FreshCompilerGeneratedName("test", zeroRange)
+
+        // Disable hot reload - should start ordinals fresh
+        mapEnabled <- false
+
+        // Without the fix, these would be "test@hotreload-2" and "test@hotreload-3"
+        // because the counter was incorrectly incremented during hot reload mode.
+        // With the fix, these start at 0 since the counter wasn't touched.
+        let first = generator.FreshCompilerGeneratedName("test", zeroRange)
+        let second = generator.FreshCompilerGeneratedName("test", zeroRange)
+
+        Assert.Equal("test@hotreload", first)
+        Assert.Equal("test@hotreload-1", second)

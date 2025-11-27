@@ -441,11 +441,12 @@ This checklist contains all issues identified during the 12-session code review 
   - Fix: Wire up to actual generation sites or remove
   - Priority: Low
 
-- [ ] **Counter inconsistency in NiceNameGenerator**
-  - File: `src/Compiler/TypedTree/CompilerGlobalState.fs:33-41`
+- [x] **Counter inconsistency in NiceNameGenerator** ✅ FIXED
+  - File: `src/Compiler/TypedTree/CompilerGlobalState.fs:44-53`
   - Issue: Counter incremented even when name comes from map
   - Impact: Wrong ordinals if hot reload disabled after enabled session
-  - Fix: Don't maintain counters during map usage, or reset when disabling
+  - Fix: Removed `ensureOrdinal` call when using the map. The counters have different keys
+    (per-file vs global) so maintaining both caused drift. Added test to verify behavior.
   - Priority: Medium
 
 - [ ] **Missing snapshot validation**
