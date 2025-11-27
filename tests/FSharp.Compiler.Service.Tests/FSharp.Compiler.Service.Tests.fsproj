@@ -90,6 +90,7 @@
     <Compile Include="HotReload/NameMapTests.fs" />
     <Compile Include="HotReload/RudeEditDiagnosticsTests.fs" />
     <Compile Include="HotReload/ThreadSafetyTests.fs" />
+    <Compile Include="HotReload/CodedIndexTests.fs" />
   </ItemGroup>
 
 	<ItemGroup>

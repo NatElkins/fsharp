@@ -478,13 +478,15 @@ This checklist contains all issues identified during the 12-session code review 
     baselines and would be integration tests rather than unit tests.
   - Priority: High
 
-- [ ] **No tests for coded index table order bugs**
+- [x] **No tests for coded index table order bugs** ✅ FIXED
   - Issue: MemberRefParent/HasDeclSecurity bugs would not be caught
-  - Fix: Add tests that decode coded indices and validate table tags
-  - Tests needed:
-    - [ ] MemberRefParent with TypeDef, TypeRef, MethodDef references
-    - [ ] HasDeclSecurity with TypeDef, MethodDef, Assembly references
-    - [ ] Validate decoded table tags match ECMA-335 spec
+  - Fix: Added `CodedIndexTests.fs` with 25 tests that validate coded index table orders
+  - Tests added:
+    - [x] MemberRefParent with TypeDef, TypeRef, ModuleRef, MethodDef, TypeSpec references
+    - [x] HasDeclSecurity with TypeDef, MethodDef, Assembly references
+    - [x] HasCustomAttribute encoding for all 22 parent types
+    - [x] Coded index encode/decode roundtrip tests
+    - [x] RowElementTags range validation tests
   - Priority: High
 
 - [ ] **Limited PDB tests for new method additions**
