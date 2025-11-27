@@ -20,12 +20,23 @@ open FSharp.Compiler.GeneratedNames
 /// policy to make all globally-allocated objects concurrency safe in case future versions of the compiler
 /// are used to host multiple concurrent instances of compilation.
 type NiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMaps option) =
+    // Use file path (stable) instead of FileIndex (unstable when files added/removed).
+    // Hash the file path to get a stable integer key.
     let basicNameCounts = ConcurrentDictionary<struct (string * int), int ref>(max Environment.ProcessorCount 1, 127)
     // Cache this as a delegate.
     let basicNameCountsAddDelegate = Func<struct (string * int), int ref>(fun _ -> ref 0)
 
+    // FNV-1a hash for stable file path hashing
+    let stableFileHash (path: string) =
+        let mutable hash = 0x811c9dc5u
+        for c in path do
+            hash <- hash ^^^ uint32 c
+            hash <- hash * 0x01000193u
+        int hash
+
     let ensureOrdinal basicName (m: range) =
-        let key = struct (basicName, m.FileIndex)
+        // Use stable hash of file path instead of FileIndex which changes when files added/removed
+        let key = struct (basicName, stableFileHash m.FileName)
         let countCell = basicNameCounts.GetOrAdd(key, basicNameCountsAddDelegate)
         let count = Interlocked.Increment(countCell)
         count - 1

@@ -388,11 +388,14 @@ This checklist contains all issues identified during the 12-session code review 
   - Priority: Medium (no fix needed)
 
 ### API Design Issues
-- [ ] **Re-parses output path instead of using TcConfig**
+- [x] **Re-parses output path instead of using TcConfig** ⚠️ DEFERRED
   - File: `src/Compiler/Service/service.fs:251-309`
   - Issue: Manually parses `--out:` flags instead of using existing TcConfig
-  - Fix: Use TcConfig.outputFile if available
-  - Priority: Low
+  - Analysis: `tryGetOutputPath` is called BEFORE `ParseAndCheckProject` to check if output
+    exists before expensive parsing. TcConfig is only available after parsing. The manual
+    parsing handles the same cases (`--out:path` and `-o path`) and is functionally equivalent.
+    Proper fix would require restructuring code flow or adding new API surface.
+  - Priority: Low (deferred - works correctly, just code quality)
 
 - [x] **No validation for incompatible compiler options** ✅ FIXED
   - File: `src/Compiler/Driver/fsc.fs:967-973`
@@ -422,11 +425,13 @@ This checklist contains all issues identified during the 12-session code review 
   - Priority: **CRITICAL** (merge blocker)
 
 ### Name Stability Issues
-- [ ] **FileIndex instability for name generation**
+- [x] **FileIndex instability for name generation** ✅ FIXED
   - File: `src/Compiler/TypedTree/CompilerGlobalState.fs:27-31`
   - Issue: Keys on `(basicName, FileIndex)`, but FileIndex changes when files added/removed
   - Impact: Name collisions in multi-file projects during hot reload
-  - Fix: Use stable file path hash or document ID instead
+  - Fix: Replaced `m.FileIndex` with `stableFileHash m.FileName` using FNV-1a hash.
+    File paths are stable across compilations, unlike FileIndex which changes when
+    files are added/removed from the project.
   - Priority: High
 
 ### Code Quality
