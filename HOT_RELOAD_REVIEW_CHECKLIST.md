@@ -333,18 +333,23 @@ This checklist contains all issues identified during the 12-session code review 
 ## Session 9: Compiler Driver Integration
 
 ### State Management Issues
-- [ ] **Triple state storage**
+- [ ] **Triple state storage** ⚠️ DEFERRED (needs design work)
   - Files: `HotReloadState.fs`, `EditAndContinueLanguageService.fs:22`, `service.fs:226`
   - Issue: State in `HotReloadState.session` + `lastBaselineState` + `currentBaselineState`
   - Impact: Inconsistent updates, memory leaks, lifetime confusion
-  - Fix: Consolidate to single source of truth
-  - Priority: High
+  - Note: Thread-safety has been addressed (see CRITICAL fixes above). Full consolidation
+    requires architectural changes: FSharpChecker and EditAndContinueLanguageService both
+    maintain backup state for session restoration. Consolidating requires exposing backup
+    state from internal API or redesigning the layering.
+  - Fix: Consolidate to single source of truth (needs design document)
+  - Priority: High (deferred to post-merge)
 
-- [ ] **fsc.fs clears session on every compile**
-  - File: `src/Compiler/Driver/fsc.fs:1151`
+- [x] **fsc.fs clears session on every compile** ✅ FIXED
+  - File: `src/Compiler/Driver/fsc.fs:1151-1156`
   - Issue: `EndSession()` called at start of every compilation
   - Impact: Breaks continuous hot reload in IDEs when MSBuild runs
-  - Fix: Only clear session if NOT in hot reload mode
+  - Fix: Added `if not tcConfig.hotReloadCapture then` guard so EndSession and
+    SynthesizedTypeMaps clearing only happen when NOT in hot reload capture mode.
   - Priority: High
 
 ### Compilation Issues

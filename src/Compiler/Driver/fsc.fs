@@ -1148,8 +1148,12 @@ let main6
 
     match dynamicAssemblyCreator with
     | None ->
-        FSharpEditAndContinueLanguageService.Instance.EndSession()
-        tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps <- None
+        // Only clear the hot reload session when NOT in hot reload capture mode.
+        // In IDE scenarios, MSBuild may run in the background and we don't want
+        // to clear an active hot reload session being used for live editing.
+        if not tcConfig.hotReloadCapture then
+            FSharpEditAndContinueLanguageService.Instance.EndSession()
+            tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps <- None
 
         try
             match tcConfig.emitMetadataAssembly with
