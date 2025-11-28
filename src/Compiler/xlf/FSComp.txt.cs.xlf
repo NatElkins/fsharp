@@ -767,6 +767,16 @@
         <target state="translated">Funkce vytváření průřezů od konce vyžaduje jazykovou verzi preview.</target>
         <note />
       </trans-unit>
+      <trans-unit id="fscHotReloadIncompatibleWithOptimization">
+        <source>Hot reload delta capture (--enable:hotreloaddeltas) is incompatible with optimizations (--optimize+). Add '--optimize-' or remove '--optimize+' from the compilation options.</source>
+        <target state="new">Hot reload delta capture (--enable:hotreloaddeltas) is incompatible with optimizations (--optimize+). Add '--optimize-' or remove '--optimize+' from the compilation options.</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="fscHotReloadRequiresDebugInfo">
+        <source>Hot reload delta capture (--enable:hotreloaddeltas) requires debug symbols (--debug+). Add '--debug+' or remove '--debug-' from the compilation options.</source>
+        <target state="new">Hot reload delta capture (--enable:hotreloaddeltas) requires debug symbols (--debug+). Add '--debug+' or remove '--debug-' from the compilation options.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="fsiInvalidDirective">
         <source>Invalid directive '#{0} {1}'</source>
         <target state="translated">Neplatná direktiva #{0} {1}</target>
