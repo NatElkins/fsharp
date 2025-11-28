@@ -1,7 +1,5 @@
 module internal FSharp.Compiler.CodeGen.DeltaIndexSizing
 
-open System.Reflection.Metadata
-open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 
 type MetadataHeapSizes = FSharp.Compiler.AbstractIL.ILBinaryWriter.MetadataHeapSizes
@@ -25,15 +23,15 @@ type CodedIndexSizes =
       CustomAttributeTypeBig: bool
       ResolutionScopeBig: bool }
 
-let private tableSize (tableRowCounts: int[]) (table: TableIndex) =
-    tableRowCounts.[int table]
+let private tableSize (tableRowCounts: int[]) (table: int) =
+    tableRowCounts.[table]
 
 let private totalRowCount
     (tableRowCounts: int[])
     (externalRowCounts: int[])
-    (table: TableIndex)
+    (table: int)
     =
-    let index = int table
+    let index = table
     let external =
         if externalRowCounts.Length = tableRowCounts.Length then
             externalRowCounts.[index]
@@ -45,7 +43,7 @@ let private referenceExceedsLimit
     (tableRowCounts: int[])
     (externalRowCounts: int[])
     (maxValueExclusive: int)
-    (tables: TableIndex[])
+    (tables: int[])
     =
     tables
     |> Array.exists (fun table ->
@@ -56,7 +54,7 @@ let private codedBigness
     (tableRowCounts: int[])
     (externalRowCounts: int[])
     (isCompressed: bool)
-    (tables: TableIndex[])
+    (tables: int[])
     =
     if not isCompressed then
         true
@@ -101,99 +99,99 @@ let compute
 
     let typeDefOrRefBig =
         coded 2
-            [| TableIndex.TypeDef
-               TableIndex.TypeRef
-               TableIndex.TypeSpec |]
+            [| DeltaTokens.tableTypeDef
+               DeltaTokens.tableTypeRef
+               DeltaTokens.tableTypeSpec |]
 
     let typeOrMethodDefBig =
         coded 1
-            [| TableIndex.TypeDef
-               TableIndex.MethodDef |]
+            [| DeltaTokens.tableTypeDef
+               DeltaTokens.tableMethodDef |]
 
     let hasConstantBig =
         coded 2
-            [| TableIndex.Field
-               TableIndex.Param
-               TableIndex.Property |]
+            [| DeltaTokens.tableField
+               DeltaTokens.tableParam
+               DeltaTokens.tableProperty |]
 
     let hasCustomAttributeBig =
         coded 5
-            [| TableIndex.MethodDef
-               TableIndex.Field
-               TableIndex.TypeRef
-               TableIndex.TypeDef
-               TableIndex.Param
-               TableIndex.InterfaceImpl
-               TableIndex.MemberRef
-               TableIndex.Module
-               TableIndex.DeclSecurity
-               TableIndex.Property
-               TableIndex.Event
-               TableIndex.StandAloneSig
-               TableIndex.ModuleRef
-               TableIndex.TypeSpec
-               TableIndex.Assembly
-               TableIndex.AssemblyRef
-               TableIndex.File
-               TableIndex.ExportedType
-               TableIndex.ManifestResource
-               TableIndex.GenericParam
-               TableIndex.GenericParamConstraint
-               TableIndex.MethodSpec |]
+            [| DeltaTokens.tableMethodDef
+               DeltaTokens.tableField
+               DeltaTokens.tableTypeRef
+               DeltaTokens.tableTypeDef
+               DeltaTokens.tableParam
+               DeltaTokens.tableInterfaceImpl
+               DeltaTokens.tableMemberRef
+               DeltaTokens.tableModule
+               DeltaTokens.tableDeclSecurity
+               DeltaTokens.tableProperty
+               DeltaTokens.tableEvent
+               DeltaTokens.tableStandAloneSig
+               DeltaTokens.tableModuleRef
+               DeltaTokens.tableTypeSpec
+               DeltaTokens.tableAssembly
+               DeltaTokens.tableAssemblyRef
+               DeltaTokens.tableFile
+               DeltaTokens.tableExportedType
+               DeltaTokens.tableManifestResource
+               DeltaTokens.tableGenericParam
+               DeltaTokens.tableGenericParamConstraint
+               DeltaTokens.tableMethodSpec |]
 
     let hasFieldMarshalBig =
         coded 1
-            [| TableIndex.Field
-               TableIndex.Param |]
+            [| DeltaTokens.tableField
+               DeltaTokens.tableParam |]
 
     // ECMA-335 II.24.2.6: HasDeclSecurity - TypeDef(0), MethodDef(1), Assembly(2)
     let hasDeclSecurityBig =
         coded 2
-            [| TableIndex.TypeDef
-               TableIndex.MethodDef
-               TableIndex.Assembly |]
+            [| DeltaTokens.tableTypeDef
+               DeltaTokens.tableMethodDef
+               DeltaTokens.tableAssembly |]
 
     // ECMA-335 II.24.2.6: MemberRefParent - TypeDef(0), TypeRef(1), ModuleRef(2), MethodDef(3), TypeSpec(4)
     let memberRefParentBig =
         coded 3
-            [| TableIndex.TypeDef
-               TableIndex.TypeRef
-               TableIndex.ModuleRef
-               TableIndex.MethodDef
-               TableIndex.TypeSpec |]
+            [| DeltaTokens.tableTypeDef
+               DeltaTokens.tableTypeRef
+               DeltaTokens.tableModuleRef
+               DeltaTokens.tableMethodDef
+               DeltaTokens.tableTypeSpec |]
 
     let hasSemanticsBig =
         coded 1
-            [| TableIndex.Event
-               TableIndex.Property |]
+            [| DeltaTokens.tableEvent
+               DeltaTokens.tableProperty |]
 
     let methodDefOrRefBig =
         coded 1
-            [| TableIndex.MethodDef
-               TableIndex.MemberRef |]
+            [| DeltaTokens.tableMethodDef
+               DeltaTokens.tableMemberRef |]
 
     let memberForwardedBig =
         coded 1
-            [| TableIndex.Field
-               TableIndex.MethodDef |]
+            [| DeltaTokens.tableField
+               DeltaTokens.tableMethodDef |]
 
     let implementationBig =
         coded 2
-            [| TableIndex.File
-               TableIndex.AssemblyRef
-               TableIndex.ExportedType |]
+            [| DeltaTokens.tableFile
+               DeltaTokens.tableAssemblyRef
+               DeltaTokens.tableExportedType |]
 
     let customAttributeTypeBig =
         coded 3
-            [| TableIndex.MethodDef
-               TableIndex.MemberRef |]
+            [| DeltaTokens.tableMethodDef
+               DeltaTokens.tableMemberRef |]
 
     let resolutionScopeBig =
         coded 2
-            [| TableIndex.Module
-               TableIndex.ModuleRef
-               TableIndex.AssemblyRef
-               TableIndex.TypeRef |]
+            [| DeltaTokens.tableModule
+               DeltaTokens.tableModuleRef
+               DeltaTokens.tableAssemblyRef
+               DeltaTokens.tableTypeRef |]
 
     { StringsBig = stringsBig
       GuidsBig = guidsBig

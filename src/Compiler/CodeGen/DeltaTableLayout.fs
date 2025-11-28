@@ -1,7 +1,6 @@
 module internal FSharp.Compiler.CodeGen.DeltaTableLayout
 
-open System.Reflection.Metadata
-open System.Reflection.Metadata.Ecma335
+open FSharp.Compiler.AbstractIL.ILDeltaHandles
 
 type TableBitMasks =
     { ValidLow: int
@@ -10,31 +9,31 @@ type TableBitMasks =
       SortedHigh: int }
 
 let private sortedTypeSystemTables =
-    [ TableIndex.InterfaceImpl
-      TableIndex.Constant
-      TableIndex.CustomAttribute
-      TableIndex.FieldMarshal
-      TableIndex.DeclSecurity
-      TableIndex.ClassLayout
-      TableIndex.FieldLayout
-      TableIndex.MethodSemantics
-      TableIndex.MethodImpl
-      TableIndex.ImplMap
-      TableIndex.FieldRva
-      TableIndex.NestedClass
-      TableIndex.GenericParam
-      TableIndex.GenericParamConstraint ]
+    [ DeltaTokens.tableInterfaceImpl
+      DeltaTokens.tableConstant
+      DeltaTokens.tableCustomAttribute
+      DeltaTokens.tableFieldMarshal
+      DeltaTokens.tableDeclSecurity
+      DeltaTokens.tableClassLayout
+      DeltaTokens.tableFieldLayout
+      DeltaTokens.tableMethodSemantics
+      DeltaTokens.tableMethodImpl
+      DeltaTokens.tableImplMap
+      DeltaTokens.tableFieldRVA
+      DeltaTokens.tableNestedClass
+      DeltaTokens.tableGenericParam
+      DeltaTokens.tableGenericParamConstraint ]
 
 let private sortedDebugTables =
-    [ TableIndex.LocalScope
-      TableIndex.StateMachineMethod
-      TableIndex.CustomDebugInformation ]
+    [ DeltaTokens.tableLocalScope
+      DeltaTokens.tableStateMachineMethod
+      DeltaTokens.tableCustomDebugInformation ]
 
-let private maskForTables (tables: TableIndex list) =
+let private maskForTables (tables: int list) =
     tables
     |> List.fold
         (fun acc tableIndex ->
-            acc ||| (1UL <<< int tableIndex))
+            acc ||| (1UL <<< tableIndex))
         0UL
 
 let private sortedTypeSystemMask = maskForTables sortedTypeSystemTables
@@ -52,7 +51,7 @@ let computeBitMasks (tableRowCounts: int[]) (isEncDelta: bool) : TableBitMasks =
     let typeSystemMask =
         if isEncDelta then
             // Roslyn clears CustomAttribute for EnC deltas to mirror MetadataSizes.
-            sortedTypeSystemMask &&& ~~~(1UL <<< int TableIndex.CustomAttribute)
+            sortedTypeSystemMask &&& ~~~(1UL <<< DeltaTokens.tableCustomAttribute)
         else
             sortedTypeSystemMask
 

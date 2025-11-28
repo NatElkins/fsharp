@@ -729,6 +729,16 @@ module DeltaTokens =
     let tableEncLog = 0x1E
     let tableEncMap = 0x1F
 
+    // PDB table indices (Portable PDB spec)
+    let tableDocument = 0x30
+    let tableMethodDebugInformation = 0x31
+    let tableLocalScope = 0x32
+    let tableLocalVariable = 0x33
+    let tableLocalConstant = 0x34
+    let tableImportScope = 0x35
+    let tableStateMachineMethod = 0x36
+    let tableCustomDebugInformation = 0x37
+
 // ============================================================================
 // Conversion Helpers
 // ============================================================================

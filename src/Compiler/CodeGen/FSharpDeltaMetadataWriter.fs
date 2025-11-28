@@ -66,8 +66,8 @@ type MetadataDelta =
         StringHeap: byte[]
         BlobHeap: byte[]
         GuidHeap: byte[]
-        EncLog: (TableIndex * int * EditAndContinueOperation) array
-        EncMap: (TableIndex * int) array
+        EncLog: (int * int * EditAndContinueOperation) array
+        EncMap: (int * int) array
         TableRowCounts: int[]
         HeapSizes: MetadataHeapSizes
         HeapOffsets: MetadataHeapOffsets
@@ -158,8 +158,8 @@ let emitWithUserStrings
         let mutable encLog = ResizeArray()
         let mutable encMap = ResizeArray()
 
-        encLog.Add(struct (TableIndex.Module, 1, EditAndContinueOperation.Default))
-        encMap.Add(struct (TableIndex.Module, 1))
+        encLog.Add(struct (DeltaTokens.tableModule, 1, EditAndContinueOperation.Default))
+        encMap.Add(struct (DeltaTokens.tableModule, 1))
 
         for row in methodDefinitionRows do
             match updatesByKey.TryGetValue row.Key with
@@ -174,8 +174,8 @@ let emitWithUserStrings
                         row.IsAdded
 
                 let operation = if row.IsAdded then EditAndContinueOperation.AddMethod else EditAndContinueOperation.Default
-                encLog.Add(struct (TableIndex.MethodDef, row.RowId, operation))
-                encMap.Add(struct (TableIndex.MethodDef, row.RowId))
+                encLog.Add(struct (DeltaTokens.tableMethodDef, row.RowId, operation))
+                encMap.Add(struct (DeltaTokens.tableMethodDef, row.RowId))
             | _ ->
                 if shouldTraceMetadata () then
                     printfn "[fsharp-hotreload][metadata-writer] missing update payload for %A" row.Key
@@ -184,73 +184,73 @@ let emitWithUserStrings
             tableMirror.AddParameterRow row
 
             let operation = if row.IsAdded then EditAndContinueOperation.AddParameter else EditAndContinueOperation.Default
-            encLog.Add(struct (TableIndex.Param, row.RowId, operation))
-            encMap.Add(struct (TableIndex.Param, row.RowId))
+            encLog.Add(struct (DeltaTokens.tableParam, row.RowId, operation))
+            encMap.Add(struct (DeltaTokens.tableParam, row.RowId))
 
         for row in typeReferenceRows do
             tableMirror.AddTypeReferenceRow row
 
-            encLog.Add(struct (TableIndex.TypeRef, row.RowId, EditAndContinueOperation.Default))
-            encMap.Add(struct (TableIndex.TypeRef, row.RowId))
+            encLog.Add(struct (DeltaTokens.tableTypeRef, row.RowId, EditAndContinueOperation.Default))
+            encMap.Add(struct (DeltaTokens.tableTypeRef, row.RowId))
 
         for row in memberReferenceRows do
             tableMirror.AddMemberReferenceRow row
 
-            encLog.Add(struct (TableIndex.MemberRef, row.RowId, EditAndContinueOperation.Default))
-            encMap.Add(struct (TableIndex.MemberRef, row.RowId))
+            encLog.Add(struct (DeltaTokens.tableMemberRef, row.RowId, EditAndContinueOperation.Default))
+            encMap.Add(struct (DeltaTokens.tableMemberRef, row.RowId))
 
         for row in assemblyReferenceRows do
             tableMirror.AddAssemblyReferenceRow row
 
-            encLog.Add(struct (TableIndex.AssemblyRef, row.RowId, EditAndContinueOperation.Default))
-            encMap.Add(struct (TableIndex.AssemblyRef, row.RowId))
+            encLog.Add(struct (DeltaTokens.tableAssemblyRef, row.RowId, EditAndContinueOperation.Default))
+            encMap.Add(struct (DeltaTokens.tableAssemblyRef, row.RowId))
 
         for signature in standaloneSignatureRows do
             let rowId = MetadataTokens.GetRowNumber signature.Handle
             tableMirror.AddStandaloneSignatureRow(signature.Blob)
 
             let operation = EditAndContinueOperation.Default
-            encLog.Add(struct (TableIndex.StandAloneSig, rowId, operation))
-            encMap.Add(struct (TableIndex.StandAloneSig, rowId))
+            encLog.Add(struct (DeltaTokens.tableStandAloneSig, rowId, operation))
+            encMap.Add(struct (DeltaTokens.tableStandAloneSig, rowId))
 
         for row in customAttributeRows do
             tableMirror.AddCustomAttributeRow row
 
-            encLog.Add(struct (TableIndex.CustomAttribute, row.RowId, EditAndContinueOperation.Default))
-            encMap.Add(struct (TableIndex.CustomAttribute, row.RowId))
+            encLog.Add(struct (DeltaTokens.tableCustomAttribute, row.RowId, EditAndContinueOperation.Default))
+            encMap.Add(struct (DeltaTokens.tableCustomAttribute, row.RowId))
 
         for row in propertyDefinitionRows do
             if row.IsAdded then
                 tableMirror.AddPropertyRow row
 
-                encLog.Add(struct (TableIndex.Property, row.RowId, EditAndContinueOperation.AddProperty))
-                encMap.Add(struct (TableIndex.Property, row.RowId))
+                encLog.Add(struct (DeltaTokens.tableProperty, row.RowId, EditAndContinueOperation.AddProperty))
+                encMap.Add(struct (DeltaTokens.tableProperty, row.RowId))
 
         for row in eventDefinitionRows do
             if row.IsAdded then
                 tableMirror.AddEventRow row
 
-                encLog.Add(struct (TableIndex.Event, row.RowId, EditAndContinueOperation.AddEvent))
-                encMap.Add(struct (TableIndex.Event, row.RowId))
+                encLog.Add(struct (DeltaTokens.tableEvent, row.RowId, EditAndContinueOperation.AddEvent))
+                encMap.Add(struct (DeltaTokens.tableEvent, row.RowId))
 
         for row in propertyMapRows do
             if row.IsAdded then
-                encLog.Add(struct (TableIndex.PropertyMap, row.RowId, EditAndContinueOperation.AddProperty))
-                encMap.Add(struct (TableIndex.PropertyMap, row.RowId))
+                encLog.Add(struct (DeltaTokens.tablePropertyMap, row.RowId, EditAndContinueOperation.AddProperty))
+                encMap.Add(struct (DeltaTokens.tablePropertyMap, row.RowId))
                 tableMirror.AddPropertyMapRow row
 
         for row in eventMapRows do
             if row.IsAdded then
-                encLog.Add(struct (TableIndex.EventMap, row.RowId, EditAndContinueOperation.AddEvent))
-                encMap.Add(struct (TableIndex.EventMap, row.RowId))
+                encLog.Add(struct (DeltaTokens.tableEventMap, row.RowId, EditAndContinueOperation.AddEvent))
+                encMap.Add(struct (DeltaTokens.tableEventMap, row.RowId))
                 tableMirror.AddEventMapRow row
 
         for row in methodSemanticsRows do
             if row.IsAdded then
                 tableMirror.AddMethodSemanticsRow row
 
-                encLog.Add(struct (TableIndex.MethodSemantics, row.RowId, EditAndContinueOperation.AddMethod))
-                encMap.Add(struct (TableIndex.MethodSemantics, row.RowId))
+                encLog.Add(struct (DeltaTokens.tableMethodSemantics, row.RowId, EditAndContinueOperation.AddMethod))
+                encMap.Add(struct (DeltaTokens.tableMethodSemantics, row.RowId))
 
         for _, newToken, literal in userStringUpdates do
             let offset = newToken &&& 0x00FFFFFF
@@ -259,19 +259,19 @@ let emitWithUserStrings
         let encLogEntries =
             let snapshot = encLog |> Seq.toArray
             let orderedTables =
-                [| TableIndex.Module
-                   TableIndex.MethodDef
-                   TableIndex.Param
-                   TableIndex.TypeRef
-                   TableIndex.MemberRef
-                   TableIndex.AssemblyRef
-                   TableIndex.StandAloneSig
-                   TableIndex.CustomAttribute
-                   TableIndex.Property
-                   TableIndex.Event
-                   TableIndex.PropertyMap
-                   TableIndex.EventMap
-                   TableIndex.MethodSemantics |]
+                [| DeltaTokens.tableModule
+                   DeltaTokens.tableMethodDef
+                   DeltaTokens.tableParam
+                   DeltaTokens.tableTypeRef
+                   DeltaTokens.tableMemberRef
+                   DeltaTokens.tableAssemblyRef
+                   DeltaTokens.tableStandAloneSig
+                   DeltaTokens.tableCustomAttribute
+                   DeltaTokens.tableProperty
+                   DeltaTokens.tableEvent
+                   DeltaTokens.tablePropertyMap
+                   DeltaTokens.tableEventMap
+                   DeltaTokens.tableMethodSemantics |]
 
             let orderedTableSet = orderedTables |> Set.ofArray
             let builder = ResizeArray()
@@ -329,10 +329,10 @@ let emitWithUserStrings
                 indexSizes.StringsBig
                 indexSizes.GuidsBig
                 indexSizes.BlobsBig
-            let methodRows = tableRowCounts[int TableIndex.MethodDef]
-            let paramRows = tableRowCounts[int TableIndex.Param]
-            let propertyRows = tableRowCounts[int TableIndex.Property]
-            let eventRows = tableRowCounts[int TableIndex.Event]
+            let methodRows = tableRowCounts[DeltaTokens.tableMethodDef]
+            let paramRows = tableRowCounts[DeltaTokens.tableParam]
+            let propertyRows = tableRowCounts[DeltaTokens.tableProperty]
+            let eventRows = tableRowCounts[DeltaTokens.tableEvent]
             printfn
                 "[fsharp-hotreload][metadata-writer] rows method=%d param=%d property=%d event=%d stringHeap=%d blobHeap=%d guidHeap=%d"
                 methodRows

@@ -93,8 +93,8 @@ let computeMetadataSizes (tableMirror: DeltaMetadataTables) (externalRowCounts: 
     let rowCounts = tableMirror.TableRowCounts
     let heapSizes = tableMirror.HeapSizes
     let isEncDelta =
-        rowCounts[int TableIndex.EncLog] > 0
-        || rowCounts[int TableIndex.EncMap] > 0
+        rowCounts[DeltaTokens.tableEncLog] > 0
+        || rowCounts[DeltaTokens.tableEncMap] > 0
 
     let bitMasks = DeltaTableLayout.computeBitMasks rowCounts isEncDelta
 
@@ -132,21 +132,21 @@ let private writeTaggedIndex (writer: BinaryWriter) (nbits: int) (isBig: bool) (
 
 let private tableRowsByIndex (tables: TableRows) =
     let rows = Array.create DeltaTokens.TableCount Array.empty
-    rows[int TableIndex.Module] <- tables.Module
-    rows[int TableIndex.MethodDef] <- tables.MethodDef
-    rows[int TableIndex.Param] <- tables.Param
-    rows[int TableIndex.TypeRef] <- tables.TypeRef
-    rows[int TableIndex.MemberRef] <- tables.MemberRef
-    rows[int TableIndex.CustomAttribute] <- tables.CustomAttribute
-    rows[int TableIndex.AssemblyRef] <- tables.AssemblyRef
-    rows[int TableIndex.StandAloneSig] <- tables.StandAloneSig
-    rows[int TableIndex.Property] <- tables.Property
-    rows[int TableIndex.Event] <- tables.Event
-    rows[int TableIndex.PropertyMap] <- tables.PropertyMap
-    rows[int TableIndex.EventMap] <- tables.EventMap
-    rows[int TableIndex.MethodSemantics] <- tables.MethodSemantics
-    rows[int TableIndex.EncLog] <- tables.EncLog
-    rows[int TableIndex.EncMap] <- tables.EncMap
+    rows[DeltaTokens.tableModule] <- tables.Module
+    rows[DeltaTokens.tableMethodDef] <- tables.MethodDef
+    rows[DeltaTokens.tableParam] <- tables.Param
+    rows[DeltaTokens.tableTypeRef] <- tables.TypeRef
+    rows[DeltaTokens.tableMemberRef] <- tables.MemberRef
+    rows[DeltaTokens.tableCustomAttribute] <- tables.CustomAttribute
+    rows[DeltaTokens.tableAssemblyRef] <- tables.AssemblyRef
+    rows[DeltaTokens.tableStandAloneSig] <- tables.StandAloneSig
+    rows[DeltaTokens.tableProperty] <- tables.Property
+    rows[DeltaTokens.tableEvent] <- tables.Event
+    rows[DeltaTokens.tablePropertyMap] <- tables.PropertyMap
+    rows[DeltaTokens.tableEventMap] <- tables.EventMap
+    rows[DeltaTokens.tableMethodSemantics] <- tables.MethodSemantics
+    rows[DeltaTokens.tableEncLog] <- tables.EncLog
+    rows[DeltaTokens.tableEncMap] <- tables.EncMap
     rows
 
 let private isTablePresent (bitmaskLow: int) (bitmaskHigh: int) (index: int) =

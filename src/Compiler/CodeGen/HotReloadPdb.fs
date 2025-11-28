@@ -13,16 +13,16 @@ open FSharp.Compiler.HotReloadBaseline
 let private computeRowCounts (reader: MetadataReader) : ImmutableArray<int> =
     let counts = Array.zeroCreate<int> DeltaTokens.TableCount
 
-    let inline setCount (index: TableIndex) (value: int) =
-        counts[int index] <- value
+    let inline setCount (index: int) (value: int) =
+        counts[index] <- value
 
-    setCount TableIndex.Document reader.Documents.Count
-    setCount TableIndex.MethodDebugInformation reader.MethodDebugInformation.Count
-    setCount TableIndex.LocalScope reader.LocalScopes.Count
-    setCount TableIndex.LocalVariable reader.LocalVariables.Count
-    setCount TableIndex.LocalConstant reader.LocalConstants.Count
-    setCount TableIndex.ImportScope reader.ImportScopes.Count
-    setCount TableIndex.CustomDebugInformation reader.CustomDebugInformation.Count
+    setCount DeltaTokens.tableDocument reader.Documents.Count
+    setCount DeltaTokens.tableMethodDebugInformation reader.MethodDebugInformation.Count
+    setCount DeltaTokens.tableLocalScope reader.LocalScopes.Count
+    setCount DeltaTokens.tableLocalVariable reader.LocalVariables.Count
+    setCount DeltaTokens.tableLocalConstant reader.LocalConstants.Count
+    setCount DeltaTokens.tableImportScope reader.ImportScopes.Count
+    setCount DeltaTokens.tableCustomDebugInformation reader.CustomDebugInformation.Count
 
     ImmutableArray.CreateRange counts
 
@@ -48,8 +48,8 @@ let emitDelta
     (updatedPdbBytes: byte[])
     (addedOrChangedMethods: AddedOrChangedMethodInfo list)
     (deltaToUpdatedMethodToken: IReadOnlyDictionary<int, int>)
-    (_metadataEncLog: (TableIndex * int * EditAndContinueOperation) array)
-    (_metadataEncMap: (TableIndex * int) array)
+    (_metadataEncLog: (int * int * EditAndContinueOperation) array)
+    (_metadataEncMap: (int * int) array)
     : byte[] option =
     match baseline.PortablePdb with
     | None -> None
@@ -164,7 +164,7 @@ let emitDelta
             // to EntityHandle, so we construct the EntityHandle from the table/row token directly.
             // Token format: (table_index << 24) | row_number, where MethodDebugInformation = 0x31
             for methodRow in emittedMethodRows |> Seq.distinct |> Seq.sort do
-                let token = (int TableIndex.MethodDebugInformation <<< 24) ||| methodRow
+                let token = (DeltaTokens.tableMethodDebugInformation <<< 24) ||| methodRow
                 let entityHandle = MetadataTokens.EntityHandle token
                 metadata.AddEncMapEntry entityHandle
 

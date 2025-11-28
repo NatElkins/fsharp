@@ -612,8 +612,8 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             |]
         methodSemanticsRows.Add rowElements
 
-    member _.AddEncLogRow(tableIndex: TableIndex, rowId: int, operation: EditAndContinueOperation) =
-        let token = DeltaTokens.makeToken (int tableIndex) rowId
+    member _.AddEncLogRow(tableIndex: int, rowId: int, operation: EditAndContinueOperation) =
+        let token = DeltaTokens.makeToken tableIndex rowId
         let rowElements =
             [|
                 rowElementULong token
@@ -621,8 +621,8 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             |]
         encLogRows.Add rowElements
 
-    member _.AddEncMapRow(tableIndex: TableIndex, rowId: int) =
-        let token = DeltaTokens.makeToken (int tableIndex) rowId
+    member _.AddEncMapRow(tableIndex: int, rowId: int) =
+        let token = DeltaTokens.makeToken tableIndex rowId
         let rowElements =
             [|
                 rowElementULong token
@@ -702,21 +702,21 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
 
     member _.TableRowCounts : int[] =
         let counts = Array.zeroCreate DeltaTokens.TableCount
-        counts[int TableIndex.Module] <- moduleRows.Count
-        counts[int TableIndex.MethodDef] <- methodRows.Count
-        counts[int TableIndex.Param] <- paramRows.Count
-        counts[int TableIndex.TypeRef] <- typeRefRows.Count
-        counts[int TableIndex.MemberRef] <- memberRefRows.Count
-        counts[int TableIndex.AssemblyRef] <- assemblyRefRows.Count
-        counts[int TableIndex.StandAloneSig] <- standAloneSigRows.Count
-        counts[int TableIndex.CustomAttribute] <- customAttributeRows.Count
-        counts[int TableIndex.Property] <- propertyRows.Count
-        counts[int TableIndex.Event] <- eventRows.Count
-        counts[int TableIndex.PropertyMap] <- propertyMapRows.Count
-        counts[int TableIndex.EventMap] <- eventMapRows.Count
-        counts[int TableIndex.MethodSemantics] <- methodSemanticsRows.Count
-        counts[int TableIndex.EncLog] <- encLogRows.Count
-        counts[int TableIndex.EncMap] <- encMapRows.Count
+        counts[DeltaTokens.tableModule] <- moduleRows.Count
+        counts[DeltaTokens.tableMethodDef] <- methodRows.Count
+        counts[DeltaTokens.tableParam] <- paramRows.Count
+        counts[DeltaTokens.tableTypeRef] <- typeRefRows.Count
+        counts[DeltaTokens.tableMemberRef] <- memberRefRows.Count
+        counts[DeltaTokens.tableAssemblyRef] <- assemblyRefRows.Count
+        counts[DeltaTokens.tableStandAloneSig] <- standAloneSigRows.Count
+        counts[DeltaTokens.tableCustomAttribute] <- customAttributeRows.Count
+        counts[DeltaTokens.tableProperty] <- propertyRows.Count
+        counts[DeltaTokens.tableEvent] <- eventRows.Count
+        counts[DeltaTokens.tablePropertyMap] <- propertyMapRows.Count
+        counts[DeltaTokens.tableEventMap] <- eventMapRows.Count
+        counts[DeltaTokens.tableMethodSemantics] <- methodSemanticsRows.Count
+        counts[DeltaTokens.tableEncLog] <- encLogRows.Count
+        counts[DeltaTokens.tableEncMap] <- encMapRows.Count
         counts
 
     /// Add a user string literal to the delta's #US heap.
