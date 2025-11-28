@@ -233,6 +233,7 @@
     <Compile Include="AbstractIL\ilsupp.fs" />
     <Compile Include="AbstractIL\ilbinary.fsi" />
     <Compile Include="AbstractIL\ilbinary.fs" />
+    <Compile Include="AbstractIL\ILDeltaHandles.fs" />
     <Compile Include="AbstractIL\ilread.fsi" />
     <Compile Include="AbstractIL\ilread.fs" />
     <Compile Include="AbstractIL\ilwritepdb.fsi" />
