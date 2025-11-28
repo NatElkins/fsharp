@@ -9,6 +9,7 @@ open System.Text
 open Microsoft.FSharp.Collections
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.AbstractIL.BinaryConstants
+open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
@@ -304,67 +305,22 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let rowElementSimpleIndex table value = rowElement (RowElementTags.SimpleIndex table) value
     let rowElementTypeDefOrRef tag value = rowElement (RowElementTags.TypeDefOrRefOrSpec tag) value
     let rowElementHasSemantics tag value = rowElement (RowElementTags.HasSemantics tag) value
-    let rowElementResolutionScope kind rowId =
-        let tagValue =
-            match kind with
-            | HandleKind.ModuleDefinition -> 0
-            | HandleKind.ModuleReference -> 1
-            | HandleKind.AssemblyReference -> 2
-            | HandleKind.TypeReference -> 3
-            | _ -> invalidArg (nameof kind) "Unsupported resolution scope"
-        rowElement (RowElementTags.ResolutionScopeMin + tagValue) rowId
+    let rowElementResolutionScope (scope: ResolutionScope) =
+        rowElement (RowElementTags.ResolutionScopeMin + scope.CodedTag) scope.RowId
 
-    let rowElementMemberRefParent kind rowId =
-        let tagValue =
-            match kind with
-            | HandleKind.TypeDefinition -> 0
-            | HandleKind.TypeReference -> 1
-            | HandleKind.ModuleReference -> 2
-            | HandleKind.MethodDefinition -> 3
-            | HandleKind.TypeSpecification -> 4
-            | _ -> invalidArg (nameof kind) "Unsupported member ref parent"
-        rowElement (RowElementTags.MemberRefParentMin + tagValue) rowId
+    let rowElementMemberRefParent (parent: MemberRefParent) =
+        rowElement (RowElementTags.MemberRefParentMin + parent.CodedTag) parent.RowId
 
     /// HasCustomAttribute coded index per ECMA-335 II.24.2.6.
-    /// Tags: MethodDef(0), Field(1), TypeRef(2), TypeDef(3), Param(4), InterfaceImpl(5),
-    ///       MemberRef(6), Module(7), DeclSecurity(8), Property(9), Event(10), StandAloneSig(11),
-    ///       ModuleRef(12), TypeSpec(13), Assembly(14), AssemblyRef(15), File(16), ExportedType(17),
-    ///       ManifestResource(18), GenericParam(19), GenericParamConstraint(20), MethodSpec(21)
-    let rowElementHasCustomAttribute kind rowId =
-        let tagValue =
-            match kind with
-            | HandleKind.MethodDefinition -> 0
-            | HandleKind.FieldDefinition -> 1
-            | HandleKind.TypeReference -> 2
-            | HandleKind.TypeDefinition -> 3
-            | HandleKind.Parameter -> 4
-            | HandleKind.InterfaceImplementation -> 5
-            | HandleKind.MemberReference -> 6
-            | HandleKind.ModuleDefinition -> 7
-            // DeclSecurity (8) - not directly exposed via HandleKind, use DeclarativeSecurityAttribute if needed
-            | HandleKind.PropertyDefinition -> 9
-            | HandleKind.EventDefinition -> 10
-            | HandleKind.StandaloneSignature -> 11
-            | HandleKind.ModuleReference -> 12
-            | HandleKind.TypeSpecification -> 13
-            | HandleKind.AssemblyDefinition -> 14
-            | HandleKind.AssemblyReference -> 15
-            | HandleKind.AssemblyFile -> 16
-            | HandleKind.ExportedType -> 17
-            | HandleKind.ManifestResource -> 18
-            | HandleKind.GenericParameter -> 19
-            | HandleKind.GenericParameterConstraint -> 20
-            | HandleKind.MethodSpecification -> 21
-            | _ -> invalidArg (nameof kind) $"Unsupported custom attribute parent: {kind}"
-        rowElement (RowElementTags.HasCustomAttributeMin + tagValue) rowId
+    /// Uses the HasCustomAttribute DU from ILDeltaHandles.
+    let rowElementHasCustomAttribute (parent: HasCustomAttribute) =
+        rowElement (RowElementTags.HasCustomAttributeMin + parent.CodedTag) parent.RowId
 
-    let rowElementCustomAttributeType kind rowId =
-        let tag =
-            match kind with
-            | HandleKind.MethodDefinition -> cat_MethodDef
-            | HandleKind.MemberReference -> cat_MemberRef
-            | _ -> invalidArg (nameof kind) "Unsupported custom attribute constructor"
-        rowElement (RowElementTags.CustomAttributeType tag) rowId
+    /// CustomAttributeType coded index per ECMA-335 II.24.2.6.
+    /// Uses the CustomAttributeType DU from ILDeltaHandles.
+    let rowElementCustomAttributeType (ctor: CustomAttributeType) =
+        let tag = mkILCustomAttributeTypeTag ctor.CodedTag
+        rowElement (RowElementTags.CustomAttributeType tag) ctor.RowId
 
     let addStringValue (value: string) = if String.IsNullOrEmpty value then 0 else strings.AddSharedEntry value
 
@@ -520,24 +476,22 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         paramRows.Add rowElements
 
     member _.AddTypeReferenceRow(row: TypeReferenceRowInfo) =
-        let struct (scopeKind, scopeRowId) = row.ResolutionScope
         let nameToken = addExistingStringHandle row.NameHandle row.Name
         let namespaceToken = addExistingStringHandle row.NamespaceHandle row.Namespace
         let rowElements =
             [|
-                rowElementResolutionScope scopeKind scopeRowId
+                rowElementResolutionScope row.ResolutionScope
                 stringElement nameToken
                 stringElement namespaceToken
             |]
         typeRefRows.Add rowElements
 
     member _.AddMemberReferenceRow(row: MemberReferenceRowInfo) =
-        let struct (parentKind, parentRowId) = row.Parent
         let nameToken = addExistingStringHandle row.NameHandle row.Name
         let signatureToken = addExistingBlobHandle row.SignatureHandle row.Signature
         let rowElements =
             [|
-                rowElementMemberRefParent parentKind parentRowId
+                rowElementMemberRefParent row.Parent
                 stringElement nameToken
                 blobElement signatureToken
             |]
@@ -574,20 +528,12 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             standAloneSigRows.Add rowElements
 
     member _.AddCustomAttributeRow(row: CustomAttributeRowInfo) =
-        let parentElement =
-            let struct (kind, rowId) = row.Parent
-            rowElementHasCustomAttribute kind rowId
-
-        let ctorElement =
-            let struct (kind, rowId) = row.Constructor
-            rowElementCustomAttributeType kind rowId
-
         let valueToken = addExistingBlobHandle row.ValueHandle row.Value
 
         let rowElements =
             [|
-                parentElement
-                ctorElement
+                rowElementHasCustomAttribute row.Parent
+                rowElementCustomAttributeType row.Constructor
                 blobElement valueToken
             |]
 

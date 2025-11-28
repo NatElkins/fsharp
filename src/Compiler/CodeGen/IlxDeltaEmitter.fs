@@ -11,6 +11,7 @@ open System.Reflection
 open System.Reflection.Emit
 open System.Reflection.PortableExecutable
 open FSharp.Compiler.AbstractIL.IL
+open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.AbstractIL.ILPdbWriter
 open FSharp.Compiler.HotReload
 open FSharp.Compiler.HotReload.SymbolChanges
@@ -725,23 +726,23 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         name
                 let resolutionScope =
                     if row.ResolutionScope.IsNil then
-                        struct (HandleKind.ModuleDefinition, 1)
+                        RS_Module(ModuleHandle 1)
                     else
                         let scopeToken = MetadataTokens.GetToken(row.ResolutionScope)
                         match row.ResolutionScope.Kind with
                         | HandleKind.AssemblyReference ->
                             let mapped = remapAssemblyRefToken scopeToken
-                            struct (HandleKind.AssemblyReference, mapped &&& 0x00FFFFFF)
+                            RS_AssemblyRef(AssemblyRefHandle(mapped &&& 0x00FFFFFF))
                         | HandleKind.TypeReference ->
                             let mapped = remapTypeRefToken scopeToken
-                            struct (HandleKind.TypeReference, mapped &&& 0x00FFFFFF)
+                            RS_TypeRef(TypeRefHandle(mapped &&& 0x00FFFFFF))
                         | HandleKind.ModuleDefinition ->
                             let rowId = MetadataTokens.GetRowNumber row.ResolutionScope
-                            struct (HandleKind.ModuleDefinition, rowId)
+                            RS_Module(ModuleHandle rowId)
                         | HandleKind.ModuleReference ->
                             let rowId = MetadataTokens.GetRowNumber row.ResolutionScope
-                            struct (HandleKind.ModuleReference, rowId)
-                        | _ -> struct (HandleKind.ModuleDefinition, 1)
+                            RS_ModuleRef(ModuleRefHandle rowId)
+                        | _ -> RS_Module(ModuleHandle 1)
                 let nextRowId = nextTypeRefRowId + 1
                 nextTypeRefRowId <- nextRowId
                 typeReferenceRows.Add(
@@ -1641,7 +1642,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         let token = MetadataTokens.GetToken(EntityHandle.op_Implicit handle)
                         let remapped = remapAssemblyRefToken token
                         let rowId = remapped &&& 0x00FFFFFF
-                        Some(struct (HandleKind.AssemblyReference, rowId))
+                        Some(RS_AssemblyRef(AssemblyRefHandle rowId))
                     else
                         None)
 
@@ -1711,7 +1712,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     let scope =
                         match tryGetAssemblyScope () with
                         | Some value -> value
-                        | None -> struct (HandleKind.ModuleDefinition, 1)
+                        | None -> RS_Module(ModuleHandle 1)
                     let nextRowId = nextTypeRefRowId + 1
                     nextTypeRefRowId <- nextRowId
                     typeReferenceRows.Add(
@@ -1732,7 +1733,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     let scope =
                         match tryGetAssemblyScope () with
                         | Some value -> value
-                        | None -> struct (HandleKind.ModuleDefinition, 1)
+                        | None -> RS_Module(ModuleHandle 1)
                     let nextRowId = nextTypeRefRowId + 1
                     nextTypeRefRowId <- nextRowId
                     typeReferenceRows.Add(
@@ -1793,7 +1794,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     nextMemberRefRowId <- nextRowId
                     memberReferenceRows.Add(
                         { RowId = nextRowId
-                          Parent = struct (HandleKind.TypeReference, parentRowId)
+                          Parent = MRP_TypeRef(TypeRefHandle parentRowId)
                           Name = ".ctor"
                           NameHandle = None
                           Signature = signatureBytes
@@ -1862,7 +1863,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     nextMemberRefRowId <- nextRowId
                     memberReferenceRows.Add(
                         { RowId = nextRowId
-                          Parent = struct (HandleKind.TypeReference, parentRowId)
+                          Parent = MRP_TypeRef(TypeRefHandle parentRowId)
                           Name = ".ctor"
                           NameHandle = None
                           Signature = signatureBytes
@@ -1939,10 +1940,16 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                                 methodsWithNullableContextAttribute.Add methodKey |> ignore
                             | _ -> ()
 
+                        let ctorType =
+                            match attribute.Constructor.Kind with
+                            | HandleKind.MethodDefinition -> CAT_MethodDef(MethodDefHandle ctorRowId)
+                            | HandleKind.MemberReference -> CAT_MemberRef(MemberRefHandle ctorRowId)
+                            | _ -> CAT_MemberRef(MemberRefHandle ctorRowId) // Default fallback
+
                         rows.Add(
                             { RowId = nextRowId
-                              Parent = struct (HandleKind.MethodDefinition, parentRowId)
-                              Constructor = struct (attribute.Constructor.Kind, ctorRowId)
+                              Parent = HCA_MethodDef(MethodDefHandle parentRowId)
+                              Constructor = ctorType
                               Value = valueBytes
                               ValueHandle = if attribute.Value.IsNil then None else Some attribute.Value })
 
@@ -1960,8 +1967,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         nextRowId <- nextRowId + 1
                         rows.Add(
                             { RowId = nextRowId
-                              Parent = struct (HandleKind.MethodDefinition, methodRowId)
-                              Constructor = struct (HandleKind.MemberReference, ctorRowId)
+                              Parent = HCA_MethodDef(MethodDefHandle methodRowId)
+                              Constructor = CAT_MemberRef(MemberRefHandle ctorRowId)
                               Value = valueBytes
                               ValueHandle = None })
 
@@ -1976,8 +1983,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         nextRowId <- nextRowId + 1
                         rows.Add(
                             { RowId = nextRowId
-                              Parent = struct (HandleKind.MethodDefinition, methodRowId)
-                              Constructor = struct (HandleKind.MemberReference, ctorRowId)
+                              Parent = HCA_MethodDef(MethodDefHandle methodRowId)
+                              Constructor = CAT_MemberRef(MemberRefHandle ctorRowId)
                               Value = encodeNullableContextValue ()
                               ValueHandle = None })
                         methodsWithNullableContextAttribute.Add methodKey |> ignore
@@ -2010,21 +2017,19 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 assemblyReferenceRowList.Length
                 customAttributeRowList.Length
             for row in typeReferenceRowList do
-                let struct (scopeKind, scopeRowId) = row.ResolutionScope
                 printfn
                     "[fsharp-hotreload][metadata] typeref rowId=%d name=%s scope=%A row=%d"
                     row.RowId
                     row.Name
-                    scopeKind
-                    scopeRowId
+                    row.ResolutionScope
+                    row.ResolutionScope.RowId
             for row in memberReferenceRowList do
-                let struct (parentKind, parentRowId) = row.Parent
                 printfn
                     "[fsharp-hotreload][metadata] memberref rowId=%d name=%s parent=%A row=%d"
                     row.RowId
                     row.Name
-                    parentKind
-                    parentRowId
+                    row.Parent
+                    row.Parent.RowId
             for row in assemblyReferenceRowList do
                 printfn "[fsharp-hotreload][metadata] assemblyref rowId=%d name=%s" row.RowId row.Name
 

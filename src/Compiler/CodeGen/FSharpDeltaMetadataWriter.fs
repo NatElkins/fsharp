@@ -8,6 +8,7 @@ open System.Reflection.Metadata.Ecma335
 open System.Reflection
 open Microsoft.FSharp.Collections
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
+open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
@@ -258,22 +259,20 @@ let emitWithUserStrings
             MetadataTokens.Handle(tableIndex, rowId)
             |> EntityHandle.op_Explicit
 
-        let resolutionScopeHandle struct (kind, rowId) =
-            match kind with
-            | HandleKind.ModuleDefinition -> entityHandleFromTable TableIndex.Module rowId
-            | HandleKind.ModuleReference -> entityHandleFromTable TableIndex.ModuleRef rowId
-            | HandleKind.AssemblyReference -> entityHandleFromTable TableIndex.AssemblyRef rowId
-            | HandleKind.TypeReference -> entityHandleFromTable TableIndex.TypeRef rowId
-            | _ -> EntityHandle()
+        let resolutionScopeHandle (scope: ResolutionScope) =
+            match scope with
+            | RS_Module(ModuleHandle rowId) -> entityHandleFromTable TableIndex.Module rowId
+            | RS_ModuleRef(ModuleRefHandle rowId) -> entityHandleFromTable TableIndex.ModuleRef rowId
+            | RS_AssemblyRef(AssemblyRefHandle rowId) -> entityHandleFromTable TableIndex.AssemblyRef rowId
+            | RS_TypeRef(TypeRefHandle rowId) -> entityHandleFromTable TableIndex.TypeRef rowId
 
-        let memberRefParentHandle struct (kind, rowId) =
-            match kind with
-            | HandleKind.TypeDefinition -> entityHandleFromTable TableIndex.TypeDef rowId
-            | HandleKind.TypeReference -> entityHandleFromTable TableIndex.TypeRef rowId
-            | HandleKind.ModuleReference -> entityHandleFromTable TableIndex.ModuleRef rowId
-            | HandleKind.MethodDefinition -> entityHandleFromTable TableIndex.MethodDef rowId
-            | HandleKind.TypeSpecification -> entityHandleFromTable TableIndex.TypeSpec rowId
-            | _ -> EntityHandle()
+        let memberRefParentHandle (parent: MemberRefParent) =
+            match parent with
+            | MRP_TypeDef(TypeDefHandle rowId) -> entityHandleFromTable TableIndex.TypeDef rowId
+            | MRP_TypeRef(TypeRefHandle rowId) -> entityHandleFromTable TableIndex.TypeRef rowId
+            | MRP_ModuleRef(ModuleRefHandle rowId) -> entityHandleFromTable TableIndex.ModuleRef rowId
+            | MRP_MethodDef(MethodDefHandle rowId) -> entityHandleFromTable TableIndex.MethodDef rowId
+            | MRP_TypeSpec(TypeSpecHandle rowId) -> entityHandleFromTable TableIndex.TypeSpec rowId
 
         let updatesByKey = Dictionary<MethodDefinitionKey, MethodMetadataUpdate>(HashIdentity.Structural)
         for update in updates do
@@ -396,7 +395,8 @@ let emitWithUserStrings
             encLog.Add(struct (TableIndex.StandAloneSig, rowId, operation))
             encMap.Add(struct (TableIndex.StandAloneSig, rowId))
 
-        let entityHandleOf kind rowId =
+        // entityHandleOf is retained for possible future use with HandleKind patterns
+        let _entityHandleOf kind rowId =
             match kind with
             | HandleKind.MethodDefinition -> entityHandleFromTable TableIndex.MethodDef rowId
             | HandleKind.PropertyDefinition -> entityHandleFromTable TableIndex.Property rowId
@@ -417,16 +417,17 @@ let emitWithUserStrings
             | HandleKind.MethodSpecification -> entityHandleFromTable TableIndex.MethodSpec rowId
             | _ -> invalidArg (nameof kind) "Unsupported custom attribute reference"
 
+        let hasCustomAttributeToHandle (parent: HasCustomAttribute) =
+            entityHandleFromTable (LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte parent.TableIndex)) parent.RowId
+
+        let customAttributeTypeToHandle (ctor: CustomAttributeType) =
+            entityHandleFromTable (LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte ctor.TableIndex)) ctor.RowId
+
         for row in customAttributeRows do
             tableMirror.AddCustomAttributeRow row
 
-            let parentHandle =
-                let struct (kind, rowId) = row.Parent
-                entityHandleOf kind rowId
-
-            let ctorHandle =
-                let struct (kind, rowId) = row.Constructor
-                entityHandleOf kind rowId
+            let parentHandle = hasCustomAttributeToHandle row.Parent
+            let ctorHandle = customAttributeTypeToHandle row.Constructor
 
             if emitSrmTables then
                 let blobHandle = metadataBuilder.GetOrAddBlob row.Value

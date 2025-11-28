@@ -4,6 +4,7 @@ open System
 open System.Reflection
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
+open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaStreams
 
@@ -37,7 +38,7 @@ type ParameterDefinitionRowInfo =
 
 type TypeReferenceRowInfo =
     { RowId: int
-      ResolutionScope: struct (HandleKind * int)
+      ResolutionScope: ResolutionScope
       Name: string
       NameHandle: StringHandle option
       Namespace: string
@@ -45,7 +46,7 @@ type TypeReferenceRowInfo =
 
 type MemberReferenceRowInfo =
     { RowId: int
-      Parent: struct (HandleKind * int)
+      Parent: MemberRefParent
       Name: string
       NameHandle: StringHandle option
       Signature: byte[]
@@ -66,8 +67,8 @@ type AssemblyReferenceRowInfo =
 
 type CustomAttributeRowInfo =
     { RowId: int
-      Parent: struct (HandleKind * int)
-      Constructor: struct (HandleKind * int)
+      Parent: HasCustomAttribute
+      Constructor: CustomAttributeType
       Value: byte[]
       ValueHandle: BlobHandle option }
 
