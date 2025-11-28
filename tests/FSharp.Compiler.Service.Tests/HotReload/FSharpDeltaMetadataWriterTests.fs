@@ -700,15 +700,21 @@ module FSharpDeltaMetadataWriterTests =
         let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
         assertBaselineHeapSnapshot artifacts
 
+    /// Verifies that HeapSizes in a delta match what SRM's GetHeapSize returns.
+    /// This is critical because SRM's StringHeap.TrimEnd removes trailing padding,
+    /// while other heaps (UserString, Blob, Guid) do NOT trim.
+    let private assertDeltaHeapSizesMatchSrm (delta: DeltaWriter.MetadataDelta) =
+        let expectString = getHeapSize delta.Metadata HeapIndex.String
+        let expectBlob = getHeapSize delta.Metadata HeapIndex.Blob
+        let expectUserString = getHeapSize delta.Metadata HeapIndex.UserString
+        Assert.Equal(expectString, getDeltaHeapSize delta HeapIndex.String)
+        Assert.Equal(expectBlob, getDeltaHeapSize delta HeapIndex.Blob)
+        Assert.Equal(expectUserString, getDeltaHeapSize delta HeapIndex.UserString)
+
     [<Fact>]
     let ``property delta heap sizes reflect metadata`` () =
         let artifacts = MetadataDeltaTestHelpers.emitPropertyDeltaArtifacts None ()
-        let expectString = getHeapSize artifacts.Delta.Metadata HeapIndex.String
-        let expectBlob = getHeapSize artifacts.Delta.Metadata HeapIndex.Blob
-        let expectUserString = getHeapSize artifacts.Delta.Metadata HeapIndex.UserString
-        Assert.Equal(expectString, getDeltaHeapSize artifacts.Delta HeapIndex.String)
-        Assert.Equal(expectBlob, getDeltaHeapSize artifacts.Delta HeapIndex.Blob)
-        Assert.Equal(expectUserString, getDeltaHeapSize artifacts.Delta HeapIndex.UserString)
+        assertDeltaHeapSizesMatchSrm artifacts.Delta
 
     [<Fact>]
     let ``property multi-generation artifacts capture baseline heap sizes`` () =
@@ -739,6 +745,11 @@ module FSharpDeltaMetadataWriterTests =
     let ``local signature delta artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitLocalSignatureDeltaArtifacts None ()
         assertBaselineHeapSnapshot artifacts
+
+    [<Fact>]
+    let ``local signature delta heap sizes reflect metadata`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitLocalSignatureDeltaArtifacts None ()
+        assertDeltaHeapSizesMatchSrm artifacts.Delta
 
     [<Fact>]
     let ``local signature multi-generation artifacts capture baseline heap sizes`` () =
@@ -828,6 +839,12 @@ module FSharpDeltaMetadataWriterTests =
     let ``async delta artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
         assertBaselineHeapSnapshot artifacts
+
+    [<Fact>]
+    let ``async delta heap sizes reflect metadata`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
+        assertDeltaHeapSizesMatchSrm artifacts.Delta
+
     [<Fact>]
     let ``async multi-generation artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
@@ -1259,6 +1276,11 @@ module FSharpDeltaMetadataWriterTests =
         assertBaselineHeapSnapshot artifacts
 
     [<Fact>]
+    let ``event delta heap sizes reflect metadata`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitEventDeltaArtifacts None ()
+        assertDeltaHeapSizesMatchSrm artifacts.Delta
+
+    [<Fact>]
     let ``event multi-generation artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
         assertBaselineHeapSnapshotMulti artifacts
@@ -1287,6 +1309,11 @@ module FSharpDeltaMetadataWriterTests =
     let ``closure delta artifacts capture baseline heap sizes`` () =
         let artifacts = MetadataDeltaTestHelpers.emitClosureDeltaArtifacts ()
         assertBaselineHeapSnapshot artifacts
+
+    [<Fact>]
+    let ``closure delta heap sizes reflect metadata`` () =
+        let artifacts = MetadataDeltaTestHelpers.emitClosureDeltaArtifacts ()
+        assertDeltaHeapSizesMatchSrm artifacts.Delta
 
     [<Fact>]
     let ``closure multi-generation artifacts capture baseline heap sizes`` () =
