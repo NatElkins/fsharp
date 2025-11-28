@@ -8,6 +8,7 @@ open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
+open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.IlxGen
 open FSharp.Compiler.Syntax.PrettyNaming
 
@@ -71,8 +72,8 @@ type EventDefinitionKey =
     }
 
 type MethodDefinitionMetadataHandles =
-    { NameHandle: StringHandle option
-      SignatureHandle: BlobHandle option
+    { NameOffset: StringOffset option
+      SignatureOffset: BlobOffset option
       FirstParameterRowId: int option
       Rva: int option
       Attributes: MethodAttributes option
@@ -84,14 +85,14 @@ type TypeReferenceKey =
       Name: string }
 
 type ParameterDefinitionMetadataHandles =
-    { NameHandle: StringHandle option
+    { NameOffset: StringOffset option
       RowId: int option }
 
 type PropertyDefinitionMetadataHandles =
-    { NameHandle: StringHandle option
-      SignatureHandle: BlobHandle option }
+    { NameOffset: StringOffset option
+      SignatureOffset: BlobOffset option }
 
-type EventDefinitionMetadataHandles = { NameHandle: StringHandle option }
+type EventDefinitionMetadataHandles = { NameOffset: StringOffset option }
 
 type BaselineHandleCache =
     { MethodHandles: Map<MethodDefinitionKey, MethodDefinitionMetadataHandles>
@@ -134,7 +135,7 @@ type FSharpEmitBaseline =
         EncId: Guid
         EncBaseId: Guid
         NextGeneration: int
-        ModuleNameHandle: StringHandle option
+        ModuleNameOffset: StringOffset option
         Metadata: MetadataSnapshot
         TokenMappings: ILTokenMappings
         TypeTokens: Map<string, int>
@@ -470,7 +471,7 @@ let private createCore
         BlobStreamLengthAdded = 0
         GuidStreamLengthAdded = 0
         AddedOrChangedMethods = []
-        ModuleNameHandle = None
+        ModuleNameOffset = None
     }
 
 let internal applyDelta
@@ -515,7 +516,7 @@ let internal applyDelta
         EncId = encId
         EncBaseId = encBaseId
         NextGeneration = baseline.NextGeneration + 1
-        ModuleNameHandle = baseline.ModuleNameHandle
+        ModuleNameOffset = baseline.ModuleNameOffset
         TableEntriesAdded = updatedTableEntries
         // Per Roslyn DeltaMetadataWriter.cs: String stream is concatenated unaligned,
         // Blob and UserString streams are concatenated aligned to 4-byte boundaries.
@@ -573,9 +574,11 @@ let metadataSnapshotFromReader (reader: MetadataReader) =
       TableRowCounts = tableCounts
       GuidHeapStart = heapSizes.GuidHeapSize }
 
-let private stringHandleOption (handle: StringHandle) = if handle.IsNil then None else Some handle
+let private stringOffsetOption (handle: StringHandle) =
+    if handle.IsNil then None else Some (StringOffset (MetadataTokens.GetHeapOffset handle))
 
-let private blobHandleOption (handle: BlobHandle) = if handle.IsNil then None else Some handle
+let private blobOffsetOption (handle: BlobHandle) =
+    if handle.IsNil then None else Some (BlobOffset (MetadataTokens.GetHeapOffset handle))
 
 let private buildMethodHandles (reader: MetadataReader) (methodTokens: Map<MethodDefinitionKey, int>) : Map<MethodDefinitionKey, MethodDefinitionMetadataHandles> =
     methodTokens
@@ -596,8 +599,8 @@ let private buildMethodHandles (reader: MetadataReader) (methodTokens: Map<Metho
                         firstParamRowId <- Some rowId
             Some(
                 key,
-                { NameHandle = stringHandleOption methodDef.Name
-                  SignatureHandle = blobHandleOption methodDef.Signature
+                { NameOffset = stringOffsetOption methodDef.Name
+                  SignatureOffset = blobOffsetOption methodDef.Signature
                   FirstParameterRowId = firstParamRowId
                   Rva = Some methodDef.RelativeVirtualAddress
                   Attributes = Some methodDef.Attributes
@@ -626,7 +629,7 @@ let private buildParameterHandles
                     { ParameterDefinitionKey.Method = methodKey
                       SequenceNumber = int parameter.SequenceNumber }
                 key,
-                ({ NameHandle = stringHandleOption parameter.Name
+                ({ NameOffset = stringOffsetOption parameter.Name
                    RowId = Some(MetadataTokens.GetRowNumber parameterHandle) } : ParameterDefinitionMetadataHandles))
     )
     |> Map.ofSeq
@@ -643,8 +646,8 @@ let private buildPropertyHandles (reader: MetadataReader) (propertyTokens: Map<P
             let propertyDef = reader.GetPropertyDefinition handle
             Some(
                 key,
-                { NameHandle = stringHandleOption propertyDef.Name
-                  SignatureHandle = blobHandleOption propertyDef.Signature }) )
+                { NameOffset = stringOffsetOption propertyDef.Name
+                  SignatureOffset = blobOffsetOption propertyDef.Signature }) )
     |> Map.ofSeq
 
 let private buildEventHandles (reader: MetadataReader) (eventTokens: Map<EventDefinitionKey, int>) : Map<EventDefinitionKey, EventDefinitionMetadataHandles> =
@@ -657,7 +660,7 @@ let private buildEventHandles (reader: MetadataReader) (eventTokens: Map<EventDe
             None
         else
             let eventDef = reader.GetEventDefinition handle
-            Some(key, ({ NameHandle = stringHandleOption eventDef.Name } : EventDefinitionMetadataHandles)) )
+            Some(key, ({ NameOffset = stringOffsetOption eventDef.Name } : EventDefinitionMetadataHandles)) )
     |> Map.ofSeq
 
 let private buildAssemblyReferenceTokens (reader: MetadataReader) : Map<string, int> =
@@ -704,6 +707,6 @@ let attachMetadataHandles (metadataReader: MetadataReader) (baseline: FSharpEmit
     let moduleDef = metadataReader.GetModuleDefinition()
     { baseline with
         MetadataHandles = cache
-        ModuleNameHandle = stringHandleOption moduleDef.Name
+        ModuleNameOffset = stringOffsetOption moduleDef.Name
         TypeReferenceTokens = typeReferenceTokens
         AssemblyReferenceTokens = assemblyReferenceTokens }

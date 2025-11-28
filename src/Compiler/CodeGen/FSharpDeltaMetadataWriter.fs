@@ -97,7 +97,7 @@ type MetadataDelta =
 let emitWithUserStrings
     (metadataBuilder: MetadataBuilder)
     (moduleName: string)
-    (moduleNameHandle: StringHandle option)
+    (moduleNameOffset: StringOffset option)
     (generation: int)
     (encId: Guid)
     (encBaseId: Guid)
@@ -123,11 +123,11 @@ let emitWithUserStrings
         printfn "[fsharp-hotreload][metadata-writer] emit invoked updates=%d" (List.length updates)
         for row in methodDefinitionRows do
             let offset =
-                match row.NameHandle with
-                | Some handle -> MetadataTokens.GetHeapOffset handle |> Some
+                match row.NameOffset with
+                | Some (StringOffset o) -> Some o
                 | None -> None
             printfn
-                "[fsharp-hotreload][metadata-writer] method-row name=%s isAdded=%b handle=%A"
+                "[fsharp-hotreload][metadata-writer] method-row name=%s isAdded=%b offset=%A"
                 row.Name
                 row.IsAdded
                 offset
@@ -238,11 +238,12 @@ let emitWithUserStrings
         metadataBuilder.SetCapacity(TableIndex.MethodSpec, 0)
         metadataBuilder.SetCapacity(TableIndex.GenericParamConstraint, 0)
 
-        // Use baseline's module name handle if available; otherwise add to delta string heap.
+        // Use baseline's module name offset if available; otherwise add to delta string heap.
+        // For MetadataBuilder compatibility, we need to convert back to StringHandle if we have a baseline offset.
         let moduleNameHandleOrAdded =
-            match moduleNameHandle with
-            | Some handle when not handle.IsNil -> handle
-            | _ -> metadataBuilder.GetOrAddString(moduleName)
+            match moduleNameOffset with
+            | Some (StringOffset offset) -> MetadataTokens.StringHandle(offset)
+            | None -> metadataBuilder.GetOrAddString(moduleName)
         let mvidHandle = metadataBuilder.GetOrAddGuid(moduleId)
         let encIdHandle = metadataBuilder.GetOrAddGuid(encId)
         let encBaseHandle =
@@ -253,7 +254,7 @@ let emitWithUserStrings
         printfn "[emitWithUserStrings] generation=%d moduleId=%A encId=%A encBaseId=%A" generation moduleId encId encBaseId
         let _ = metadataBuilder.AddModule(generation, moduleNameHandleOrAdded, mvidHandle, encIdHandle, encBaseHandle)
         let tableMirror = DeltaMetadataTables(heapOffsets)
-        tableMirror.AddModuleRow(moduleName, moduleNameHandle, generation, moduleId, encId, encBaseId)
+        tableMirror.AddModuleRow(moduleName, moduleNameOffset, generation, moduleId, encId, encBaseId)
 
         let entityHandleFromTable tableIndex rowId =
             MetadataTokens.Handle(tableIndex, rowId)
@@ -673,7 +674,7 @@ let emitWithUserStrings
 let emitWithReferences
     (metadataBuilder: MetadataBuilder)
     (moduleName: string)
-    (moduleNameHandle: StringHandle option)
+    (moduleNameOffset: StringOffset option)
     (generation: int)
     (encId: Guid)
     (encBaseId: Guid)
@@ -698,7 +699,7 @@ let emitWithReferences
     emitWithUserStrings
         metadataBuilder
         moduleName
-        moduleNameHandle
+        moduleNameOffset
         generation
         encId
         encBaseId
@@ -723,7 +724,7 @@ let emitWithReferences
 let emit
     (metadataBuilder: MetadataBuilder)
     (moduleName: string)
-    (moduleNameHandle: StringHandle option)
+    (moduleNameOffset: StringOffset option)
     (generation: int)
     (encId: Guid)
     (encBaseId: Guid)
@@ -744,7 +745,7 @@ let emit
     emitWithReferences
         metadataBuilder
         moduleName
-        moduleNameHandle
+        moduleNameOffset
         generation
         encId
         encBaseId

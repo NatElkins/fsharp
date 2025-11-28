@@ -6,7 +6,6 @@ open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.HotReloadBaseline
-open FSharp.Compiler.IlxDeltaStreams
 
 /// Minimal shared types for hot-reload metadata tables.
 type RowElementData =
@@ -21,9 +20,9 @@ type MethodDefinitionRowInfo =
       Attributes: MethodAttributes
       ImplAttributes: MethodImplAttributes
       Name: string
-      NameHandle: StringHandle option
+      NameOffset: StringOffset option
       Signature: byte[]
-      SignatureHandle: BlobHandle option
+      SignatureOffset: BlobOffset option
       FirstParameterRowId: int option
       CodeRva: int option }
 
@@ -34,52 +33,52 @@ type ParameterDefinitionRowInfo =
       Attributes: ParameterAttributes
       SequenceNumber: int
       Name: string option
-      NameHandle: StringHandle option }
+      NameOffset: StringOffset option }
 
 type TypeReferenceRowInfo =
     { RowId: int
       ResolutionScope: ResolutionScope
       Name: string
-      NameHandle: StringHandle option
+      NameOffset: StringOffset option
       Namespace: string
-      NamespaceHandle: StringHandle option }
+      NamespaceOffset: StringOffset option }
 
 type MemberReferenceRowInfo =
     { RowId: int
       Parent: MemberRefParent
       Name: string
-      NameHandle: StringHandle option
+      NameOffset: StringOffset option
       Signature: byte[]
-      SignatureHandle: BlobHandle option }
+      SignatureOffset: BlobOffset option }
 
 type AssemblyReferenceRowInfo =
     { RowId: int
       Version: Version
       Flags: AssemblyFlags
       PublicKeyOrToken: byte[]
-      PublicKeyOrTokenHandle: BlobHandle option
+      PublicKeyOrTokenOffset: BlobOffset option
       Name: string
-      NameHandle: StringHandle option
+      NameOffset: StringOffset option
       Culture: string option
-      CultureHandle: StringHandle option
+      CultureOffset: StringOffset option
       HashValue: byte[]
-      HashValueHandle: BlobHandle option }
+      HashValueOffset: BlobOffset option }
 
 type CustomAttributeRowInfo =
     { RowId: int
       Parent: HasCustomAttribute
       Constructor: CustomAttributeType
       Value: byte[]
-      ValueHandle: BlobHandle option }
+      ValueOffset: BlobOffset option }
 
 type PropertyDefinitionRowInfo =
     { Key: PropertyDefinitionKey
       RowId: int
       IsAdded: bool
       Name: string
-      NameHandle: StringHandle option
+      NameOffset: StringOffset option
       Signature: byte[]
-      SignatureHandle: BlobHandle option
+      SignatureOffset: BlobOffset option
       Attributes: PropertyAttributes }
 
 type EventDefinitionRowInfo =
@@ -87,7 +86,7 @@ type EventDefinitionRowInfo =
       RowId: int
       IsAdded: bool
       Name: string
-      NameHandle: StringHandle option
+      NameOffset: StringOffset option
       Attributes: EventAttributes
       EventType: EntityHandle }
 

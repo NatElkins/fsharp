@@ -307,7 +307,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let metadataReader = peReader.GetMetadataReader()
     let moduleDef = metadataReader.GetModuleDefinition()
     let moduleName = metadataReader.GetString moduleDef.Name
-    let baselineModuleNameHandle = request.Baseline.ModuleNameHandle
+    let baselineModuleNameOffset = request.Baseline.ModuleNameOffset
     let metadataBuilder = builder.MetadataBuilder
     let stringTokenCache = Dictionary<int, int>()
     let userStringUpdates = ResizeArray<int * int * string>()
@@ -685,13 +685,13 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                   Version = row.Version
                   Flags = row.Flags
                   PublicKeyOrToken = getBlob row.PublicKeyOrToken
-                  PublicKeyOrTokenHandle = None
+                  PublicKeyOrTokenOffset = None
                   Name = if row.Name.IsNil then "" else metadataReader.GetString row.Name
-                  NameHandle = None
+                  NameOffset = None
                   Culture = if row.Culture.IsNil then None else Some(metadataReader.GetString row.Culture)
-                  CultureHandle = None
+                  CultureOffset = None
                   HashValue = getBlob row.HashValue
-                  HashValueHandle = None }
+                  HashValueOffset = None }
             assemblyReferenceRows.Add info
             let deltaToken = 0x23000000 ||| nextRowId
             assemblyRefTokenMap[token] <- deltaToken
@@ -749,9 +749,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     { RowId = nextRowId
                       ResolutionScope = resolutionScope
                       Name = name
-                      NameHandle = None
+                      NameOffset = None
                       Namespace = namespaceName
-                      NamespaceHandle = None })
+                      NamespaceOffset = None })
                 let deltaToken = 0x01000000 ||| nextRowId
                 typeRefTokenMap[token] <- deltaToken
                 deltaToken
@@ -1158,15 +1158,15 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                    Body = bodyUpdate }, methodDef))
 
         let methodMetadataLookup =
-            let dict : Dictionary<MethodDefinitionKey, struct (MethodAttributes * MethodImplAttributes * string * byte[] * StringHandle option * BlobHandle option)> =
+            let dict : Dictionary<MethodDefinitionKey, struct (MethodAttributes * MethodImplAttributes * string * byte[] * StringOffset option * BlobOffset option)> =
                 Dictionary(HashIdentity.Structural)
             for update, methodDef in methodUpdatesWithDefs do
                 let name = metadataReader.GetString methodDef.Name
                 let signature = metadataReader.GetBlobBytes methodDef.Signature
-                let nameHandle = if methodDef.Name.IsNil then None else Some methodDef.Name
-                let signatureHandle = if methodDef.Signature.IsNil then None else Some methodDef.Signature
+                let nameOffset = if methodDef.Name.IsNil then None else Some (StringOffset (MetadataTokens.GetHeapOffset methodDef.Name))
+                let signatureOffset = if methodDef.Signature.IsNil then None else Some (BlobOffset (MetadataTokens.GetHeapOffset methodDef.Signature))
                 dict[update.MethodKey] <-
-                    struct (methodDef.Attributes, methodDef.ImplAttributes, name, signature, nameHandle, signatureHandle)
+                    struct (methodDef.Attributes, methodDef.ImplAttributes, name, signature, nameOffset, signatureOffset)
             dict
 
         let parameterDefinitionRowsSnapshot =
@@ -1175,7 +1175,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 if rowId = 0 then
                     None
                 else
-                    let attrs, sequence, nameOpt, resolvedHandleOpt =
+                    let attrs, sequence, nameOpt, resolvedOffsetOpt =
                         match parameterHandleLookup.TryGetValue key with
                         | true, handle when not handle.IsNil ->
                             let parameter = metadataReader.GetParameter handle
@@ -1184,11 +1184,11 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                                     None
                                 else
                                     metadataReader.GetString parameter.Name |> Some
-                            let resolvedHandle =
-                                match baselineParameterHandles |> Map.tryFind key |> Option.bind (fun info -> info.NameHandle) with
-                                | Some handle -> Some handle
-                                | None -> if parameter.Name.IsNil then None else Some parameter.Name
-                            parameter.Attributes, int parameter.SequenceNumber, name, resolvedHandle
+                            let resolvedOffset =
+                                match baselineParameterHandles |> Map.tryFind key |> Option.bind (fun info -> info.NameOffset) with
+                                | Some offset -> Some offset
+                                | None -> if parameter.Name.IsNil then None else Some (StringOffset (MetadataTokens.GetHeapOffset parameter.Name))
+                            parameter.Attributes, int parameter.SequenceNumber, name, resolvedOffset
                         | _ ->
                             let attrs =
                                 match syntheticParameterInfo.TryGetValue key with
@@ -1211,22 +1211,22 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                           Attributes = attrs
                           SequenceNumber = sequence
                           Name = nameOpt
-                          NameHandle = resolvedHandleOpt })
+                          NameOffset = resolvedOffsetOpt })
         if traceMethodUpdates.Value then
             printfn "[fsharp-hotreload][param-rows] count=%d" parameterDefinitionRowsSnapshot.Length
 
         let tryBuildMethodRow rowId key isAdded =
                 match methodMetadataLookup.TryGetValue key with
-                | true, struct (attrs, implAttrs, name, signature, emittedNameHandle, emittedSignatureHandle) ->
+                | true, struct (attrs, implAttrs, name, signature, emittedNameOffset, emittedSignatureOffset) ->
                     let baselineHandles = baselineMethodHandles |> Map.tryFind key
-                    let resolvedNameHandle =
-                        match baselineHandles |> Option.bind (fun info -> info.NameHandle) with
-                        | Some handle -> Some handle
-                        | None -> emittedNameHandle
-                    let resolvedSignatureHandle =
-                        match baselineHandles |> Option.bind (fun info -> info.SignatureHandle) with
-                        | Some handle -> Some handle
-                        | None -> emittedSignatureHandle
+                    let resolvedNameOffset =
+                        match baselineHandles |> Option.bind (fun info -> info.NameOffset) with
+                        | Some offset -> Some offset
+                        | None -> emittedNameOffset
+                    let resolvedSignatureOffset =
+                        match baselineHandles |> Option.bind (fun info -> info.SignatureOffset) with
+                        | Some offset -> Some offset
+                        | None -> emittedSignatureOffset
                     let resolvedAttributes =
                         match baselineHandles |> Option.bind (fun info -> info.Attributes) with
                         | Some value -> value
@@ -1254,9 +1254,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                           Attributes = resolvedAttributes
                           ImplAttributes = resolvedImplAttributes
                           Name = name
-                          NameHandle = resolvedNameHandle
+                          NameOffset = resolvedNameOffset
                           Signature = signature
-                          SignatureHandle = resolvedSignatureHandle
+                          SignatureOffset = resolvedSignatureOffset
                           FirstParameterRowId = firstParam
                           CodeRva = resolvedCodeRva }
                 | _ -> None
@@ -1304,22 +1304,22 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     let name = metadataReader.GetString propertyDef.Name
                     let signature = metadataReader.GetBlobBytes propertyDef.Signature
                     let baselineHandles = baselinePropertyHandles |> Map.tryFind key
-                    let resolvedNameHandle =
-                        match baselineHandles |> Option.bind (fun info -> info.NameHandle) with
-                        | Some handle -> Some handle
-                        | None -> if propertyDef.Name.IsNil then None else Some propertyDef.Name
-                    let resolvedSignatureHandle =
-                        match baselineHandles |> Option.bind (fun info -> info.SignatureHandle) with
-                        | Some handle -> Some handle
-                        | None -> if propertyDef.Signature.IsNil then None else Some propertyDef.Signature
+                    let resolvedNameOffset =
+                        match baselineHandles |> Option.bind (fun info -> info.NameOffset) with
+                        | Some offset -> Some offset
+                        | None -> if propertyDef.Name.IsNil then None else Some (StringOffset (MetadataTokens.GetHeapOffset propertyDef.Name))
+                    let resolvedSignatureOffset =
+                        match baselineHandles |> Option.bind (fun info -> info.SignatureOffset) with
+                        | Some offset -> Some offset
+                        | None -> if propertyDef.Signature.IsNil then None else Some (BlobOffset (MetadataTokens.GetHeapOffset propertyDef.Signature))
                     Some
                         { PropertyDefinitionRowInfo.Key = key
                           RowId = rowId
                           IsAdded = isAdded
                           Name = name
-                          NameHandle = resolvedNameHandle
+                          NameOffset = resolvedNameOffset
                           Signature = signature
-                          SignatureHandle = resolvedSignatureHandle
+                          SignatureOffset = resolvedSignatureOffset
                           Attributes = propertyDef.Attributes }
                 | _ -> None)
 
@@ -1333,16 +1333,16 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 | true, handle when not handle.IsNil ->
                     let eventDef = metadataReader.GetEventDefinition handle
                     let name = metadataReader.GetString eventDef.Name
-                    let resolvedNameHandle =
-                        match baselineEventHandles |> Map.tryFind key |> Option.bind (fun info -> info.NameHandle) with
-                        | Some handle -> Some handle
-                        | None -> if eventDef.Name.IsNil then None else Some eventDef.Name
+                    let resolvedNameOffset =
+                        match baselineEventHandles |> Map.tryFind key |> Option.bind (fun info -> info.NameOffset) with
+                        | Some offset -> Some offset
+                        | None -> if eventDef.Name.IsNil then None else Some (StringOffset (MetadataTokens.GetHeapOffset eventDef.Name))
                     Some
                         { EventDefinitionRowInfo.Key = key
                           RowId = rowId
                           IsAdded = isAdded
                           Name = name
-                          NameHandle = resolvedNameHandle
+                          NameOffset = resolvedNameOffset
                           Attributes = eventDef.Attributes
                           EventType = eventDef.Type }
                 | _ -> None)
@@ -1719,9 +1719,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         { RowId = nextRowId
                           ResolutionScope = scope
                           Name = "Object"
-                          NameHandle = None
+                          NameOffset = None
                           Namespace = "System"
-                          NamespaceHandle = None })
+                          NamespaceOffset = None })
                     let token = 0x01000000 ||| nextRowId
                     systemObjectTypeRefToken <- Some token
                     token
@@ -1740,9 +1740,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         { RowId = nextRowId
                           ResolutionScope = scope
                           Name = "Type"
-                          NameHandle = None
+                          NameOffset = None
                           Namespace = "System"
-                          NamespaceHandle = None })
+                          NamespaceOffset = None })
                     MetadataTokens.TypeReferenceHandle nextRowId
 
             let ensureAsyncAttributeTypeRef () =
@@ -1760,9 +1760,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         { RowId = nextRowId
                           ResolutionScope = scope
                           Name = "AsyncStateMachineAttribute"
-                          NameHandle = None
+                          NameOffset = None
                           Namespace = "System.Runtime.CompilerServices"
-                          NamespaceHandle = None })
+                          NamespaceOffset = None })
                     let token = 0x01000000 ||| nextRowId
                     asyncAttributeTypeRefToken <- Some token
                     token
@@ -1796,9 +1796,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         { RowId = nextRowId
                           Parent = MRP_TypeRef(TypeRefHandle parentRowId)
                           Name = ".ctor"
-                          NameHandle = None
+                          NameOffset = None
                           Signature = signatureBytes
-                          SignatureHandle = None })
+                          SignatureOffset = None })
 
                     let token = 0x0A000000 ||| nextRowId
                     asyncAttributeCtorToken <- Some token
@@ -1833,9 +1833,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                             { RowId = nextRowId
                               ResolutionScope = scope
                               Name = "NullableContextAttribute"
-                              NameHandle = None
+                              NameOffset = None
                               Namespace = "System.Runtime.CompilerServices"
-                              NamespaceHandle = None })
+                              NamespaceOffset = None })
                         let token = 0x01000000 ||| nextRowId
                         nullableContextAttributeTypeRefToken <- Some token
                         let _ = ensureSystemObjectTypeRef ()
@@ -1865,9 +1865,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         { RowId = nextRowId
                           Parent = MRP_TypeRef(TypeRefHandle parentRowId)
                           Name = ".ctor"
-                          NameHandle = None
+                          NameOffset = None
                           Signature = signatureBytes
-                          SignatureHandle = None })
+                          SignatureOffset = None })
 
                     let token = 0x0A000000 ||| nextRowId
                     nullableContextAttributeCtorToken <- Some token
@@ -1951,7 +1951,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                               Parent = HCA_MethodDef(MethodDefHandle parentRowId)
                               Constructor = ctorType
                               Value = valueBytes
-                              ValueHandle = if attribute.Value.IsNil then None else Some attribute.Value })
+                              ValueOffset = if attribute.Value.IsNil then None else Some (BlobOffset (MetadataTokens.GetHeapOffset attribute.Value)) })
 
             for (update, _) in methodUpdatesWithDefs do
                 let methodKey = update.MethodKey
@@ -1970,7 +1970,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                               Parent = HCA_MethodDef(MethodDefHandle methodRowId)
                               Constructor = CAT_MemberRef(MemberRefHandle ctorRowId)
                               Value = valueBytes
-                              ValueHandle = None })
+                              ValueOffset = None })
 
                         methodsWithCustomAttribute.Add methodKey |> ignore
                     | ValueNone -> ()
@@ -1986,7 +1986,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                               Parent = HCA_MethodDef(MethodDefHandle methodRowId)
                               Constructor = CAT_MemberRef(MemberRefHandle ctorRowId)
                               Value = encodeNullableContextValue ()
-                              ValueHandle = None })
+                              ValueOffset = None })
                         methodsWithNullableContextAttribute.Add methodKey |> ignore
 
             let rowList = rows |> Seq.toList
@@ -2039,7 +2039,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             MetadataWriter.emitWithReferences
                 metadataBuilder
                 moduleName
-                baselineModuleNameHandle
+                baselineModuleNameOffset
                 request.CurrentGeneration
                 encId
                 encBaseId

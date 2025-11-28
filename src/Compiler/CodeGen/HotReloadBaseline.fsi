@@ -7,6 +7,7 @@ open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
+open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.IlxGen
 
 /// <summary>Stable identifier for a method definition used when correlating baseline tokens.</summary>
@@ -47,22 +48,22 @@ type EventDefinitionKey =
       EventType: ILType option }
 
 type MethodDefinitionMetadataHandles =
-    { NameHandle: StringHandle option
-      SignatureHandle: BlobHandle option
+    { NameOffset: StringOffset option
+      SignatureOffset: BlobOffset option
       FirstParameterRowId: int option
       Rva: int option
       Attributes: MethodAttributes option
       ImplAttributes: MethodImplAttributes option }
 
 type ParameterDefinitionMetadataHandles =
-    { NameHandle: StringHandle option
+    { NameOffset: StringOffset option
       RowId: int option }
 
 type PropertyDefinitionMetadataHandles =
-    { NameHandle: StringHandle option
-      SignatureHandle: BlobHandle option }
+    { NameOffset: StringOffset option
+      SignatureOffset: BlobOffset option }
 
-type EventDefinitionMetadataHandles = { NameHandle: StringHandle option }
+type EventDefinitionMetadataHandles = { NameOffset: StringOffset option }
 
 type BaselineHandleCache =
     { MethodHandles: Map<MethodDefinitionKey, MethodDefinitionMetadataHandles>
@@ -100,7 +101,7 @@ type FSharpEmitBaseline =
       EncId: Guid
       EncBaseId: Guid
       NextGeneration: int
-      ModuleNameHandle: StringHandle option
+      ModuleNameOffset: StringOffset option
       Metadata: MetadataSnapshot
       TokenMappings: ILTokenMappings
       TypeTokens: Map<string, int>

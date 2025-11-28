@@ -324,17 +324,17 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
 
     let addStringValue (value: string) = if String.IsNullOrEmpty value then 0 else strings.AddSharedEntry value
 
-    let addExistingStringHandle (handleOpt: StringHandle option) (value: string) : int * bool =
-        match handleOpt with
-        | Some handle when not handle.IsNil -> MetadataTokens.GetHeapOffset handle, true
-        | _ ->
+    let addExistingStringOffset (offsetOpt: StringOffset option) (value: string) : int * bool =
+        match offsetOpt with
+        | Some (StringOffset offset) -> offset, true
+        | None ->
             let idx = addStringValue value
             idx, false
 
-    let addExistingStringOptionHandle (handleOpt: StringHandle option) (valueOpt: string option) : int * bool =
-        match handleOpt with
-        | Some handle when not handle.IsNil -> MetadataTokens.GetHeapOffset handle, true
-        | _ ->
+    let addExistingStringOffsetOption (offsetOpt: StringOffset option) (valueOpt: string option) : int * bool =
+        match offsetOpt with
+        | Some (StringOffset offset) -> offset, true
+        | None ->
             match valueOpt with
             | Some v when not (String.IsNullOrEmpty v) -> strings.AddSharedEntry v, false
             | _ -> 0, false
@@ -348,10 +348,10 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
 
     let addBlobBytes (bytes: byte[]) = if obj.ReferenceEquals(bytes, null) || bytes.Length = 0 then 0 else blobs.AddSharedEntry bytes
 
-    let addExistingBlobHandle (handleOpt: BlobHandle option) (value: byte[]) : int * bool =
-        match handleOpt with
-        | Some handle when not handle.IsNil -> MetadataTokens.GetHeapOffset handle, true
-        | _ ->
+    let addExistingBlobOffset (offsetOpt: BlobOffset option) (value: byte[]) : int * bool =
+        match offsetOpt with
+        | Some (BlobOffset offset) -> offset, true
+        | None ->
             let idx = addBlobBytes value
             idx, false
 
@@ -408,12 +408,12 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         ms.ToArray()
     let buildUserStringHeapBytes () = userStrings.Bytes
 
-    member _.AddModuleRow(name: string, nameHandleOpt: StringHandle option, generation: int, moduleId: Guid, encId: Guid, encBaseId: Guid) =
+    member _.AddModuleRow(name: string, nameOffsetOpt: StringOffset option, generation: int, moduleId: Guid, encId: Guid, encBaseId: Guid) =
         if moduleRows.Count = 0 then
             let nameToken =
-                match nameHandleOpt with
-                | Some handle when not handle.IsNil -> MetadataTokens.GetHeapOffset handle, true
-                | _ -> addStringValue name, false
+                match nameOffsetOpt with
+                | Some (StringOffset offset) -> offset, true
+                | None -> addStringValue name, false
             // For EnC deltas:
             // - Delta GUID heap contains: nil at 1, MVID at 2, EncId at 3
             // - Module row stores raw delta-local indices using rowElementGuidAbsolute
@@ -437,9 +437,9 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             moduleRows.Add row
 
     member _.AddMethodRow(row: MethodDefinitionRowInfo, body: MethodBodyUpdate) =
-        let nameToken = addExistingStringHandle row.NameHandle row.Name
+        let nameToken = addExistingStringOffset row.NameOffset row.Name
 
-        let signatureToken = addExistingBlobHandle row.SignatureHandle row.Signature
+        let signatureToken = addExistingBlobOffset row.SignatureOffset row.Signature
 
         let codeRva =
             if body.CodeLength > 0 then
@@ -466,7 +466,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             invalidArg "row" $"Parameter RowId must be > 0, got {row.RowId}"
         if row.SequenceNumber < 0 then
             invalidArg "row" $"Parameter SequenceNumber must be >= 0, got {row.SequenceNumber}"
-        let nameToken = addExistingStringOptionHandle row.NameHandle row.Name
+        let nameToken = addExistingStringOffsetOption row.NameOffset row.Name
         let rowElements =
             [|
                 rowElementUShort (uint16 row.Attributes)
@@ -476,8 +476,8 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         paramRows.Add rowElements
 
     member _.AddTypeReferenceRow(row: TypeReferenceRowInfo) =
-        let nameToken = addExistingStringHandle row.NameHandle row.Name
-        let namespaceToken = addExistingStringHandle row.NamespaceHandle row.Namespace
+        let nameToken = addExistingStringOffset row.NameOffset row.Name
+        let namespaceToken = addExistingStringOffset row.NamespaceOffset row.Namespace
         let rowElements =
             [|
                 rowElementResolutionScope row.ResolutionScope
@@ -487,8 +487,8 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         typeRefRows.Add rowElements
 
     member _.AddMemberReferenceRow(row: MemberReferenceRowInfo) =
-        let nameToken = addExistingStringHandle row.NameHandle row.Name
-        let signatureToken = addExistingBlobHandle row.SignatureHandle row.Signature
+        let nameToken = addExistingStringOffset row.NameOffset row.Name
+        let signatureToken = addExistingBlobOffset row.SignatureOffset row.Signature
         let rowElements =
             [|
                 rowElementMemberRefParent row.Parent
@@ -498,10 +498,10 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         memberRefRows.Add rowElements
 
     member _.AddAssemblyReferenceRow(row: AssemblyReferenceRowInfo) =
-        let publicKeyToken = addExistingBlobHandle row.PublicKeyOrTokenHandle row.PublicKeyOrToken
-        let nameToken = addExistingStringHandle row.NameHandle row.Name
-        let cultureToken = addExistingStringOptionHandle row.CultureHandle row.Culture
-        let hashToken = addExistingBlobHandle row.HashValueHandle row.HashValue
+        let publicKeyToken = addExistingBlobOffset row.PublicKeyOrTokenOffset row.PublicKeyOrToken
+        let nameToken = addExistingStringOffset row.NameOffset row.Name
+        let cultureToken = addExistingStringOffsetOption row.CultureOffset row.Culture
+        let hashToken = addExistingBlobOffset row.HashValueOffset row.HashValue
         let versionComponent value =
             if value >= 0s then uint16 value else 0us
         let rowElements =
@@ -528,7 +528,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             standAloneSigRows.Add rowElements
 
     member _.AddCustomAttributeRow(row: CustomAttributeRowInfo) =
-        let valueToken = addExistingBlobHandle row.ValueHandle row.Value
+        let valueToken = addExistingBlobOffset row.ValueOffset row.Value
 
         let rowElements =
             [|
@@ -540,9 +540,9 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         customAttributeRows.Add rowElements
 
     member _.AddPropertyRow(row: PropertyDefinitionRowInfo) =
-        let nameToken = addExistingStringHandle row.NameHandle row.Name
+        let nameToken = addExistingStringOffset row.NameOffset row.Name
 
-        let signatureToken = addExistingBlobHandle row.SignatureHandle row.Signature
+        let signatureToken = addExistingBlobOffset row.SignatureOffset row.Signature
 
         let rowElements =
             [|
@@ -554,7 +554,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
 
     member _.AddEventRow(row: EventDefinitionRowInfo) =
         let tdorTag, tdorRow = encodeTypeDefOrRef row.EventType
-        let nameToken = addExistingStringHandle row.NameHandle row.Name
+        let nameToken = addExistingStringOffset row.NameOffset row.Name
         let rowElements =
             [|
                 rowElementUShort (uint16 row.Attributes)
