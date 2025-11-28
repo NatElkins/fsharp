@@ -152,6 +152,7 @@ let private traceUserStringUpdates = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_STRI
 let private traceSynthesizedMappings = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_SYNTHESIZED"
 let private traceMethodUpdates = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_METHODS"
 let private traceMetadata = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_METADATA"
+let private traceHeapOffsets = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_HEAP_OFFSETS"
 
 /// Deduplicates method keys while preserving order
 let private dedupeMethodKeys (keys: MethodDefinitionKey list) =
@@ -264,6 +265,15 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         |> List.map (fun symbol -> symbol.QualifiedName)
 
     let builder = IlDeltaStreamBuilder(Some request.Baseline.Metadata)
+
+    if traceHeapOffsets.Value then
+        let heaps = request.Baseline.Metadata.HeapSizes
+        printfn "[fsharp-hotreload][heap-offsets] Generation %d - Baseline heap sizes passed to IlDeltaStreamBuilder:" request.CurrentGeneration
+        printfn "[fsharp-hotreload][heap-offsets]   UserStringHeapSize = %d" heaps.UserStringHeapSize
+        printfn "[fsharp-hotreload][heap-offsets]   StringHeapSize = %d" heaps.StringHeapSize
+        printfn "[fsharp-hotreload][heap-offsets]   BlobHeapSize = %d" heaps.BlobHeapSize
+        printfn "[fsharp-hotreload][heap-offsets]   GuidHeapSize = %d" heaps.GuidHeapSize
+        printfn "[fsharp-hotreload][heap-offsets]   NextGeneration = %d, EncId = %A" request.Baseline.NextGeneration request.Baseline.EncId
 
     let baselineTypeTokens = request.Baseline.TypeTokens
 

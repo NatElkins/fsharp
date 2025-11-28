@@ -14,6 +14,13 @@ open FSharp.Compiler.Syntax.PrettyNaming
 
 let private tableCount = DeltaTokens.TableCount
 
+let private traceHeapOffsets =
+    lazy (
+        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_HEAP_OFFSETS") with
+        | null | "" -> false
+        | value -> value = "1" || String.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+    )
+
 /// Align a size to a 4-byte boundary (stream alignment per ECMA-335).
 /// Used for Blob and UserString heap cumulative tracking, per Roslyn behavior.
 let private align4 value = (value + 3) &&& ~~~3
@@ -503,6 +510,13 @@ let internal applyDelta
               UserStringHeapSize = baseline.Metadata.HeapSizes.UserStringHeapSize + align4 deltaHeapSizes.UserStringHeapSize
               BlobHeapSize = baseline.Metadata.HeapSizes.BlobHeapSize + align4 deltaHeapSizes.BlobHeapSize
               GuidHeapSize = baseline.Metadata.HeapSizes.GuidHeapSize + deltaHeapSizes.GuidHeapSize }
+
+        if traceHeapOffsets.Value then
+            printfn "[fsharp-hotreload][heap-offsets] applyDelta: Updating baseline heap sizes"
+            printfn "[fsharp-hotreload][heap-offsets]   Before: UserStringHeapSize = %d" baseline.Metadata.HeapSizes.UserStringHeapSize
+            printfn "[fsharp-hotreload][heap-offsets]   Delta:  UserStringHeapSize = %d (aligned = %d)" deltaHeapSizes.UserStringHeapSize (align4 deltaHeapSizes.UserStringHeapSize)
+            printfn "[fsharp-hotreload][heap-offsets]   After:  UserStringHeapSize = %d" updatedHeapSizes.UserStringHeapSize
+            printfn "[fsharp-hotreload][heap-offsets]   Generation: %d -> %d" baseline.NextGeneration (baseline.NextGeneration + 1)
 
         let updatedTableCountsAbsolute =
             Array.init tableCount (fun i ->

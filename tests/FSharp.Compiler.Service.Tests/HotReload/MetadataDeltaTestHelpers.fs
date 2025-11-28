@@ -19,6 +19,7 @@ open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.CodeGen
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
+open FSharp.Compiler.AbstractIL.ILDeltaHandles
 
 module internal MetadataDeltaTestHelpers =
     module ILWriter = FSharp.Compiler.AbstractIL.ILBinaryWriter
@@ -838,9 +839,9 @@ module internal MetadataDeltaTestHelpers =
               Attributes = getterDef.Attributes
               ImplAttributes = getterDef.ImplAttributes
               Name = metadataReader.GetString getterDef.Name
-              NameHandle = if getterDef.Name.IsNil then None else Some getterDef.Name
+              NameOffset = None
               Signature = metadataReader.GetBlobBytes getterDef.Signature
-              SignatureHandle = if getterDef.Signature.IsNil then None else Some getterDef.Signature
+              SignatureOffset = None
               FirstParameterRowId = None
               CodeRva = None }
         let methodDefinitionRows = [ methodRow ]
@@ -867,9 +868,9 @@ module internal MetadataDeltaTestHelpers =
                 RowId = 1
                 IsAdded = true
                 Name = metadataReader.GetString propertyDef.Name
-                NameHandle = if propertyDef.Name.IsNil then None else Some propertyDef.Name
+                NameOffset = None
                 Signature = metadataReader.GetBlobBytes propertyDef.Signature
-                SignatureHandle = if propertyDef.Signature.IsNil then None else Some propertyDef.Signature
+                SignatureOffset = None
                 Attributes = propertyDef.Attributes } ]
 
         let propertyMapRows: DeltaWriter.PropertyMapRowInfo list =
@@ -884,7 +885,6 @@ module internal MetadataDeltaTestHelpers =
         let moduleGuid = metadataReader.GetGuid(moduleDef.Mvid)
 
         DeltaWriter.emit
-            builder.MetadataBuilder
             moduleName
             None
             generation
@@ -999,9 +999,9 @@ module internal MetadataDeltaTestHelpers =
               Attributes = methodDef.Attributes
               ImplAttributes = methodDef.ImplAttributes
               Name = metadataReader.GetString methodDef.Name
-              NameHandle = if methodDef.Name.IsNil then None else Some methodDef.Name
+              NameOffset = None
               Signature = metadataReader.GetBlobBytes methodDef.Signature
-              SignatureHandle = if methodDef.Signature.IsNil then None else Some methodDef.Signature
+              SignatureOffset = None
               FirstParameterRowId = None
               CodeRva = None }
         let methodRows = [ methodRow ]
@@ -1021,7 +1021,6 @@ module internal MetadataDeltaTestHelpers =
         let moduleGuid = metadataReader.GetGuid moduleDef.Mvid
 
         DeltaWriter.emit
-            builder.MetadataBuilder
             moduleName
             None
             1
@@ -1120,9 +1119,9 @@ module internal MetadataDeltaTestHelpers =
               Attributes = methodDef.Attributes
               ImplAttributes = methodDef.ImplAttributes
               Name = metadataReader.GetString methodDef.Name
-              NameHandle = if methodDef.Name.IsNil then None else Some methodDef.Name
+              NameOffset = None
               Signature = metadataReader.GetBlobBytes methodDef.Signature
-              SignatureHandle = if methodDef.Signature.IsNil then None else Some methodDef.Signature
+              SignatureOffset = None
               FirstParameterRowId = None
               CodeRva = None }
         let methodDefinitionRows = [ methodRow ]
@@ -1161,17 +1160,17 @@ module internal MetadataDeltaTestHelpers =
                       Version = row.Version
                       Flags = row.Flags
                       PublicKeyOrToken = getBlobBytes row.PublicKeyOrToken
-                      PublicKeyOrTokenHandle = if row.PublicKeyOrToken.IsNil then None else Some row.PublicKeyOrToken
+                      PublicKeyOrTokenOffset = None
                       Name = metadataReader.GetString row.Name
-                      NameHandle = if row.Name.IsNil then None else Some row.Name
+                      NameOffset = None
                       Culture =
                         if row.Culture.IsNil then
                             None
                         else
                             metadataReader.GetString row.Culture |> Some
-                      CultureHandle = if row.Culture.IsNil then None else Some row.Culture
+                      CultureOffset = None
                       HashValue = getBlobBytes row.HashValue
-                      HashValueHandle = if row.HashValue.IsNil then None else Some row.HashValue })
+                      HashValueOffset = None })
                 assemblyRefMap[handle] <- rowId
                 rowId
 
@@ -1206,14 +1205,14 @@ module internal MetadataDeltaTestHelpers =
                     | HandleKind.AssemblyReference ->
                         let parent =
                             addAssemblyReference(AssemblyReferenceHandle.op_Explicit resolutionScopeHandle)
-                        struct (HandleKind.AssemblyReference, parent)
+                        RS_AssemblyRef(AssemblyRefHandle parent)
                     | HandleKind.ModuleDefinition ->
                         let parent = MetadataTokens.GetRowNumber resolutionScopeHandle
-                        struct (HandleKind.ModuleDefinition, parent)
+                        RS_Module(ModuleHandle parent)
                     | HandleKind.ModuleReference ->
                         let parent = MetadataTokens.GetRowNumber resolutionScopeHandle
-                        struct (HandleKind.ModuleReference, parent)
-                    | _ -> struct (HandleKind.ModuleDefinition, 1)
+                        RS_ModuleRef(ModuleRefHandle parent)
+                    | _ -> RS_Module(ModuleHandle 1)
 
                 let rowId = typeReferenceRows.Count + 1
                 if shouldTraceMetadata () then
@@ -1223,9 +1222,9 @@ module internal MetadataDeltaTestHelpers =
                     { RowId = rowId
                       ResolutionScope = resolutionScope
                       Name = typeName
-                      NameHandle = if innermostRow.Name.IsNil then None else Some innermostRow.Name
+                      NameOffset = None
                       Namespace = namespaceName
-                      NamespaceHandle = None })
+                      NamespaceOffset = None })
                 typeRefMap[handle] <- rowId
                 rowId
 
@@ -1238,29 +1237,29 @@ module internal MetadataDeltaTestHelpers =
                     match row.Parent.Kind with
                     | HandleKind.TypeReference ->
                         let parentRow = addTypeReference(TypeReferenceHandle.op_Explicit row.Parent)
-                        struct (HandleKind.TypeReference, parentRow)
+                        MRP_TypeRef(TypeRefHandle parentRow)
                     | HandleKind.TypeDefinition ->
                         let parentRow = MetadataTokens.GetRowNumber row.Parent
-                        struct (HandleKind.TypeDefinition, parentRow)
+                        MRP_TypeDef(TypeDefHandle parentRow)
                     | HandleKind.ModuleReference ->
                         let parentRow = MetadataTokens.GetRowNumber row.Parent
-                        struct (HandleKind.ModuleReference, parentRow)
+                        MRP_ModuleRef(ModuleRefHandle parentRow)
                     | HandleKind.MethodDefinition ->
                         let parentRow = MetadataTokens.GetRowNumber row.Parent
-                        struct (HandleKind.MethodDefinition, parentRow)
+                        MRP_MethodDef(MethodDefHandle parentRow)
                     | HandleKind.TypeSpecification ->
                         let parentRow = MetadataTokens.GetRowNumber row.Parent
-                        struct (HandleKind.TypeSpecification, parentRow)
-                    | _ -> struct (HandleKind.TypeReference, 0)
+                        MRP_TypeSpec(TypeSpecHandle parentRow)
+                    | _ -> MRP_TypeRef(TypeRefHandle 0)
 
                 let rowId = memberReferenceRows.Count + 1
                 memberReferenceRows.Add(
                     { RowId = rowId
                       Parent = parent
                       Name = metadataReader.GetString row.Name
-                      NameHandle = if row.Name.IsNil then None else Some row.Name
+                      NameOffset = None
                       Signature = getBlobBytes row.Signature
-                      SignatureHandle = if row.Signature.IsNil then None else Some row.Signature })
+                      SignatureOffset = None })
                 memberRefMap[handle] <- rowId
                 rowId
 
@@ -1316,26 +1315,30 @@ module internal MetadataDeltaTestHelpers =
             | Some attributeHandle ->
                 let attribute = metadataReader.GetCustomAttribute attributeHandle
 
-                let ctorKind, ctorRowId =
+                let constructor : CustomAttributeType =
                     match attribute.Constructor.Kind with
                     | HandleKind.MemberReference ->
                         let rowId =
                             addMemberReference(MemberReferenceHandle.op_Explicit attribute.Constructor)
-                        HandleKind.MemberReference, rowId
-                    | kind ->
-                        kind, MetadataTokens.GetRowNumber attribute.Constructor
+                        CAT_MemberRef(MemberRefHandle rowId)
+                    | HandleKind.MethodDefinition ->
+                        let rowId = MetadataTokens.GetRowNumber attribute.Constructor
+                        CAT_MethodDef(MethodDefHandle rowId)
+                    | _ ->
+                        let rowId = MetadataTokens.GetRowNumber attribute.Constructor
+                        CAT_MethodDef(MethodDefHandle rowId)
 
-                let valueBytes, valueHandle =
+                let valueBytes =
                     if attribute.Value.IsNil then
-                        Array.empty<byte>, None
+                        Array.empty<byte>
                     else
-                        metadataReader.GetBlobBytes attribute.Value, Some attribute.Value
+                        metadataReader.GetBlobBytes attribute.Value
 
                 [ { RowId = 1
-                    Parent = struct (HandleKind.MethodDefinition, 1)
-                    Constructor = struct (ctorKind, ctorRowId)
+                    Parent = HCA_MethodDef(MethodDefHandle 1)
+                    Constructor = constructor
                     Value = valueBytes
-                    ValueHandle = valueHandle } ]
+                    ValueOffset = None } ]
             | None -> []
 
         // Include IAsyncStateMachine references to align with Roslyn parity expectations.
@@ -1363,18 +1366,17 @@ module internal MetadataDeltaTestHelpers =
                     let rowId = typeReferenceRows.Count + 1
                     typeReferenceRows.Add(
                         { RowId = rowId
-                          ResolutionScope = struct (HandleKind.AssemblyReference, asmRowId)
+                          ResolutionScope = RS_AssemblyRef(AssemblyRefHandle asmRowId)
                           Name = "IAsyncStateMachine"
-                          NameHandle = None
+                          NameOffset = None
                           Namespace = "System.Runtime.CompilerServices"
-                          NamespaceHandle = None })
+                          NamespaceOffset = None })
                 | None -> ()
 
         let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
 
         let metadataDelta =
             DeltaWriter.emitWithReferences
-                builder.MetadataBuilder
                 moduleName
                 None
                 1
@@ -1503,11 +1505,7 @@ module internal MetadataDeltaTestHelpers =
                                 None
                             else
                                 Some(metadataReader.GetString parameter.Name)
-                          NameHandle =
-                            if parameter.Name.IsNil then
-                                None
-                            else
-                                Some parameter.Name }
+                          NameOffset = None }
                     Some row)
             |> Seq.toList
 
@@ -1520,9 +1518,9 @@ module internal MetadataDeltaTestHelpers =
               Attributes = addDef.Attributes
               ImplAttributes = addDef.ImplAttributes
               Name = metadataReader.GetString addDef.Name
-              NameHandle = if addDef.Name.IsNil then None else Some addDef.Name
+              NameOffset = None
               Signature = metadataReader.GetBlobBytes addDef.Signature
-              SignatureHandle = if addDef.Signature.IsNil then None else Some addDef.Signature
+              SignatureOffset = None
               FirstParameterRowId = firstParamRowId
               CodeRva = None }
         let methodDefinitionRows = [ methodRow ]
@@ -1552,7 +1550,7 @@ module internal MetadataDeltaTestHelpers =
                 RowId = 1
                 IsAdded = true
                 Name = metadataReader.GetString eventDef.Name
-                NameHandle = if eventDef.Name.IsNil then None else Some eventDef.Name
+                NameOffset = None
                 Attributes = eventDef.Attributes
                 EventType = eventDef.Type } ]
 
@@ -1577,7 +1575,6 @@ module internal MetadataDeltaTestHelpers =
                 AssociationInfo = Some(MethodSemanticsAssociation.EventAssociation(eventKey, 1)) } ]
 
         DeltaWriter.emit
-            builder.MetadataBuilder
             moduleName
             None
             1
@@ -1675,7 +1672,7 @@ module internal MetadataDeltaTestHelpers =
                               None
                           else
                               Some(metadataReader.GetString paramDef.Name)
-                      NameHandle = if paramDef.Name.IsNil then None else Some paramDef.Name }
+                      NameOffset = None }
                 row)
             |> Seq.toList
 
@@ -1688,9 +1685,9 @@ module internal MetadataDeltaTestHelpers =
               Attributes = methodDef.Attributes
               ImplAttributes = methodDef.ImplAttributes
               Name = metadataReader.GetString methodDef.Name
-              NameHandle = if methodDef.Name.IsNil then None else Some methodDef.Name
+              NameOffset = None
               Signature = metadataReader.GetBlobBytes methodDef.Signature
-              SignatureHandle = if methodDef.Signature.IsNil then None else Some methodDef.Signature
+              SignatureOffset = None
               FirstParameterRowId = firstParamRowId
               CodeRva = None }
 
@@ -1730,7 +1727,6 @@ module internal MetadataDeltaTestHelpers =
         let updates = artifacts |> List.map (fun a -> a.Update)
 
         DeltaWriter.emit
-            builder.MetadataBuilder
             moduleName
             None
             1

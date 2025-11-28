@@ -356,7 +356,7 @@ module Sample
 
 let mutable state = 1
 """
-        |> withOptions [ "--langversion:preview"; "--enable:hotreloaddeltas" ]
+        |> withOptions [ "--langversion:preview"; "--debug+"; "--optimize-"; "--enable:hotreloaddeltas" ]
         |> compile
         |> shouldSucceed
         |> ignore

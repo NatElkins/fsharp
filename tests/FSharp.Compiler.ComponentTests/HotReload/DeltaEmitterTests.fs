@@ -1617,3 +1617,72 @@ module DeltaEmitterTests =
         let ex = Assert.Throws<InvalidOperationException>(fun () ->
             FSharp.Compiler.HotReloadState.recordDeltaApplied (System.Guid.NewGuid()))
         Assert.Contains("no active hot reload session", ex.Message)
+
+    [<Fact>]
+    let ``multi-generation user string content is correctly encoded`` () =
+        // This test verifies that user strings are correctly encoded across multiple generations.
+        // The bug that was fixed required proper cumulative heap offset tracking - generation 2+
+        // user strings would be corrupted if heap offsets weren't correctly accumulated.
+
+        // Generation 0: Create baseline with initial string
+        let _, baseline = createStringBaseline "Version 1"
+        let key = methodKey baseline "GetMessage"
+
+        // Generation 1: Update to "Version 2"
+        let updatedModule1 = createStringModule "Version 2" |> TestHelpers.withDebuggableAttribute
+        let request1 : IlxDeltaRequest =
+            { Baseline = baseline
+              UpdatedTypes = [ key.DeclaringType ]
+              UpdatedMethods = [ key ]
+              UpdatedAccessors = []
+              Module = updatedModule1
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta1 = emitDelta request1
+
+        // Verify generation 1 user string
+        let gen1Literal =
+            delta1.UserStringUpdates
+            |> List.tryPick (fun (_, _, text) ->
+                if text.StartsWith("Version", StringComparison.Ordinal) then Some text else None)
+
+        match gen1Literal with
+        | Some text -> Assert.Equal("Version 2", text)
+        | None -> Assert.True(false, "Expected 'Version 2' user string in generation 1 delta.")
+
+        // Get updated baseline from delta1 - this contains cumulative heap sizes with proper alignment
+        // (critical for the bug we're testing)
+        let updatedBaseline =
+            match delta1.UpdatedBaseline with
+            | Some baseline -> baseline
+            | None -> failwith "Expected UpdatedBaseline to be set after emitDelta"
+
+        // Generation 2: Update to "Version 3"
+        let updatedModule2 = createStringModule "Version 3" |> TestHelpers.withDebuggableAttribute
+        let request2 : IlxDeltaRequest =
+            { Baseline = updatedBaseline
+              UpdatedTypes = [ key.DeclaringType ]
+              UpdatedMethods = [ key ]
+              UpdatedAccessors = []
+              Module = updatedModule2
+              SymbolChanges = None
+              CurrentGeneration = 2
+              PreviousGenerationId = Some delta1.GenerationId
+              SynthesizedNames = None }
+
+        let delta2 = emitDelta request2
+
+        // Verify generation 2 user string - this is where the bug would manifest
+        // If heap offsets weren't correctly accumulated, the string would be corrupted
+        // (e.g., contain CJK characters instead of the expected text)
+        let gen2Literal =
+            delta2.UserStringUpdates
+            |> List.tryPick (fun (_, _, text) ->
+                if text.StartsWith("Version", StringComparison.Ordinal) then Some text else None)
+
+        match gen2Literal with
+        | Some text -> Assert.Equal("Version 3", text)
+        | None -> Assert.True(false, "Expected 'Version 3' user string in generation 2 delta.")

@@ -15,7 +15,7 @@ module NameMapTests =
 
     let private compileHotReloadLibrary source =
         FSharp source
-        |> withOptions [ "--langversion:preview"; "--enable:hotreloaddeltas"; "--optimize-" ]
+        |> withOptions [ "--langversion:preview"; "--debug+"; "--enable:hotreloaddeltas"; "--optimize-" ]
         |> asLibrary
         |> compile
         |> shouldSucceed

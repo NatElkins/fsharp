@@ -359,18 +359,34 @@ let emitWithUserStrings
             use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(metadataBytes))
             let reader = provider.GetMetadataReader()
             let moduleDef = reader.GetModuleDefinition()
-            let genIdIndex =
-                if moduleDef.GenerationId.IsNil then 0 else (MetadataTokens.GetHeapOffset moduleDef.GenerationId / 16) + 1
-            let baseGenIdIndex =
-                if moduleDef.BaseGenerationId.IsNil then 0 else (MetadataTokens.GetHeapOffset moduleDef.BaseGenerationId / 16) + 1
             let guidHeapSize = reader.GetHeapSize(HeapIndex.Guid)
+            // Get actual GUID values from the reader
+            let mvidGuid = if moduleDef.Mvid.IsNil then System.Guid.Empty else reader.GetGuid(moduleDef.Mvid)
+            let genIdGuid = if moduleDef.GenerationId.IsNil then System.Guid.Empty else reader.GetGuid(moduleDef.GenerationId)
+            let baseGenIdGuid = if moduleDef.BaseGenerationId.IsNil then System.Guid.Empty else reader.GetGuid(moduleDef.BaseGenerationId)
             printfn
-                "[fsharp-hotreload][module-row-debug] generation=%d genIdIndex=%d baseGenIdIndex=%d guidHeapSize=%d"
+                "[fsharp-hotreload][module-row-debug] generation=%d guidHeapSize=%d"
                 generation
-                genIdIndex
-                baseGenIdIndex
                 guidHeapSize
-        with _ -> ()
+            printfn "[fsharp-hotreload][module-row-debug] MVID=%A" mvidGuid
+            printfn "[fsharp-hotreload][module-row-debug] EncId=%A (expected: %A)" genIdGuid encId
+            printfn "[fsharp-hotreload][module-row-debug] EncBaseId=%A (expected: %A)" baseGenIdGuid encBaseId
+            if genIdGuid <> encId then
+                printfn "[fsharp-hotreload][module-row-debug] WARNING: EncId mismatch!"
+            if baseGenIdGuid <> encBaseId then
+                printfn "[fsharp-hotreload][module-row-debug] WARNING: EncBaseId mismatch!"
+        with ex ->
+            printfn "[fsharp-hotreload][module-row-debug] ERROR: %s" ex.Message
+
+        // HeapSizes should match what SRM's GetHeapSize returns:
+        // - StringHeap: SRM trims trailing zeros, so use unpadded size
+        // - UserStringHeap, BlobHeap, GuidHeap: SRM does NOT trim, so use padded size (stream header size)
+        // This is important for EnC offset calculations via MetadataAggregator
+        let heapSizes : MetadataHeapSizes =
+            { StringHeapSize = tableMirror.StringHeapBytes.Length  // unpadded - SRM trims trailing zeros
+              UserStringHeapSize = heapStreams.UserStringsLength   // padded - SRM does not trim
+              BlobHeapSize = heapStreams.BlobsLength               // padded - SRM does not trim
+              GuidHeapSize = heapStreams.GuidsLength }             // padded - SRM does not trim
 
         { Metadata = metadataBytes
           StringHeap = heapStreams.Strings
@@ -379,7 +395,7 @@ let emitWithUserStrings
           EncLog = encLogEntries |> Array.map (fun struct (a, b, c) -> (a, b, c))
           EncMap = encMapEntries |> Array.map (fun struct (a, b) -> (a, b))
           TableRowCounts = tableRowCounts
-          HeapSizes = metadataSizes.HeapSizes
+          HeapSizes = heapSizes
           HeapOffsets = heapOffsets
           Tables = tableMirror.TableRows
           TableBitMasks = tableBitMasks

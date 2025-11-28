@@ -38,7 +38,7 @@ module ErrorPathTests =
             EncId = System.Guid.Empty
             EncBaseId = System.Guid.Empty
             NextGeneration = 1
-            ModuleNameHandle = None
+            ModuleNameOffset = None
             Metadata = metadataSnapshot
             TokenMappings =
                 {

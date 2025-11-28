@@ -14,6 +14,13 @@ open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 
+let private traceHeapOffsets =
+    lazy (
+        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_HEAP_OFFSETS") with
+        | null | "" -> false
+        | value -> value = "1" || String.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+    )
+
 /// Mirrors the AbstractIL metadata tables for the subset of rows emitted by
 /// hot reload deltas. The tables are populated alongside the SRM metadata
 /// builder so we can eventually serialize deltas directly via AbstractIL.
@@ -426,6 +433,9 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             let encBaseIdIndex =
                 if encBaseId = System.Guid.Empty then 0
                 else forceAddGuidValue encBaseId                     // Index 4 if not nil
+            if traceHeapOffsets.Value then
+                printfn "[fsharp-hotreload][module-row-write] generation=%d mvidIndex=%d encIdIndex=%d encBaseIdIndex=%d"
+                    generation mvidIndex encIdIndex encBaseIdIndex
             let row =
                 [|
                     rowElementUShort (uint16 generation)
@@ -715,8 +725,12 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     /// but the stream header will indicate it represents data starting at heapOffsets.UserStringHeapStart.
     /// This matches how the runtime resolves tokens: absolute_token - stream_header_offset = position_in_delta_bytes.
     member _.AddUserStringLiteral(offset: int, value: string) =
-        let relativeOffset =
-            let start = heapOffsets.UserStringHeapStart
-            if offset > start then offset - start else offset
+        let start = heapOffsets.UserStringHeapStart
+        let relativeOffset = if offset > start then offset - start else offset
+        if traceHeapOffsets.Value then
+            printfn "[fsharp-hotreload][heap-offsets] AddUserStringLiteral: absolute offset=%d, heapStart=%d, relative=%d, value=%A%s"
+                offset start relativeOffset (value.Substring(0, min 20 value.Length)) (if value.Length > 20 then "..." else "")
+            if offset <= start then
+                printfn "[fsharp-hotreload][heap-offsets] WARNING: offset %d <= heapStart %d - this may indicate stale baseline!" offset start
         userStrings.AddEntry(relativeOffset, value)
         userStringHeapBytesCache <- None

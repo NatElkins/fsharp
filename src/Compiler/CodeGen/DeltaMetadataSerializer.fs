@@ -49,14 +49,25 @@ let buildHeapStreams (mirror: DeltaMetadataTables) : DeltaHeapStreams =
     let guidBytes = mirror.GuidHeapBytes
     let userStringBytes = mirror.UserStringHeapBytes
 
-    { Strings = padTo4 stringBytes
-      StringsLength = stringBytes.Length
-      Blobs = padTo4 blobBytes
-      BlobsLength = blobBytes.Length
-      Guids = padTo4 guidBytes
-      GuidsLength = guidBytes.Length
-      UserStrings = padTo4 userStringBytes
-      UserStringsLength = userStringBytes.Length }
+    // Per Roslyn DeltaMetadataWriter.cs:234-241 and SRM MetadataBuilder.cs:86-89:
+    // - Stream header Size fields use GetAlignedHeapSize (aligned to 4 bytes)
+    // - String heap cumulative tracking uses unaligned HeapSizes
+    // - Blob/UserString heap cumulative tracking uses aligned sizes
+    // The Length fields become stream header Size values, which must match
+    // the actual padded byte array lengths for correct runtime parsing.
+    let paddedStrings = padTo4 stringBytes
+    let paddedBlobs = padTo4 blobBytes
+    let paddedGuids = padTo4 guidBytes
+    let paddedUserStrings = padTo4 userStringBytes
+
+    { Strings = paddedStrings
+      StringsLength = paddedStrings.Length  // Stream header uses padded size
+      Blobs = paddedBlobs
+      BlobsLength = paddedBlobs.Length      // Stream header uses padded size
+      Guids = paddedGuids
+      GuidsLength = paddedGuids.Length      // Stream header uses padded size
+      UserStrings = paddedUserStrings
+      UserStringsLength = paddedUserStrings.Length }  // Stream header uses padded size
 
 /// Represents the serialized `#~` stream (metadata tables) including its padded bytes.
 type DeltaTableStream =
@@ -179,6 +190,8 @@ let private writeRowElement (writer: BinaryWriter) (indexSizes: DeltaIndexSizing
                 // Guid heap indexes are entry counts (1-based), not byte offsets.
                 let baselineEntries = input.HeapOffsets.GuidHeapStart / 16
                 baselineEntries + value
+        if Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_HEAP_OFFSETS") = "1" then
+            printfn "[fsharp-hotreload][guid-serialize] isAbsolute=%b value=%d adjusted=%d guidsBig=%b" element.IsAbsolute value adjusted indexSizes.GuidsBig
         writeHeapIndex writer indexSizes.GuidsBig adjusted
     elif tag >= RowElementTags.SimpleIndexMin && tag <= RowElementTags.SimpleIndexMax then
         let tableIndex = tag - RowElementTags.SimpleIndexMin

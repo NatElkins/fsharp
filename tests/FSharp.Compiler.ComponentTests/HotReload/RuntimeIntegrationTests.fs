@@ -357,3 +357,152 @@ type Type =
                 try checker.EndHotReloadSession() with _ -> ()
                 try checker.InvalidateAll() with _ -> ()
                 try Directory.Delete(projectDir, true) with _ -> ()
+
+    let private stringLiteralBaselineSource =
+        """
+namespace Sample
+
+type Type =
+    static member GetMessage() = "Hello from generation 0"
+"""
+
+    let private stringLiteralUpdatedSource (gen: int) : string =
+        $"""
+namespace Sample
+
+type Type =
+    static member GetMessage() = "Hello from generation {gen}"
+"""
+
+    [<Fact>]
+    let ``Multi-generation user string literals resolve correctly`` () =
+        // This test verifies that user string literals are correctly resolved across
+        // multiple delta generations. The bug manifests as CJK character corruption
+        // at generation 2+ when stream header sizes don't match padded byte arrays.
+        // Requires DOTNET_MODIFIABLE_ASSEMBLIES=debug
+        let modifiable = Environment.GetEnvironmentVariable("DOTNET_MODIFIABLE_ASSEMBLIES")
+        if not (String.Equals(modifiable, "debug", StringComparison.OrdinalIgnoreCase)) then
+            printfn "[skip] DOTNET_MODIFIABLE_ASSEMBLIES must be 'debug' for this test"
+        else
+            let checker =
+                FSharpChecker.Create(
+                    keepAssemblyContents = true,
+                    keepAllBackgroundResolutions = false,
+                    keepAllBackgroundSymbolUses = false,
+                    enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                    enablePartialTypeChecking = false,
+                    captureIdentifiersWhenParsing = false
+                )
+
+            let projectDir = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-multigen-userstring", System.Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(projectDir) |> ignore
+            let fsPath = Path.Combine(projectDir, "StringLiteralMultiGen.fs")
+            let dllPath = Path.Combine(projectDir, "StringLiteralMultiGen.dll")
+            let runtimeDllPath = Path.Combine(projectDir, "StringLiteralMultiGen.runtime.dll")
+
+            try
+                File.WriteAllText(fsPath, stringLiteralBaselineSource)
+
+                let projectOptions, _ =
+                    checker.GetProjectOptionsFromScript(
+                        fsPath,
+                        SourceText.ofString stringLiteralBaselineSource,
+                        assumeDotNetFramework = false,
+                        useSdkRefs = true,
+                        useFsiAuxLib = false
+                    )
+                    |> Async.RunImmediate
+
+                let projectOptions =
+                    { projectOptions with
+                        SourceFiles = [| fsPath |]
+                        OtherOptions =
+                            projectOptions.OtherOptions
+                            |> Array.append
+                                [| "--target:library"
+                                   "--langversion:preview"
+                                   "--optimize-"
+                                   "--debug:portable"
+                                   "--deterministic"
+                                   "--enable:hotreloaddeltas"
+                                   $"--out:{dllPath}" |] }
+
+                // Compile baseline
+                checker.InvalidateAll()
+                let compileDiagnostics, _ =
+                    checker.Compile(Array.concat [ [| "fsc.exe" |]; projectOptions.OtherOptions; projectOptions.SourceFiles ])
+                    |> Async.RunImmediate
+
+                let errors = compileDiagnostics |> Array.filter (fun d -> d.Severity = FSharpDiagnosticSeverity.Error)
+                if errors.Length > 0 then failwithf "Baseline compilation failed: %A" (errors |> Array.map (fun d -> d.Message))
+
+                // Start hot reload session
+                match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+                | Error error -> failwithf "Failed to start hot reload session: %A" error
+                | Ok () -> ()
+
+                // Copy baseline to runtime location and load it
+                File.Copy(dllPath, runtimeDllPath, true)
+                let pdbPath = Path.ChangeExtension(dllPath, ".pdb")
+                if File.Exists(pdbPath) then
+                    File.Copy(pdbPath, Path.ChangeExtension(runtimeDllPath, ".pdb"), true)
+
+                let assembly = Assembly.LoadFrom(runtimeDllPath)
+                let methodType = assembly.GetType("Sample.Type", throwOnError = true)
+                let method = methodType.GetMethod("GetMessage", BindingFlags.Public ||| BindingFlags.Static)
+
+                // Verify baseline string
+                let baselineMessage = method.Invoke(null, [||]) :?> string
+                Assert.Equal("Hello from generation 0", baselineMessage)
+                printfn "[multigen-userstring] Baseline: %s" baselineMessage
+
+                // Helper to apply a generation delta
+                let applyGeneration gen =
+                    let newSource = stringLiteralUpdatedSource gen
+                    File.WriteAllText(fsPath, newSource)
+                    checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+
+                    // Recompile without hot reload capture
+                    let updatedOptions =
+                        { projectOptions with
+                            OtherOptions =
+                                projectOptions.OtherOptions
+                                |> Array.filter (fun opt ->
+                                    not (opt.StartsWith("--enable:hotreloaddeltas", StringComparison.OrdinalIgnoreCase))) }
+
+                    let compileDiagnostics, _ =
+                        checker.Compile(Array.concat [ [| "fsc.exe" |]; updatedOptions.OtherOptions; updatedOptions.SourceFiles ])
+                        |> Async.RunImmediate
+
+                    let errors = compileDiagnostics |> Array.filter (fun d -> d.Severity = FSharpDiagnosticSeverity.Error)
+                    if errors.Length > 0 then failwithf "Gen %d compilation failed: %A" gen (errors |> Array.map (fun d -> d.Message))
+
+                    // Emit delta
+                    match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+                    | Error error -> failwithf "Gen %d EmitHotReloadDelta failed: %A" gen error
+                    | Ok delta ->
+                        let pdbBytes = delta.Pdb |> Option.defaultValue Array.empty
+                        printfn "[multigen-userstring] Gen %d: metadata=%d IL=%d PDB=%d" gen delta.Metadata.Length delta.IL.Length pdbBytes.Length
+
+                        // Apply the delta
+                        MetadataUpdater.ApplyUpdate(assembly, delta.Metadata.AsSpan(), delta.IL.AsSpan(), pdbBytes.AsSpan())
+
+                        // Verify the string is correct
+                        let message = method.Invoke(null, [||]) :?> string
+                        let expectedMessage = sprintf "Hello from generation %d" gen
+                        printfn "[multigen-userstring] Gen %d result: %s (expected: %s)" gen message expectedMessage
+
+                        // This assertion will fail at gen 2 if stream header sizes are not aligned
+                        Assert.Equal(expectedMessage, message)
+
+                // Apply generations 1, 2, 3 - the bug manifests at generation 2
+                applyGeneration 1
+                applyGeneration 2
+                applyGeneration 3
+
+                printfn "[multigen-userstring] SUCCESS: All 3 generations applied correctly"
+
+            finally
+                try checker.EndHotReloadSession() with _ -> ()
+                try checker.InvalidateAll() with _ -> ()
+                try Directory.Delete(projectDir, true) with _ -> ()
