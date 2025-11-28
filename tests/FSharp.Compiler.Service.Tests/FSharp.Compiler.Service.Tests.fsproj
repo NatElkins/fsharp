@@ -93,6 +93,7 @@
     <Compile Include="HotReload/CodedIndexTests.fs" />
     <Compile Include="HotReload/ErrorPathTests.fs" />
     <Compile Include="HotReload/EdgeCaseTests.fs" />
+    <Compile Include="HotReload/SrmParityTests.fs" />
   </ItemGroup>
 
 	<ItemGroup>
