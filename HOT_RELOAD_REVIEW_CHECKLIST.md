@@ -511,9 +511,15 @@ This checklist contains all issues identified during the 12-session code review 
   - Note: Global state tests (session lifecycle) deferred due to test isolation complexity
   - Priority: Medium
 
-- [ ] **Limited edge case testing**
-  - Tests needed:
-    - [ ] Large row counts (65,536+ triggering index size changes)
+- [x] **Limited edge case testing** ✅ FIXED
+  - Fix: Added `EdgeCaseTests.fs` with 25 tests for boundary conditions
+  - Tests added:
+    - [x] Index size threshold tests (65,536 boundary for heap/table sizes)
+    - [x] Simple index tests (TypeDef, MethodDef row count thresholds)
+    - [x] Coded index tests (TypeDefOrRef, MemberRefParent, HasCustomAttribute with tag bits)
+    - [x] EncDelta mode forces all indices big
+    - [x] Boundary tests (zero, maximum, threshold-1)
+  - Remaining (would require full compilation):
     - [ ] Deep nesting (10+ closure levels)
     - [ ] 100+ consecutive generations
     - [ ] Zero-byte IL method bodies

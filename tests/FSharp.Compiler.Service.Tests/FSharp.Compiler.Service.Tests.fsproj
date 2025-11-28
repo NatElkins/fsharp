@@ -92,6 +92,7 @@
     <Compile Include="HotReload/ThreadSafetyTests.fs" />
     <Compile Include="HotReload/CodedIndexTests.fs" />
     <Compile Include="HotReload/ErrorPathTests.fs" />
+    <Compile Include="HotReload/EdgeCaseTests.fs" />
   </ItemGroup>
 
 	<ItemGroup>
