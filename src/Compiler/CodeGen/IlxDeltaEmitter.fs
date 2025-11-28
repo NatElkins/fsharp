@@ -2037,7 +2037,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
         let metadataDelta =
             MetadataWriter.emitWithReferences
-                metadataBuilder
                 moduleName
                 baselineModuleNameOffset
                 request.CurrentGeneration
