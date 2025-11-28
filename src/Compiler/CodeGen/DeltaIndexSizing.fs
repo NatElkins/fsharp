@@ -2,6 +2,7 @@ module internal FSharp.Compiler.CodeGen.DeltaIndexSizing
 
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
+open FSharp.Compiler.AbstractIL.ILDeltaHandles
 
 type MetadataHeapSizes = FSharp.Compiler.AbstractIL.ILBinaryWriter.MetadataHeapSizes
 
@@ -92,7 +93,7 @@ let compute
     let guidsBig = (not isCompressed) || heapSizes.GuidHeapSize >= 0x10000
 
     let simpleIndexBig =
-        Array.init MetadataTokens.TableCount (fun i ->
+        Array.init DeltaTokens.TableCount (fun i ->
             isSimpleIndexBig tableRowCounts externalRowCounts isCompressed i)
 
     let coded tag tables =

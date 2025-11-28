@@ -118,10 +118,10 @@ let emitWithUserStrings
                 row.IsAdded
                 offset
     let normalizedExternalRowCounts =
-        if externalRowCounts.Length = MetadataTokens.TableCount then
+        if externalRowCounts.Length = DeltaTokens.TableCount then
             externalRowCounts
         else
-            Array.zeroCreate MetadataTokens.TableCount
+            Array.zeroCreate DeltaTokens.TableCount
 
     if List.isEmpty updates then
         let emptyMirror = DeltaMetadataTables(heapOffsets)

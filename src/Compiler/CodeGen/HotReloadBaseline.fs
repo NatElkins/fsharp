@@ -12,7 +12,7 @@ open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.IlxGen
 open FSharp.Compiler.Syntax.PrettyNaming
 
-let private tableCount = MetadataTokens.TableCount
+let private tableCount = DeltaTokens.TableCount
 
 /// Align a size to a 4-byte boundary (stream alignment per ECMA-335).
 /// Used for Blob and UserString heap cumulative tracking, per Roslyn behavior.
@@ -566,7 +566,7 @@ let metadataSnapshotFromReader (reader: MetadataReader) =
           GuidHeapSize = reader.GetHeapSize(HeapIndex.Guid) }
 
     let tableCounts =
-        Array.init MetadataTokens.TableCount (fun i ->
+        Array.init tableCount (fun i ->
             let tableIndex = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte i)
             reader.GetTableRowCount(tableIndex))
 

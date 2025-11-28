@@ -580,8 +580,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         eventMapRows.Add rowElements
 
     member _.AddMethodSemanticsRow(row: MethodSemanticsMetadataUpdate) =
-        let methodHandle = MetadataTokens.MethodDefinitionHandle row.MethodToken
-        let methodRowId = MetadataTokens.GetRowNumber methodHandle
+        let methodRowId = DeltaTokens.getRowNumber row.MethodToken
         let assocTag, assocRowId =
             match row.AssociationInfo with
             | Some(MethodSemanticsAssociation.PropertyAssociation(_, propertyRowId)) -> hs_Property, propertyRowId
@@ -604,8 +603,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         methodSemanticsRows.Add rowElements
 
     member _.AddEncLogRow(tableIndex: TableIndex, rowId: int, operation: EditAndContinueOperation) =
-        let entityHandle = MetadataTokens.EntityHandle(tableIndex, rowId)
-        let token = MetadataTokens.GetToken(entityHandle)
+        let token = DeltaTokens.makeToken (int tableIndex) rowId
         let rowElements =
             [|
                 rowElementULong token
@@ -614,8 +612,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         encLogRows.Add rowElements
 
     member _.AddEncMapRow(tableIndex: TableIndex, rowId: int) =
-        let entityHandle = MetadataTokens.EntityHandle(tableIndex, rowId)
-        let token = MetadataTokens.GetToken(entityHandle)
+        let token = DeltaTokens.makeToken (int tableIndex) rowId
         let rowElements =
             [|
                 rowElementULong token
@@ -694,7 +691,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     member _.HeapOffsets = heapOffsets
 
     member _.TableRowCounts : int[] =
-        let counts = Array.zeroCreate MetadataTokens.TableCount
+        let counts = Array.zeroCreate DeltaTokens.TableCount
         counts[int TableIndex.Module] <- moduleRows.Count
         counts[int TableIndex.MethodDef] <- methodRows.Count
         counts[int TableIndex.Param] <- paramRows.Count

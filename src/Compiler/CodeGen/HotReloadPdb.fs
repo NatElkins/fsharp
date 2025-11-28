@@ -7,10 +7,11 @@ open System.Collections.Immutable
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Security.Cryptography
+open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.HotReloadBaseline
 
 let private computeRowCounts (reader: MetadataReader) : ImmutableArray<int> =
-    let counts = Array.zeroCreate<int> MetadataTokens.TableCount
+    let counts = Array.zeroCreate<int> DeltaTokens.TableCount
 
     let inline setCount (index: TableIndex) (value: int) =
         counts[int index] <- value
@@ -187,7 +188,7 @@ let emitDelta
                         BlobContentId.FromHash(hasher.ComputeHash bytes))
 
                 let zeroCounts =
-                    ImmutableArray.CreateRange(Array.zeroCreate<int> MetadataTokens.TableCount)
+                    ImmutableArray.CreateRange(Array.zeroCreate<int> DeltaTokens.TableCount)
 
                 let builder = PortablePdbBuilder(metadata, zeroCounts, entryPointHandle, idProvider)
                 let blobBuilder = BlobBuilder()

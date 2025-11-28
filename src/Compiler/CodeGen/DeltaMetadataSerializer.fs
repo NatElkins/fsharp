@@ -7,6 +7,7 @@ open System.Text
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
+open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 open FSharp.Compiler.CodeGen.DeltaTableLayout
@@ -73,10 +74,10 @@ type DeltaMetadataSizes =
 
 let computeMetadataSizes (tableMirror: DeltaMetadataTables) (externalRowCounts: int[]) : DeltaMetadataSizes =
     let normalizedExternal =
-        if externalRowCounts.Length = MetadataTokens.TableCount then
+        if externalRowCounts.Length = DeltaTokens.TableCount then
             externalRowCounts
         else
-            Array.zeroCreate MetadataTokens.TableCount
+            Array.zeroCreate DeltaTokens.TableCount
 
     let rowCounts = tableMirror.TableRowCounts
     let heapSizes = tableMirror.HeapSizes
@@ -119,7 +120,7 @@ let private writeTaggedIndex (writer: BinaryWriter) (nbits: int) (isBig: bool) (
     if isBig then writeUInt32 writer encoded else writeUInt16 writer encoded
 
 let private tableRowsByIndex (tables: TableRows) =
-    let rows = Array.create MetadataTokens.TableCount Array.empty
+    let rows = Array.create DeltaTokens.TableCount Array.empty
     rows[int TableIndex.Module] <- tables.Module
     rows[int TableIndex.MethodDef] <- tables.MethodDef
     rows[int TableIndex.Param] <- tables.Param
@@ -252,13 +253,13 @@ let buildTableStream (input: DeltaTableSerializerInput) : DeltaTableStream =
     writer.Write(bitMasks.SortedLow)
     writer.Write(bitMasks.SortedHigh)
 
-    for tableIndex = 0 to MetadataTokens.TableCount - 1 do
+    for tableIndex = 0 to DeltaTokens.TableCount - 1 do
         if isTablePresent bitMasks.ValidLow bitMasks.ValidHigh tableIndex then
             writer.Write(sizes.RowCounts.[tableIndex])
 
     let rowsByIndex = tableRowsByIndex input.Tables
 
-    for tableIndex = 0 to MetadataTokens.TableCount - 1 do
+    for tableIndex = 0 to DeltaTokens.TableCount - 1 do
         let rows = rowsByIndex.[tableIndex]
         if rows.Length > 0 then
             for row in rows do
