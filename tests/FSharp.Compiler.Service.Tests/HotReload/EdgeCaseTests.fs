@@ -283,3 +283,193 @@ module EdgeCaseTests =
             Assert.False(sizes.StringsBig, "Exactly threshold - 1 should be small")
             Assert.False(sizes.SimpleIndexBig.[int TableIndex.TypeDef], "Row count threshold - 1 should be small")
 
+    module DeepNestingTests =
+        open FSharp.Compiler.SynthesizedTypeMaps
+
+        [<Fact>]
+        let ``SynthesizedTypeMaps handles 10+ nested closure names`` () =
+            let map = FSharpSynthesizedTypeMaps()
+            map.BeginSession()
+
+            // Simulate deeply nested closure naming (10+ levels)
+            let nestedNames = [
+                "lambda"; "lambda"; "lambda"; "lambda"; "lambda"
+                "lambda"; "lambda"; "lambda"; "lambda"; "lambda"
+                "lambda"; "lambda"  // 12 levels
+            ]
+
+            let results = nestedNames |> List.map map.GetOrAddName
+
+            // All should produce valid names without crashing
+            Assert.Equal(12, results.Length)
+            for name in results do
+                Assert.StartsWith("lambda@", name)
+
+        [<Fact>]
+        let ``SynthesizedTypeMaps handles 100 unique base names`` () =
+            let map = FSharpSynthesizedTypeMaps()
+            map.BeginSession()
+
+            // Generate 100 different base names (simulating complex module)
+            let baseNames = [| for i in 1..100 -> $"closure{i}" |]
+            let results = baseNames |> Array.map map.GetOrAddName
+
+            Assert.Equal(100, results.Length)
+            for i in 0..99 do
+                Assert.StartsWith($"closure{i+1}@", results.[i])
+
+        [<Fact>]
+        let ``SynthesizedTypeMaps snapshot handles 100+ entries`` () =
+            let map = FSharpSynthesizedTypeMaps()
+            map.BeginSession()
+
+            // Add many entries
+            for i in 1..100 do
+                map.GetOrAddName $"type{i}" |> ignore
+
+            let snapshot = map.Snapshot |> Seq.toArray
+            Assert.True(snapshot.Length >= 100, $"Expected at least 100 entries, got {snapshot.Length}")
+
+    module GenerationTrackingTests =
+        open FSharp.Compiler.HotReloadState
+        open FSharp.Compiler.HotReloadBaseline
+        open FSharp.Compiler.TypedTree
+
+        let private createMinimalBaseline () =
+            let metadataSnapshot: MetadataSnapshot =
+                {
+                    HeapSizes =
+                        {
+                            StringHeapSize = 64
+                            UserStringHeapSize = 32
+                            BlobHeapSize = 64
+                            GuidHeapSize = 16
+                        }
+                    TableRowCounts = Array.create 64 0
+                    GuidHeapStart = 0
+                }
+
+            {
+                ModuleId = System.Guid.NewGuid()
+                EncId = System.Guid.Empty
+                EncBaseId = System.Guid.Empty
+                NextGeneration = 1
+                ModuleNameHandle = None
+                Metadata = metadataSnapshot
+                TokenMappings =
+                    {
+                        TypeDefTokenMap = fun _ -> 0
+                        FieldDefTokenMap = fun _ _ -> 0
+                        MethodDefTokenMap = fun _ _ -> 0
+                        PropertyTokenMap = fun _ _ -> 0
+                        EventTokenMap = fun _ _ -> 0
+                    }
+                TypeTokens = Map.empty
+                MethodTokens = Map.empty
+                FieldTokens = Map.empty
+                PropertyTokens = Map.empty
+                EventTokens = Map.empty
+                PropertyMapEntries = Map.empty
+                EventMapEntries = Map.empty
+                MethodSemanticsEntries = Map.empty
+                IlxGenEnvironment = None
+                PortablePdb = None
+                SynthesizedNameSnapshot = Map.empty
+                MetadataHandles =
+                    {
+                        MethodHandles = Map.empty
+                        ParameterHandles = Map.empty
+                        PropertyHandles = Map.empty
+                        EventHandles = Map.empty
+                    }
+                TypeReferenceTokens = Map.empty
+                AssemblyReferenceTokens = Map.empty
+                TableEntriesAdded = Array.zeroCreate 64
+                StringStreamLengthAdded = 0
+                UserStringStreamLengthAdded = 0
+                BlobStreamLengthAdded = 0
+                GuidStreamLengthAdded = 0
+                AddedOrChangedMethods = []
+            }
+
+        [<Fact>]
+        let ``generation counter handles 100+ increments`` () =
+            // Arrange
+            clearBaseline ()
+            let baseline = createMinimalBaseline ()
+            setBaseline baseline (CheckedAssemblyAfterOptimization [])
+
+            let initialSession = tryGetSession ()
+            let initialGen = initialSession.Value.CurrentGeneration
+
+            // Act - simulate 100+ consecutive deltas
+            for _ in 1..150 do
+                recordDeltaApplied (System.Guid.NewGuid())
+
+            // Assert
+            let finalSession = tryGetSession ()
+            Assert.True(finalSession.IsSome)
+            Assert.Equal(initialGen + 150, finalSession.Value.CurrentGeneration)
+
+            clearBaseline ()
+
+    module ParameterCountTests =
+
+        [<Fact>]
+        let ``parameter table index handles 256+ entries`` () =
+            // Test that we can handle modules with many parameters
+            // The Param table uses a simple index, threshold is 65536
+            let paramCount = 300  // More than 256 (byte boundary)
+            let tableRowCounts = createTableRowCounts [ (TableIndex.Param, paramCount) ]
+            let heapSizes = createHeapSizes 0 0 0 0
+            let sizes = compute tableRowCounts [||] heapSizes false
+
+            // 300 params is still under 65536, so should use small index
+            Assert.False(sizes.SimpleIndexBig.[int TableIndex.Param],
+                "300 parameters should still use small index")
+
+        [<Fact>]
+        let ``parameter table index switches to big at threshold`` () =
+            // Test the threshold for parameter table
+            let threshold = 0x10000
+            let tableRowCounts = createTableRowCounts [ (TableIndex.Param, threshold) ]
+            let heapSizes = createHeapSizes 0 0 0 0
+            let sizes = compute tableRowCounts [||] heapSizes false
+
+            Assert.True(sizes.SimpleIndexBig.[int TableIndex.Param],
+                "65536 parameters should use big index")
+
+    module MethodBodyTests =
+
+        [<Fact>]
+        let ``IL method body size calculation handles minimal body`` () =
+            // A minimal method body is just a 'ret' instruction (1 byte)
+            // Test that we can represent this in the sizing infrastructure
+            let tableRowCounts = createTableRowCounts [ (TableIndex.MethodDef, 1) ]
+            let heapSizes = createHeapSizes 0 0 1 0  // 1 byte blob for method body
+            let sizes = compute tableRowCounts [||] heapSizes false
+
+            // Even minimal bodies should work
+            Assert.False(sizes.BlobsBig, "Minimal method body should use small blob index")
+
+        [<Fact>]
+        let ``blob heap handles large method body`` () =
+            // Test that large method bodies (>64KB) trigger big blob index
+            let largeBodySize = 0x20000  // 128KB
+            let tableRowCounts = Array.zeroCreate 64
+            let heapSizes = createHeapSizes 0 0 largeBodySize 0
+            let sizes = compute tableRowCounts [||] heapSizes false
+
+            Assert.True(sizes.BlobsBig, "Large method body should use big blob index")
+
+        [<Fact>]
+        let ``StandAloneSig table handles method local variables`` () =
+            // Methods with local variables use StandAloneSig table
+            let sigCount = 1000  // Many methods with locals
+            let tableRowCounts = createTableRowCounts [ (TableIndex.StandAloneSig, sigCount) ]
+            let heapSizes = createHeapSizes 0 0 0 0
+            let sizes = compute tableRowCounts [||] heapSizes false
+
+            // 1000 signatures is under threshold
+            Assert.False(sizes.SimpleIndexBig.[int TableIndex.StandAloneSig],
+                "1000 local signatures should use small index")
