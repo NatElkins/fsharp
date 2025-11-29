@@ -11,6 +11,7 @@ open System.Reflection
 open System.Reflection.Emit
 open System.Reflection.PortableExecutable
 open FSharp.Compiler.AbstractIL.IL
+open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.AbstractIL.ILPdbWriter
 open FSharp.Compiler.HotReload
@@ -40,13 +41,17 @@ let private normalizeGeneratedFieldName (name: string) =
     | _ -> name
 
 /// Represents the emitted artifacts for a hot reload delta.
+/// This is the primary output from IlxDeltaEmitter, containing all deltas needed
+/// for MetadataUpdater.ApplyUpdate.
 type IlxDelta =
     {
         Metadata: byte[]
         IL: byte[]
         Pdb: byte[] option
-        EncLog: (int * int * EditAndContinueOperation) array
-        EncMap: (int * int) array
+        /// EncLog entries using TableName from BinaryConstants for type safety
+        EncLog: (TableName * int * EditAndContinueOperation) array
+        /// EncMap entries using TableName from BinaryConstants for type safety
+        EncMap: (TableName * int) array
         UpdatedTypeTokens: int list
         UpdatedMethodTokens: int list
         AddedOrChangedMethods: HotReloadBaseline.AddedOrChangedMethodInfo list
@@ -640,9 +645,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             |> Option.map (fun token -> token &&& 0x00FFFFFF)
 
     let baselineTableRowCounts = request.Baseline.Metadata.TableRowCounts
-    let baselinePropertyMapRowCount = baselineTableRowCounts.[DeltaTokens.tablePropertyMap]
-    let baselineEventMapRowCount = baselineTableRowCounts.[DeltaTokens.tableEventMap]
-    let lastMethodRowId = baselineTableRowCounts.[DeltaTokens.tableMethodDef]
+    let baselinePropertyMapRowCount = baselineTableRowCounts.[TableNames.PropertyMap.Index]
+    let baselineEventMapRowCount = baselineTableRowCounts.[TableNames.EventMap.Index]
+    let lastMethodRowId = baselineTableRowCounts.[TableNames.Method.Index]
     let mutable nextTypeRefRowId = 0
     let mutable nextMemberRefRowId = 0
     let mutable nextAssemblyRefRowId = 0
@@ -822,7 +827,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let parameterHandleLookup = Dictionary<ParameterDefinitionKey, ParameterHandle>()
     let syntheticParameterInfo = Dictionary<ParameterDefinitionKey, ParameterAttributes>(HashIdentity.Structural)
     let returnParameterKeys = HashSet<ParameterDefinitionKey>(HashIdentity.Structural)
-    let lastParamRowId = baselineTableRowCounts.[DeltaTokens.tableParam]
+    let lastParamRowId = baselineTableRowCounts.[TableNames.Param.Index]
     let parameterDefinitionIndex =
         let tryExisting key =
             match parameterRowLookup.TryGetValue key with
@@ -878,7 +883,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         |> Map.tryFind key
         |> Option.map (fun token -> token &&& 0x00FFFFFF)
 
-    let lastPropertyRowId = baselineTableRowCounts.[DeltaTokens.tableProperty]
+    let lastPropertyRowId = baselineTableRowCounts.[TableNames.Property.Index]
     let propertyDefinitionIndex = DefinitionIndex<PropertyDefinitionKey>(propertyRowLookup, lastPropertyRowId)
     let processedPropertyKeys = HashSet<PropertyDefinitionKey>()
     let addedPropertyDeltaTokens = Dictionary<PropertyDefinitionKey, int>(HashIdentity.Structural)
@@ -893,7 +898,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     for KeyValue(key, token) in addedPropertyDeltaTokens do
         propertyTokenToKey[token] <- key
 
-    let lastEventRowId = baselineTableRowCounts.[DeltaTokens.tableEvent]
+    let lastEventRowId = baselineTableRowCounts.[TableNames.Event.Index]
     let eventDefinitionIndex = DefinitionIndex<EventDefinitionKey>(eventRowLookup, lastEventRowId)
     let processedEventKeys = HashSet<EventDefinitionKey>()
 
@@ -1505,7 +1510,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             | SymbolMemberKind.EventInvoke name -> Some name
             | _ -> None
 
-        let mutable nextMethodSemanticsRowId = baselineTableRowCounts.[DeltaTokens.tableMethodSemantics]
+        let mutable nextMethodSemanticsRowId = baselineTableRowCounts.[TableNames.MethodSemantics.Index]
 
         let methodSemanticsRowsSnapshot =
             request.UpdatedAccessors
@@ -1568,7 +1573,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
         let customAttributeRowList : CustomAttributeRowInfo list =
             let rows = ResizeArray<CustomAttributeRowInfo>()
-            let mutable nextRowId = baselineTableRowCounts.[DeltaTokens.tableCustomAttribute]
+            let mutable nextRowId = baselineTableRowCounts.[TableNames.CustomAttribute.Index]
             let methodRowIdToKey = Dictionary<int, MethodDefinitionKey>(HashIdentity.Structural)
             for struct (rowId, key, _) in methodDefinitionIndex.Rows do
                 methodRowIdToKey[rowId] <- key
@@ -2074,14 +2079,14 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             let count idx = metadataDelta.TableRowCounts.[idx]
             printfn
                 "[fsharp-hotreload][metadata] table-counts module=%d method=%d param=%d typeRef=%d memberRef=%d assemblyRef=%d customAttr=%d standAloneSig=%d"
-                (count DeltaTokens.tableModule)
-                (count DeltaTokens.tableMethodDef)
-                (count DeltaTokens.tableParam)
-                (count DeltaTokens.tableTypeRef)
-                (count DeltaTokens.tableMemberRef)
-                (count DeltaTokens.tableAssemblyRef)
-                (count DeltaTokens.tableCustomAttribute)
-                (count DeltaTokens.tableStandAloneSig)
+                (count TableNames.Module.Index)
+                (count TableNames.Method.Index)
+                (count TableNames.Param.Index)
+                (count TableNames.TypeRef.Index)
+                (count TableNames.MemberRef.Index)
+                (count TableNames.AssemblyRef.Index)
+                (count TableNames.CustomAttribute.Index)
+                (count TableNames.StandAloneSig.Index)
 
         let addedOrChangedMethods =
             streams.MethodBodies

@@ -213,8 +213,8 @@ module SrmParityTests =
 
             // EncMap entries should be sorted by token
             let mutable lastToken = 0
-            for (tableIndex, rowId) in delta.EncMap do
-                let token = ((int tableIndex) <<< 24) ||| (rowId &&& 0x00FFFFFF)
+            for (table, rowId) in delta.EncMap do
+                let token = (table.Index <<< 24) ||| (rowId &&& 0x00FFFFFF)
                 Assert.True(token >= lastToken, sprintf "EncMap not sorted: 0x%08X < 0x%08X" token lastToken)
                 lastToken <- token
 

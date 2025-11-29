@@ -7,6 +7,7 @@ open System.Text
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
+open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
@@ -83,6 +84,8 @@ type DeltaMetadataSizes =
       IndexSizes: DeltaIndexSizing.CodedIndexSizes
       IsEncDelta: bool }
 
+/// Compute sizing information needed for delta serialization.
+/// This determines index widths, heap sizes, and bit masks for the #~ stream header.
 let computeMetadataSizes (tableMirror: DeltaMetadataTables) (externalRowCounts: int[]) : DeltaMetadataSizes =
     let normalizedExternal =
         if externalRowCounts.Length = DeltaTokens.TableCount then
@@ -92,9 +95,10 @@ let computeMetadataSizes (tableMirror: DeltaMetadataTables) (externalRowCounts: 
 
     let rowCounts = tableMirror.TableRowCounts
     let heapSizes = tableMirror.HeapSizes
+    // A delta is an EnC delta if it contains EncLog or EncMap entries
     let isEncDelta =
-        rowCounts[DeltaTokens.tableEncLog] > 0
-        || rowCounts[DeltaTokens.tableEncMap] > 0
+        rowCounts[TableNames.ENCLog.Index] > 0
+        || rowCounts[TableNames.ENCMap.Index] > 0
 
     let bitMasks = DeltaTableLayout.computeBitMasks rowCounts isEncDelta
 
@@ -130,23 +134,25 @@ let private writeTaggedIndex (writer: BinaryWriter) (nbits: int) (isBig: bool) (
     let encoded = (value <<< nbits) ||| tag
     if isBig then writeUInt32 writer encoded else writeUInt16 writer encoded
 
+/// Maps TableRows to an array indexed by ECMA-335 table number.
+/// Uses TableNames from BinaryConstants for proper table indices.
 let private tableRowsByIndex (tables: TableRows) =
     let rows = Array.create DeltaTokens.TableCount Array.empty
-    rows[DeltaTokens.tableModule] <- tables.Module
-    rows[DeltaTokens.tableMethodDef] <- tables.MethodDef
-    rows[DeltaTokens.tableParam] <- tables.Param
-    rows[DeltaTokens.tableTypeRef] <- tables.TypeRef
-    rows[DeltaTokens.tableMemberRef] <- tables.MemberRef
-    rows[DeltaTokens.tableCustomAttribute] <- tables.CustomAttribute
-    rows[DeltaTokens.tableAssemblyRef] <- tables.AssemblyRef
-    rows[DeltaTokens.tableStandAloneSig] <- tables.StandAloneSig
-    rows[DeltaTokens.tableProperty] <- tables.Property
-    rows[DeltaTokens.tableEvent] <- tables.Event
-    rows[DeltaTokens.tablePropertyMap] <- tables.PropertyMap
-    rows[DeltaTokens.tableEventMap] <- tables.EventMap
-    rows[DeltaTokens.tableMethodSemantics] <- tables.MethodSemantics
-    rows[DeltaTokens.tableEncLog] <- tables.EncLog
-    rows[DeltaTokens.tableEncMap] <- tables.EncMap
+    rows[TableNames.Module.Index] <- tables.Module
+    rows[TableNames.Method.Index] <- tables.MethodDef
+    rows[TableNames.Param.Index] <- tables.Param
+    rows[TableNames.TypeRef.Index] <- tables.TypeRef
+    rows[TableNames.MemberRef.Index] <- tables.MemberRef
+    rows[TableNames.CustomAttribute.Index] <- tables.CustomAttribute
+    rows[TableNames.AssemblyRef.Index] <- tables.AssemblyRef
+    rows[TableNames.StandAloneSig.Index] <- tables.StandAloneSig
+    rows[TableNames.Property.Index] <- tables.Property
+    rows[TableNames.Event.Index] <- tables.Event
+    rows[TableNames.PropertyMap.Index] <- tables.PropertyMap
+    rows[TableNames.EventMap.Index] <- tables.EventMap
+    rows[TableNames.MethodSemantics.Index] <- tables.MethodSemantics
+    rows[TableNames.ENCLog.Index] <- tables.EncLog
+    rows[TableNames.ENCMap.Index] <- tables.EncMap
     rows
 
 let private isTablePresent (bitmaskLow: int) (bitmaskHigh: int) (index: int) =

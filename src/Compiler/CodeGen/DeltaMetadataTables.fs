@@ -612,8 +612,11 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             |]
         methodSemanticsRows.Add rowElements
 
-    member _.AddEncLogRow(tableIndex: int, rowId: int, operation: EditAndContinueOperation) =
-        let token = DeltaTokens.makeToken tableIndex rowId
+    /// Add an entry to the EncLog table.
+    /// The EncLog records each modification made in this delta generation.
+    /// Per ECMA-335 II.22.7, each entry contains a token and operation.
+    member _.AddEncLogRow(table: TableName, rowId: int, operation: EditAndContinueOperation) =
+        let token = DeltaTokens.makeToken table rowId
         let rowElements =
             [|
                 rowElementULong token
@@ -621,8 +624,11 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             |]
         encLogRows.Add rowElements
 
-    member _.AddEncMapRow(tableIndex: int, rowId: int) =
-        let token = DeltaTokens.makeToken tableIndex rowId
+    /// Add an entry to the EncMap table.
+    /// The EncMap provides a sorted list of all tokens present in this delta.
+    /// Per ECMA-335 II.22.6, entries are sorted by table then row.
+    member _.AddEncMapRow(table: TableName, rowId: int) =
+        let token = DeltaTokens.makeToken table rowId
         let rowElements =
             [|
                 rowElementULong token
@@ -700,23 +706,25 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
 
     member _.HeapOffsets = heapOffsets
 
+    /// Returns an array of row counts indexed by table number.
+    /// Uses TableNames from BinaryConstants for ECMA-335 table indices.
     member _.TableRowCounts : int[] =
         let counts = Array.zeroCreate DeltaTokens.TableCount
-        counts[DeltaTokens.tableModule] <- moduleRows.Count
-        counts[DeltaTokens.tableMethodDef] <- methodRows.Count
-        counts[DeltaTokens.tableParam] <- paramRows.Count
-        counts[DeltaTokens.tableTypeRef] <- typeRefRows.Count
-        counts[DeltaTokens.tableMemberRef] <- memberRefRows.Count
-        counts[DeltaTokens.tableAssemblyRef] <- assemblyRefRows.Count
-        counts[DeltaTokens.tableStandAloneSig] <- standAloneSigRows.Count
-        counts[DeltaTokens.tableCustomAttribute] <- customAttributeRows.Count
-        counts[DeltaTokens.tableProperty] <- propertyRows.Count
-        counts[DeltaTokens.tableEvent] <- eventRows.Count
-        counts[DeltaTokens.tablePropertyMap] <- propertyMapRows.Count
-        counts[DeltaTokens.tableEventMap] <- eventMapRows.Count
-        counts[DeltaTokens.tableMethodSemantics] <- methodSemanticsRows.Count
-        counts[DeltaTokens.tableEncLog] <- encLogRows.Count
-        counts[DeltaTokens.tableEncMap] <- encMapRows.Count
+        counts[TableNames.Module.Index] <- moduleRows.Count
+        counts[TableNames.Method.Index] <- methodRows.Count
+        counts[TableNames.Param.Index] <- paramRows.Count
+        counts[TableNames.TypeRef.Index] <- typeRefRows.Count
+        counts[TableNames.MemberRef.Index] <- memberRefRows.Count
+        counts[TableNames.AssemblyRef.Index] <- assemblyRefRows.Count
+        counts[TableNames.StandAloneSig.Index] <- standAloneSigRows.Count
+        counts[TableNames.CustomAttribute.Index] <- customAttributeRows.Count
+        counts[TableNames.Property.Index] <- propertyRows.Count
+        counts[TableNames.Event.Index] <- eventRows.Count
+        counts[TableNames.PropertyMap.Index] <- propertyMapRows.Count
+        counts[TableNames.EventMap.Index] <- eventMapRows.Count
+        counts[TableNames.MethodSemantics.Index] <- methodSemanticsRows.Count
+        counts[TableNames.ENCLog.Index] <- encLogRows.Count
+        counts[TableNames.ENCMap.Index] <- encMapRows.Count
         counts
 
     /// Add a user string literal to the delta's #US heap.

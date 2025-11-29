@@ -11,6 +11,7 @@ open Internal.Utilities
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.AbstractIL.ILPdbWriter
+open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.AbstractIL.BinaryConstants
@@ -30,8 +31,8 @@ open FSharp.Compiler.ComponentTests.HotReload.TestHelpers
 module DeltaEmitterTests =
 
     // Helper to convert int table index to SRM TableIndex enum for boundary calls
-    let inline private toTableIndex (index: int) : TableIndex =
-        LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte index)
+    let inline private toTableIndex (table: TableName) : TableIndex =
+        LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte table.Index)
 
     let private tryRunMdv args =
         try
@@ -599,19 +600,19 @@ module DeltaEmitterTests =
         // Updated methods do NOT emit Param rows - baseline already has them (matches Roslyn)
         let expectedEncLog =
             [|
-                (DeltaTokens.tableModule, 0x00000001, EditAndContinueOperation.Default)
-                (DeltaTokens.tableMethodDef, 0x00000001, EditAndContinueOperation.Default)
+                (TableNames.Module, 0x00000001, EditAndContinueOperation.Default)
+                (TableNames.Method, 0x00000001, EditAndContinueOperation.Default)
             |]
 
-        Assert.Equal<(int * int * EditAndContinueOperation)[]>(expectedEncLog, delta.EncLog)
+        Assert.Equal<(TableName * int * EditAndContinueOperation) seq>(expectedEncLog, delta.EncLog)
 
         let expectedEncMap =
             [|
-                (DeltaTokens.tableModule, 0x00000001)
-                (DeltaTokens.tableMethodDef, 0x00000001)
+                (TableNames.Module, 0x00000001)
+                (TableNames.Method, 0x00000001)
             |]
 
-        Assert.Equal<(int * int)[]>(expectedEncMap, delta.EncMap)
+        Assert.Equal<(TableName * int) seq>(expectedEncMap, delta.EncMap)
 
     [<Fact>]
     let ``emitDelta sets generation 1 base id to Guid.Empty`` () =
@@ -760,19 +761,19 @@ module DeltaEmitterTests =
         // Updated methods do NOT emit Param rows (matches Roslyn)
         let expectedLog =
             [|
-                (DeltaTokens.tableModule, 0x00000001, EditAndContinueOperation.Default)
-                (DeltaTokens.tableMethodDef, 0x00000001, EditAndContinueOperation.Default)
-                (DeltaTokens.tableMethodDef, 0x00000002, EditAndContinueOperation.Default)
+                (TableNames.Module, 0x00000001, EditAndContinueOperation.Default)
+                (TableNames.Method, 0x00000001, EditAndContinueOperation.Default)
+                (TableNames.Method, 0x00000002, EditAndContinueOperation.Default)
             |]
-        Assert.Equal<(int * int * EditAndContinueOperation)[]>(expectedLog, delta.EncLog)
+        Assert.Equal<(TableName * int * EditAndContinueOperation) seq>(expectedLog, delta.EncLog)
 
         let expectedMap =
             [|
-                (DeltaTokens.tableModule, 0x00000001)
-                (DeltaTokens.tableMethodDef, 0x00000001)
-                (DeltaTokens.tableMethodDef, 0x00000002)
+                (TableNames.Module, 0x00000001)
+                (TableNames.Method, 0x00000001)
+                (TableNames.Method, 0x00000002)
             |]
-        Assert.Equal<(int * int)[]>(expectedMap, delta.EncMap)
+        Assert.Equal<(TableName * int) seq>(expectedMap, delta.EncMap)
         match delta.Pdb with
         | Some pdb -> Assert.True(pdb.Length >= 0)
         | None -> ()
@@ -802,14 +803,14 @@ module DeltaEmitterTests =
         let addedToken = Assert.Single(delta.UpdatedMethodTokens)
 
         let expectedRowId =
-            baselineArtifacts.Baseline.Metadata.TableRowCounts.[int DeltaTokens.tableMethodDef] + 1
+            baselineArtifacts.Baseline.Metadata.TableRowCounts.[TableNames.Method.Index] + 1
 
         Assert.Equal(0x06000000 ||| expectedRowId, addedToken)
 
         let hasMethodAdd =
             delta.EncLog
             |> Array.exists (fun (table, row, op) ->
-                table = DeltaTokens.tableMethodDef && row = expectedRowId && op = EditAndContinueOperation.AddMethod)
+                table = TableNames.Method && row = expectedRowId && op = EditAndContinueOperation.AddMethod)
 
         Assert.True(hasMethodAdd, "Expected MethodDef add operation in EncLog.")
 
@@ -854,11 +855,11 @@ module DeltaEmitterTests =
 
         let paramAdds =
             delta.EncLog
-            |> Array.filter (fun (table, _, _) -> table = DeltaTokens.tableParam)
+            |> Array.filter (fun (table, _, _) -> table = TableNames.Param)
 
         Assert.Equal(3, paramAdds.Length)
 
-        let baselineParamCount = baselineArtifacts.Baseline.Metadata.TableRowCounts.[int DeltaTokens.tableParam]
+        let baselineParamCount = baselineArtifacts.Baseline.Metadata.TableRowCounts.[TableNames.Param.Index]
         let expectedParamRows = [ baselineParamCount + 1; baselineParamCount + 2; baselineParamCount + 3 ]
 
         let actualRows =
@@ -900,14 +901,14 @@ module DeltaEmitterTests =
         use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange delta.Metadata)
         let reader = deltaProvider.GetMetadataReader()
 
-        Assert.Equal(1, reader.GetTableRowCount(toTableIndex DeltaTokens.tableMethodDef))
+        Assert.Equal(1, reader.GetTableRowCount(toTableIndex TableNames.Method))
         // Updated methods should NOT have Param rows in delta - baseline has them
-        Assert.Equal(0, reader.GetTableRowCount(toTableIndex DeltaTokens.tableParam))
+        Assert.Equal(0, reader.GetTableRowCount(toTableIndex TableNames.Param))
 
         // EncLog/EncMap should NOT have Param entries for updated methods
         let hasParamAdd =
             delta.EncLog
-            |> Array.exists (fun (table, _, _) -> table = DeltaTokens.tableParam)
+            |> Array.exists (fun (table, _, _) -> table = TableNames.Param)
         Assert.False(hasParamAdd, "Updated method should not have Param EncLog entry.")
 
     /// Updated methods have no Param rows in delta - param table is empty
@@ -936,7 +937,7 @@ module DeltaEmitterTests =
         let reader = deltaProvider.GetMetadataReader()
 
         // Updated method should have no Param rows in delta (baseline has them)
-        let paramTableCount = reader.GetTableRowCount(toTableIndex DeltaTokens.tableParam)
+        let paramTableCount = reader.GetTableRowCount(toTableIndex TableNames.Param)
         Assert.Equal(0, paramTableCount)
 
     [<Fact>]
@@ -966,19 +967,19 @@ module DeltaEmitterTests =
 
         let delta = emitDelta request
 
-        let baselinePropertyCount = baselineArtifacts.Baseline.Metadata.TableRowCounts.[int DeltaTokens.tableProperty]
+        let baselinePropertyCount = baselineArtifacts.Baseline.Metadata.TableRowCounts.[TableNames.Property.Index]
 
         let propertyAdds =
             delta.EncLog
-            |> Array.filter (fun (table, _, op) -> table = DeltaTokens.tableProperty && op = EditAndContinueOperation.AddProperty)
+            |> Array.filter (fun (table, _, op) -> table = TableNames.Property && op = EditAndContinueOperation.AddProperty)
 
         let propertyMapAdds =
             delta.EncLog
-            |> Array.filter (fun (table, _, op) -> table = DeltaTokens.tablePropertyMap && op = EditAndContinueOperation.AddProperty)
+            |> Array.filter (fun (table, _, op) -> table = TableNames.PropertyMap && op = EditAndContinueOperation.AddProperty)
 
         let semanticsAdds =
             delta.EncLog
-            |> Array.filter (fun (table, _, op) -> table = DeltaTokens.tableMethodSemantics && op = EditAndContinueOperation.AddMethod)
+            |> Array.filter (fun (table, _, op) -> table = TableNames.MethodSemantics && op = EditAndContinueOperation.AddMethod)
 
         Assert.Single propertyAdds |> ignore
         Assert.Single propertyMapAdds |> ignore
@@ -1031,19 +1032,19 @@ module DeltaEmitterTests =
 
         let delta = emitDelta request
 
-        let baselineEventCount = baselineArtifacts.Baseline.Metadata.TableRowCounts.[int DeltaTokens.tableEvent]
+        let baselineEventCount = baselineArtifacts.Baseline.Metadata.TableRowCounts.[TableNames.Event.Index]
 
         let eventAdds =
             delta.EncLog
-            |> Array.filter (fun (table, _, op) -> table = DeltaTokens.tableEvent && op = EditAndContinueOperation.AddEvent)
+            |> Array.filter (fun (table, _, op) -> table = TableNames.Event && op = EditAndContinueOperation.AddEvent)
 
         let eventMapAdds =
             delta.EncLog
-            |> Array.filter (fun (table, _, op) -> table = DeltaTokens.tableEventMap && op = EditAndContinueOperation.AddEvent)
+            |> Array.filter (fun (table, _, op) -> table = TableNames.EventMap && op = EditAndContinueOperation.AddEvent)
 
         let semanticsAdds =
             delta.EncLog
-            |> Array.filter (fun (table, _, op) -> table = DeltaTokens.tableMethodSemantics && op = EditAndContinueOperation.AddMethod)
+            |> Array.filter (fun (table, _, op) -> table = TableNames.MethodSemantics && op = EditAndContinueOperation.AddMethod)
 
         Assert.Single eventAdds |> ignore
         Assert.Single eventMapAdds |> ignore
@@ -1182,8 +1183,8 @@ module DeltaEmitterTests =
         use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange delta.Metadata)
         let deltaReader = deltaProvider.GetMetadataReader()
 
-        Assert.Equal(0, deltaReader.GetTableRowCount(toTableIndex DeltaTokens.tableMemberRef))
-        Assert.Equal(0, deltaReader.GetTableRowCount(toTableIndex DeltaTokens.tableTypeRef))
+        Assert.Equal(0, deltaReader.GetTableRowCount(toTableIndex TableNames.MemberRef))
+        Assert.Equal(0, deltaReader.GetTableRowCount(toTableIndex TableNames.TypeRef))
 
         // Read baseline call token directly from the emitted IL
         use peReader = new PEReader(File.OpenRead(baselineArtifacts.AssemblyPath))
@@ -1262,7 +1263,7 @@ module DeltaEmitterTests =
         use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange delta.Metadata)
         let deltaReader = deltaProvider.GetMetadataReader()
 
-        Assert.Equal(1, deltaReader.GetTableRowCount(toTableIndex DeltaTokens.tableStandAloneSig))
+        Assert.Equal(1, deltaReader.GetTableRowCount(toTableIndex TableNames.StandAloneSig))
         let bodyInfo = Assert.Single(delta.MethodBodies)
         let expectedToken =
             MetadataTokens.GetToken(EntityHandle.op_Implicit (MetadataTokens.StandaloneSignatureHandle 1))
@@ -1296,7 +1297,7 @@ module DeltaEmitterTests =
         let _baselineStandaloneCount, baselineSigBytes =
             use peReader = new PEReader(File.OpenRead(baselineArtifacts.AssemblyPath))
             let reader = peReader.GetMetadataReader()
-            let count = reader.GetTableRowCount(toTableIndex DeltaTokens.tableStandAloneSig)
+            let count = reader.GetTableRowCount(toTableIndex TableNames.StandAloneSig)
             let methodHandle = MetadataTokens.MethodDefinitionHandle(baselineArtifacts.Baseline.MethodTokens[methodKey])
             let methodDef = reader.GetMethodDefinition methodHandle
             let body = peReader.GetMethodBody(methodDef.RelativeVirtualAddress)
@@ -1322,7 +1323,7 @@ module DeltaEmitterTests =
         use deltaProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange delta.Metadata)
         let deltaReader = deltaProvider.GetMetadataReader()
 
-        Assert.Equal(1, deltaReader.GetTableRowCount(toTableIndex DeltaTokens.tableStandAloneSig))
+        Assert.Equal(1, deltaReader.GetTableRowCount(toTableIndex TableNames.StandAloneSig))
         let expectedToken =
             MetadataTokens.GetToken(EntityHandle.op_Implicit (MetadataTokens.StandaloneSignatureHandle 1))
         let bodyInfo = Assert.Single(delta.MethodBodies)

@@ -13,6 +13,7 @@ open Xunit
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.AbstractIL.ILPdbWriter
+open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open Internal.Utilities
 open Internal.Utilities.Library
@@ -46,42 +47,42 @@ module FSharpDeltaMetadataWriterTests =
             action ()
         with :? BadImageFormatException -> ()
 
-    // Helper to convert int table index to SRM TableIndex enum for boundary calls
-    let inline private toTableIndex (index: int) : TableIndex =
-        LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte index)
+    // Helper to convert TableName to SRM TableIndex enum for boundary calls
+    let inline private toTableIndex (table: TableName) : TableIndex =
+        LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte table.Index)
 
     let inline private encTablePriority (tableIndex: int) = tableIndex
 
-    let private sortEncLogEntries (entries: (int * int * EditAndContinueOperation)[]) =
+    let private sortEncLogEntries (entries: (TableName * int * EditAndContinueOperation)[]) =
         entries
-        |> Array.sortBy (fun (table, rowId, _) -> ((encTablePriority table) <<< 24) ||| (rowId &&& 0x00FFFFFF))
+        |> Array.sortBy (fun (table, rowId, _) -> ((encTablePriority table.Index) <<< 24) ||| (rowId &&& 0x00FFFFFF))
 
-    let private sortEncMapEntries (entries: (int * int)[]) =
+    let private sortEncMapEntries (entries: (TableName * int)[]) =
         entries
-        |> Array.sortBy (fun (table, rowId) -> ((encTablePriority table) <<< 24) ||| (rowId &&& 0x00FFFFFF))
+        |> Array.sortBy (fun (table, rowId) -> ((encTablePriority table.Index) <<< 24) ||| (rowId &&& 0x00FFFFFF))
 
-    let private moduleEncLogEntry = (DeltaTokens.tableModule, 1, EditAndContinueOperation.Default)
-    let private moduleEncMapEntry = (DeltaTokens.tableModule, 1)
+    let private moduleEncLogEntry = (TableNames.Module, 1, EditAndContinueOperation.Default)
+    let private moduleEncMapEntry = (TableNames.Module, 1)
 
-    let private ensureModuleEncLogEntry (entries: (int * int * EditAndContinueOperation)[]) =
-        if entries |> Array.exists (fun (table, _, _) -> table = DeltaTokens.tableModule) then
+    let private ensureModuleEncLogEntry (entries: (TableName * int * EditAndContinueOperation)[]) =
+        if entries |> Array.exists (fun (table, _, _) -> table.Index = TableNames.Module.Index) then
             entries
         else
             Array.append [| moduleEncLogEntry |] entries
 
-    let private ensureModuleEncMapEntry (entries: (int * int)[]) =
-        if entries |> Array.exists (fun (table, _) -> table = DeltaTokens.tableModule) then
+    let private ensureModuleEncMapEntry (entries: (TableName * int)[]) =
+        if entries |> Array.exists (fun (table, _) -> table.Index = TableNames.Module.Index) then
             entries
         else
             Array.append [| moduleEncMapEntry |] entries
 
     let private assertEncLogEqual expected actual =
         let expectedWithModule = expected |> ensureModuleEncLogEntry |> sortEncLogEntries
-        Assert.Equal<(int * int * EditAndContinueOperation)[]>(expectedWithModule, sortEncLogEntries actual)
+        Assert.Equal<(TableName * int * EditAndContinueOperation)[]>(expectedWithModule, sortEncLogEntries actual)
 
     let private assertEncMapEqual expected actual =
         let expectedWithModule = expected |> ensureModuleEncMapEntry |> sortEncMapEntries
-        Assert.Equal<(int * int)[]>(expectedWithModule, sortEncMapEntries actual)
+        Assert.Equal<(TableName * int)[]>(expectedWithModule, sortEncMapEntries actual)
     // Local signature deltas include StandAloneSig rows for local variables
     // Actual measurements: ~12 bytes
     let private localSignatureBlobDeltaBytes = 16
@@ -304,13 +305,21 @@ module FSharpDeltaMetadataWriterTests =
             |> Seq.map decodeEntityHandle
             |> Seq.toArray)
 
-    let private assertEncLogMatches metadata expected =
-        let actual = readEncLogEntriesFromMetadata metadata
-        Assert.Equal<(int * int * EditAndContinueOperation)[]>(expected, actual)
+    /// Convert TableName-based EncLog entries to raw int tuples for comparison with metadata bytes.
+    let private toRawEncLog (entries: (TableName * int * EditAndContinueOperation)[]) : (int * int * EditAndContinueOperation)[] =
+        entries |> Array.map (fun (table, row, op) -> (table.Index, row, op))
 
-    let private assertEncMapMatches metadata expected =
+    /// Convert TableName-based EncMap entries to raw int tuples for comparison with metadata bytes.
+    let private toRawEncMap (entries: (TableName * int)[]) : (int * int)[] =
+        entries |> Array.map (fun (table, row) -> (table.Index, row))
+
+    let private assertEncLogMatches metadata (expected: (TableName * int * EditAndContinueOperation)[]) =
+        let actual = readEncLogEntriesFromMetadata metadata
+        Assert.Equal<(int * int * EditAndContinueOperation)[]>(toRawEncLog expected, actual)
+
+    let private assertEncMapMatches metadata (expected: (TableName * int)[]) =
         let actual = readEncMapEntriesFromMetadata metadata
-        Assert.Equal<(int * int)[]>(expected, actual)
+        Assert.Equal<(int * int)[]>(toRawEncMap expected, actual)
 
     let private tryGetGuidHeap (metadata: byte[]) =
         use ms = new MemoryStream(metadata, false)
@@ -503,7 +512,7 @@ module FSharpDeltaMetadataWriterTests =
 
         let rowBytes = tableStream |> Array.skip moduleStart |> Array.truncate moduleRowSize
 
-        struct (gen, nameIdx, mvidIdx, encIdIdx, encBaseIdx, rowCounts[DeltaTokens.tableModule], moduleStart, moduleRowSize, heapSizes, rowBytes)
+        struct (gen, nameIdx, mvidIdx, encIdIdx, encBaseIdx, rowCounts[TableNames.Module.Index], moduleStart, moduleRowSize, heapSizes, rowBytes)
 
     [<Fact>]
     let ``metadata writer emits property rows`` () =
@@ -601,22 +610,22 @@ module FSharpDeltaMetadataWriterTests =
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
 
-        let tableCount index = metadataDelta.TableRowCounts.[ int index ]
+        let tableCount (table: TableName) = metadataDelta.TableRowCounts.[table.Index]
 
-        Assert.Equal(1, tableCount DeltaTokens.tableProperty)
-        Assert.Equal(1, tableCount DeltaTokens.tablePropertyMap)
+        Assert.Equal(1, tableCount TableNames.Property)
+        Assert.Equal(1, tableCount TableNames.PropertyMap)
 
-        let expectedEncLog: (int * int * EditAndContinueOperation)[] =
-            [| (DeltaTokens.tableMethodDef, 1, EditAndContinueOperation.AddMethod)
+        let expectedEncLog: (TableName * int * EditAndContinueOperation)[] =
+            [| (TableNames.Method, 1, EditAndContinueOperation.AddMethod)
                // Roslyn also tags the containing PropertyMap row as AddProperty.
-               (DeltaTokens.tablePropertyMap, 1, EditAndContinueOperation.AddProperty)
-               (DeltaTokens.tableProperty, 1, EditAndContinueOperation.AddProperty) |]
+               (TableNames.PropertyMap, 1, EditAndContinueOperation.AddProperty)
+               (TableNames.Property, 1, EditAndContinueOperation.AddProperty) |]
             |> sortEncLogEntries
 
-        let expectedEncMap: (int * int)[] =
-            [| (DeltaTokens.tableMethodDef, 1)
-               (DeltaTokens.tablePropertyMap, 1)
-               (DeltaTokens.tableProperty, 1) |]
+        let expectedEncMap: (TableName * int)[] =
+            [| (TableNames.Method, 1)
+               (TableNames.PropertyMap, 1)
+               (TableNames.Property, 1) |]
             |> sortEncMapEntries
 
         assertEncLogEqual expectedEncLog metadataDelta.EncLog
@@ -640,22 +649,22 @@ module FSharpDeltaMetadataWriterTests =
         Assert.True(indexSizes.BlobsBig)
         Assert.True(indexSizes.HasSemanticsBig)
         Assert.True(indexSizes.MemberRefParentBig)
-        Assert.True(indexSizes.SimpleIndexBig[int DeltaTokens.tableProperty])
+        Assert.True(indexSizes.SimpleIndexBig[TableNames.Property.Index])
 
     [<Fact>]
     let ``property multi-generation deltas preserve EncLog ordering`` () =
         let artifacts = MetadataDeltaTestHelpers.emitPropertyMultiGenerationArtifacts ()
 
-        let expectedEncLog: (int * int * EditAndContinueOperation)[] =
-            [| (DeltaTokens.tableMethodDef, 1, EditAndContinueOperation.AddMethod)
-               (DeltaTokens.tablePropertyMap, 1, EditAndContinueOperation.AddProperty)
-               (DeltaTokens.tableProperty, 1, EditAndContinueOperation.AddProperty) |]
+        let expectedEncLog: (TableName * int * EditAndContinueOperation)[] =
+            [| (TableNames.Method, 1, EditAndContinueOperation.AddMethod)
+               (TableNames.PropertyMap, 1, EditAndContinueOperation.AddProperty)
+               (TableNames.Property, 1, EditAndContinueOperation.AddProperty) |]
             |> sortEncLogEntries
 
-        let expectedEncMap: (int * int)[] =
-            [| (DeltaTokens.tableMethodDef, 1)
-               (DeltaTokens.tablePropertyMap, 1)
-               (DeltaTokens.tableProperty, 1) |]
+        let expectedEncMap: (TableName * int)[] =
+            [| (TableNames.Method, 1)
+               (TableNames.PropertyMap, 1)
+               (TableNames.Property, 1) |]
             |> sortEncMapEntries
 
         let assertDelta (delta: DeltaWriter.MetadataDelta) =
@@ -874,7 +883,7 @@ module FSharpDeltaMetadataWriterTests =
             Assert.True(indexSizes.BlobsBig)
             Assert.True(indexSizes.TypeOrMethodDefBig)
             Assert.True(indexSizes.MethodDefOrRefBig)
-            Assert.True(indexSizes.SimpleIndexBig[int DeltaTokens.tableMethodDef])
+            Assert.True(indexSizes.SimpleIndexBig[TableNames.Method.Index])
 
         assertIndexes artifacts.Generation1
         assertIndexes artifacts.Generation2
@@ -991,7 +1000,7 @@ module FSharpDeltaMetadataWriterTests =
               FirstParameterRowId = None
               CodeRva = Some methodDef.RelativeVirtualAddress }
 
-        let nextParamRowId = metadataReader.GetTableRowCount(toTableIndex DeltaTokens.tableParam) + 1
+        let nextParamRowId = metadataReader.GetTableRowCount(toTableIndex TableNames.Param) + 1
         let paramRow : DeltaWriter.ParameterDefinitionRowInfo =
             { Key = { Method = methodKey; SequenceNumber = 0 }
               RowId = nextParamRowId
@@ -1047,9 +1056,9 @@ module FSharpDeltaMetadataWriterTests =
                 (DeltaMetadataTables.MetadataHeapOffsets.OfHeapSizes baselineHeapSizes)
                 baselineRowCounts
 
-        Assert.Equal(1, metadataDelta.TableRowCounts.[int DeltaTokens.tableParam])
-        Assert.Contains(metadataDelta.EncLog, fun (t, _, _) -> t = DeltaTokens.tableParam)
-        Assert.Contains(metadataDelta.EncMap, fun (t, _) -> t = DeltaTokens.tableParam)
+        Assert.Equal(1, metadataDelta.TableRowCounts.[TableNames.Param.Index])
+        Assert.Contains(metadataDelta.EncLog, fun (t, _, _) -> t = TableNames.Param)
+        Assert.Contains(metadataDelta.EncMap, fun (t, _) -> t = TableNames.Param)
         ignoreBadImageFormat (fun () -> assertTableStreamMatches metadataDelta)
         ignoreBadImageFormat (fun () -> assertEncLogMatches metadataDelta.Metadata metadataDelta.EncLog)
         ignoreBadImageFormat (fun () -> assertEncMapMatches metadataDelta.Metadata metadataDelta.EncMap)
@@ -1065,8 +1074,8 @@ module FSharpDeltaMetadataWriterTests =
             Assert.True(indexSizes.BlobsBig)
             Assert.True(indexSizes.HasSemanticsBig)
             Assert.True(indexSizes.MemberRefParentBig)
-            Assert.True(indexSizes.SimpleIndexBig[int DeltaTokens.tableProperty])
-            Assert.True(indexSizes.SimpleIndexBig[int DeltaTokens.tablePropertyMap])
+            Assert.True(indexSizes.SimpleIndexBig[TableNames.Property.Index])
+            Assert.True(indexSizes.SimpleIndexBig[TableNames.PropertyMap.Index])
 
         assertIndexes artifacts.Generation1
         assertIndexes artifacts.Generation2
@@ -1137,7 +1146,7 @@ module FSharpDeltaMetadataWriterTests =
 
         let methodEntry =
             encLog
-            |> Array.tryFind (fun (table, _, _) -> table = DeltaTokens.tableMethodDef)
+            |> Array.tryFind (fun (table, _, _) -> table = TableNames.Method)
             |> Option.defaultWith (fun () -> failwith "Missing MethodDef EncLog entry")
 
         let _, _, methodOp = methodEntry
@@ -1145,7 +1154,7 @@ module FSharpDeltaMetadataWriterTests =
 
         let paramOps =
             encLog
-            |> Array.filter (fun (table, _, _) -> table = DeltaTokens.tableParam)
+            |> Array.filter (fun (table, _, _) -> table = TableNames.Param)
             |> Array.map (fun (_, _, op) -> op)
 
         // Param rows may be absent for updates; if present they must be Default.
@@ -1222,7 +1231,7 @@ module FSharpDeltaMetadataWriterTests =
                 FirstEventRowId = Some 1
                 IsAdded = true } ]
 
-        let associationHandle = MetadataTokens.EntityHandle(toTableIndex DeltaTokens.tableEvent, 1)
+        let associationHandle = MetadataTokens.EntityHandle(toTableIndex TableNames.Event, 1)
 
         let methodSemanticsRows: DeltaWriter.MethodSemanticsMetadataUpdate list =
             [ { RowId = 1
@@ -1255,23 +1264,23 @@ module FSharpDeltaMetadataWriterTests =
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
 
-        let tableCount index = metadataDelta.TableRowCounts.[int index]
-        Assert.Equal(1, tableCount DeltaTokens.tableEvent)
-        Assert.Equal(1, tableCount DeltaTokens.tableEventMap)
-        Assert.Equal(1, tableCount DeltaTokens.tableMethodSemantics)
+        let tableCount (table: TableName) = metadataDelta.TableRowCounts.[table.Index]
+        Assert.Equal(1, tableCount TableNames.Event)
+        Assert.Equal(1, tableCount TableNames.EventMap)
+        Assert.Equal(1, tableCount TableNames.MethodSemantics)
 
-        let expectedEncLog: (int * int * EditAndContinueOperation)[] =
-            [| (DeltaTokens.tableMethodDef, 1, EditAndContinueOperation.AddMethod)
-               (DeltaTokens.tableEventMap, 1, EditAndContinueOperation.AddEvent)
-               (DeltaTokens.tableEvent, 1, EditAndContinueOperation.AddEvent)
-               (DeltaTokens.tableMethodSemantics, 1, EditAndContinueOperation.AddMethod) |]
+        let expectedEncLog: (TableName * int * EditAndContinueOperation)[] =
+            [| (TableNames.Method, 1, EditAndContinueOperation.AddMethod)
+               (TableNames.EventMap, 1, EditAndContinueOperation.AddEvent)
+               (TableNames.Event, 1, EditAndContinueOperation.AddEvent)
+               (TableNames.MethodSemantics, 1, EditAndContinueOperation.AddMethod) |]
             |> sortEncLogEntries
 
-        let expectedEncMap: (int * int)[] =
-            [| (DeltaTokens.tableMethodDef, 1)
-               (DeltaTokens.tableEventMap, 1)
-               (DeltaTokens.tableEvent, 1)
-               (DeltaTokens.tableMethodSemantics, 1) |]
+        let expectedEncMap: (TableName * int)[] =
+            [| (TableNames.Method, 1)
+               (TableNames.EventMap, 1)
+               (TableNames.Event, 1)
+               (TableNames.MethodSemantics, 1) |]
             |> sortEncMapEntries
 
         assertEncLogEqual expectedEncLog metadataDelta.EncLog
@@ -1293,27 +1302,27 @@ module FSharpDeltaMetadataWriterTests =
         Assert.True(indexSizes.BlobsBig)
         Assert.True(indexSizes.HasSemanticsBig)
         Assert.True(indexSizes.MemberRefParentBig)
-        Assert.True(indexSizes.SimpleIndexBig[int DeltaTokens.tableEvent])
-        Assert.True(indexSizes.SimpleIndexBig[int DeltaTokens.tableEventMap])
+        Assert.True(indexSizes.SimpleIndexBig[TableNames.Event.Index])
+        Assert.True(indexSizes.SimpleIndexBig[TableNames.EventMap.Index])
 
     [<Fact>]
     let ``event multi-generation deltas preserve EncLog ordering`` () =
         let artifacts = MetadataDeltaTestHelpers.emitEventMultiGenerationArtifacts ()
 
-        let expectedEncLog: (int * int * EditAndContinueOperation)[] =
-            [| (DeltaTokens.tableMethodDef, 1, EditAndContinueOperation.AddMethod)
-               (DeltaTokens.tableParam, 1, EditAndContinueOperation.AddParameter)
-               (DeltaTokens.tableEventMap, 1, EditAndContinueOperation.AddEvent)
-               (DeltaTokens.tableEvent, 1, EditAndContinueOperation.AddEvent)
-               (DeltaTokens.tableMethodSemantics, 1, EditAndContinueOperation.AddMethod) |]
+        let expectedEncLog: (TableName * int * EditAndContinueOperation)[] =
+            [| (TableNames.Method, 1, EditAndContinueOperation.AddMethod)
+               (TableNames.Param, 1, EditAndContinueOperation.AddParameter)
+               (TableNames.EventMap, 1, EditAndContinueOperation.AddEvent)
+               (TableNames.Event, 1, EditAndContinueOperation.AddEvent)
+               (TableNames.MethodSemantics, 1, EditAndContinueOperation.AddMethod) |]
             |> sortEncLogEntries
 
-        let expectedEncMap: (int * int)[] =
-            [| (DeltaTokens.tableMethodDef, 1)
-               (DeltaTokens.tableParam, 1)
-               (DeltaTokens.tableEventMap, 1)
-               (DeltaTokens.tableEvent, 1)
-               (DeltaTokens.tableMethodSemantics, 1) |]
+        let expectedEncMap: (TableName * int)[] =
+            [| (TableNames.Method, 1)
+               (TableNames.Param, 1)
+               (TableNames.EventMap, 1)
+               (TableNames.Event, 1)
+               (TableNames.MethodSemantics, 1) |]
             |> sortEncMapEntries
 
         let assertDelta (delta: DeltaWriter.MetadataDelta) =
@@ -1438,8 +1447,8 @@ module FSharpDeltaMetadataWriterTests =
             Assert.True(indexSizes.BlobsBig)
             Assert.True(indexSizes.HasSemanticsBig)
             Assert.True(indexSizes.MemberRefParentBig)
-            Assert.True(indexSizes.SimpleIndexBig[int DeltaTokens.tableEvent])
-            Assert.True(indexSizes.SimpleIndexBig[int DeltaTokens.tableEventMap])
+            Assert.True(indexSizes.SimpleIndexBig[TableNames.Event.Index])
+            Assert.True(indexSizes.SimpleIndexBig[TableNames.EventMap.Index])
 
         assertIndexes artifacts.Generation1
         assertIndexes artifacts.Generation2
@@ -1449,28 +1458,28 @@ module FSharpDeltaMetadataWriterTests =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
         let metadataDelta = artifacts.Delta
 
-        Assert.Equal(1, metadataDelta.TableRowCounts.[int DeltaTokens.tableMethodDef])
-        Assert.Equal(0, metadataDelta.TableRowCounts.[int DeltaTokens.tableParam])
+        Assert.Equal(1, metadataDelta.TableRowCounts.[TableNames.Method.Index])
+        Assert.Equal(0, metadataDelta.TableRowCounts.[TableNames.Param.Index])
 
-        let expectedEncLog: (int * int * EditAndContinueOperation)[] =
-            [| (DeltaTokens.tableMethodDef, 1, EditAndContinueOperation.Default)
-               (DeltaTokens.tableTypeRef, 1, EditAndContinueOperation.Default)
-               (DeltaTokens.tableTypeRef, 2, EditAndContinueOperation.Default)
-               (DeltaTokens.tableMemberRef, 1, EditAndContinueOperation.Default)
-               (DeltaTokens.tableAssemblyRef, 1, EditAndContinueOperation.Default)
-               (DeltaTokens.tableStandAloneSig, 1, EditAndContinueOperation.Default)
-               (DeltaTokens.tableCustomAttribute, 1, EditAndContinueOperation.Default) |]
+        let expectedEncLog: (TableName * int * EditAndContinueOperation)[] =
+            [| (TableNames.Method, 1, EditAndContinueOperation.Default)
+               (TableNames.TypeRef, 1, EditAndContinueOperation.Default)
+               (TableNames.TypeRef, 2, EditAndContinueOperation.Default)
+               (TableNames.MemberRef, 1, EditAndContinueOperation.Default)
+               (TableNames.AssemblyRef, 1, EditAndContinueOperation.Default)
+               (TableNames.StandAloneSig, 1, EditAndContinueOperation.Default)
+               (TableNames.CustomAttribute, 1, EditAndContinueOperation.Default) |]
             |> sortEncLogEntries
             |> sortEncLogEntries
 
-        let expectedEncMap: (int * int)[] =
-            [| (DeltaTokens.tableMethodDef, 1)
-               (DeltaTokens.tableTypeRef, 1)
-               (DeltaTokens.tableTypeRef, 2)
-               (DeltaTokens.tableMemberRef, 1)
-               (DeltaTokens.tableAssemblyRef, 1)
-               (DeltaTokens.tableStandAloneSig, 1)
-               (DeltaTokens.tableCustomAttribute, 1) |]
+        let expectedEncMap: (TableName * int)[] =
+            [| (TableNames.Method, 1)
+               (TableNames.TypeRef, 1)
+               (TableNames.TypeRef, 2)
+               (TableNames.MemberRef, 1)
+               (TableNames.AssemblyRef, 1)
+               (TableNames.StandAloneSig, 1)
+               (TableNames.CustomAttribute, 1) |]
             |> sortEncMapEntries
             |> sortEncMapEntries
 
@@ -1494,7 +1503,7 @@ module FSharpDeltaMetadataWriterTests =
         Assert.True(indexSizes.BlobsBig)
         Assert.True(indexSizes.TypeOrMethodDefBig)
         Assert.True(indexSizes.MethodDefOrRefBig)
-        Assert.True(indexSizes.SimpleIndexBig[int DeltaTokens.tableMethodDef])
+        Assert.True(indexSizes.SimpleIndexBig[TableNames.Method.Index])
 
     [<Fact>]
     let ``async delta metadata can be reopened`` () =
@@ -1506,17 +1515,17 @@ module FSharpDeltaMetadataWriterTests =
             )
 
         let reader = provider.GetMetadataReader()
-        Assert.Equal(1, reader.GetTableRowCount(toTableIndex DeltaTokens.tableAssemblyRef))
-        Assert.Equal(1, reader.GetTableRowCount(toTableIndex DeltaTokens.tableCustomAttribute))
+        Assert.Equal(1, reader.GetTableRowCount(toTableIndex TableNames.AssemblyRef))
+        Assert.Equal(1, reader.GetTableRowCount(toTableIndex TableNames.CustomAttribute))
 
     [<Fact>]
     let ``async delta matches roslyn type/member refs`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncDeltaArtifacts None ()
         let tableCounts = artifacts.Delta.TableRowCounts
 
-        Assert.Equal(2, tableCounts.[int DeltaTokens.tableTypeRef])
-        Assert.Equal(1, tableCounts.[int DeltaTokens.tableMemberRef])
-        Assert.Equal(1, tableCounts.[int DeltaTokens.tableStandAloneSig])
+        Assert.Equal(2, tableCounts.[TableNames.TypeRef.Index])
+        Assert.Equal(1, tableCounts.[TableNames.MemberRef.Index])
+        Assert.Equal(1, tableCounts.[TableNames.StandAloneSig.Index])
 
     [<Fact>]
     let ``method rows prefer delta code offsets`` () =
@@ -1557,24 +1566,24 @@ module FSharpDeltaMetadataWriterTests =
     let ``async multi-generation deltas preserve EncLog ordering`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
 
-        let expectedEncLog: (int * int * EditAndContinueOperation)[] =
-            [| (DeltaTokens.tableMethodDef, 1, EditAndContinueOperation.Default)
-               (DeltaTokens.tableTypeRef, 1, EditAndContinueOperation.Default)
-               (DeltaTokens.tableTypeRef, 2, EditAndContinueOperation.Default)
-               (DeltaTokens.tableMemberRef, 1, EditAndContinueOperation.Default)
-               (DeltaTokens.tableAssemblyRef, 1, EditAndContinueOperation.Default)
-               (DeltaTokens.tableStandAloneSig, 1, EditAndContinueOperation.Default)
-               (DeltaTokens.tableCustomAttribute, 1, EditAndContinueOperation.Default) |]
+        let expectedEncLog: (TableName * int * EditAndContinueOperation)[] =
+            [| (TableNames.Method, 1, EditAndContinueOperation.Default)
+               (TableNames.TypeRef, 1, EditAndContinueOperation.Default)
+               (TableNames.TypeRef, 2, EditAndContinueOperation.Default)
+               (TableNames.MemberRef, 1, EditAndContinueOperation.Default)
+               (TableNames.AssemblyRef, 1, EditAndContinueOperation.Default)
+               (TableNames.StandAloneSig, 1, EditAndContinueOperation.Default)
+               (TableNames.CustomAttribute, 1, EditAndContinueOperation.Default) |]
             |> sortEncLogEntries
 
-        let expectedEncMap: (int * int)[] =
-            [| (DeltaTokens.tableMethodDef, 1)
-               (DeltaTokens.tableTypeRef, 1)
-               (DeltaTokens.tableTypeRef, 2)
-               (DeltaTokens.tableMemberRef, 1)
-               (DeltaTokens.tableAssemblyRef, 1)
-               (DeltaTokens.tableStandAloneSig, 1)
-               (DeltaTokens.tableCustomAttribute, 1) |]
+        let expectedEncMap: (TableName * int)[] =
+            [| (TableNames.Method, 1)
+               (TableNames.TypeRef, 1)
+               (TableNames.TypeRef, 2)
+               (TableNames.MemberRef, 1)
+               (TableNames.AssemblyRef, 1)
+               (TableNames.StandAloneSig, 1)
+               (TableNames.CustomAttribute, 1) |]
             |> sortEncMapEntries
 
         let assertDelta (delta: DeltaWriter.MetadataDelta) =
@@ -1766,8 +1775,8 @@ module FSharpDeltaMetadataWriterTests =
         Assert.True(indexSizes.BlobsBig)
         Assert.True(indexSizes.TypeOrMethodDefBig)
         Assert.True(indexSizes.MethodDefOrRefBig)
-        Assert.True(indexSizes.SimpleIndexBig[int DeltaTokens.tableMethodDef])
-        Assert.True(indexSizes.SimpleIndexBig[int DeltaTokens.tableParam])
+        Assert.True(indexSizes.SimpleIndexBig[TableNames.Method.Index])
+        Assert.True(indexSizes.SimpleIndexBig[TableNames.Param.Index])
 
     [<Fact>]
     let ``closure multi-generation uses ENC-sized indexes`` () =
@@ -1780,8 +1789,8 @@ module FSharpDeltaMetadataWriterTests =
             Assert.True(indexSizes.BlobsBig)
             Assert.True(indexSizes.TypeOrMethodDefBig)
             Assert.True(indexSizes.MethodDefOrRefBig)
-            Assert.True(indexSizes.SimpleIndexBig[int DeltaTokens.tableMethodDef])
-            Assert.True(indexSizes.SimpleIndexBig[int DeltaTokens.tableParam])
+            Assert.True(indexSizes.SimpleIndexBig[TableNames.Method.Index])
+            Assert.True(indexSizes.SimpleIndexBig[TableNames.Param.Index])
 
         assertIndexes artifacts.Generation1
         assertIndexes artifacts.Generation2
@@ -1794,7 +1803,7 @@ module FSharpDeltaMetadataWriterTests =
         Assert.True(indexSizes.StringsBig)
         Assert.True(indexSizes.BlobsBig)
         Assert.True(indexSizes.GuidsBig)
-        Assert.True(indexSizes.SimpleIndexBig.[int DeltaTokens.tablePropertyMap])
+        Assert.True(indexSizes.SimpleIndexBig.[TableNames.PropertyMap.Index])
         Assert.True(indexSizes.HasSemanticsBig)
 
     [<Fact>]
@@ -1804,15 +1813,15 @@ module FSharpDeltaMetadataWriterTests =
 
         let rowCounts = delta.Delta.TableRowCounts
         let tablesToCheck =
-            [ DeltaTokens.tableEvent
-              DeltaTokens.tableEventMap
-              DeltaTokens.tableMethodSemantics
-              DeltaTokens.tableEncLog
-              DeltaTokens.tableEncMap ]
+            [ TableNames.Event
+              TableNames.EventMap
+              TableNames.MethodSemantics
+              TableNames.ENCLog
+              TableNames.ENCMap ]
 
         for table in tablesToCheck do
-            let expected = rowCounts.[int table] > 0
-            Assert.Equal(expected, isTablePresent masks table)
+            let expected = rowCounts.[table.Index] > 0
+            Assert.Equal(expected, isTablePresent masks table.Index)
 
     [<Fact>]
     let ``local signature delta emits standalone signature rows`` () =
@@ -1822,14 +1831,14 @@ module FSharpDeltaMetadataWriterTests =
                 ImmutableArray.CreateRange<byte>(artifacts.Delta.Metadata))
         let reader = provider.GetMetadataReader()
 
-        let rowCount = reader.GetTableRowCount(toTableIndex DeltaTokens.tableStandAloneSig)
+        let rowCount = reader.GetTableRowCount(toTableIndex TableNames.StandAloneSig)
         Assert.Equal(1, rowCount)
 
         let encLog = readEncLogEntriesFromMetadata artifacts.Delta.Metadata
-        Assert.Contains((DeltaTokens.tableStandAloneSig, 1, EditAndContinueOperation.Default), encLog)
+        Assert.Contains((TableNames.StandAloneSig.Index, 1, EditAndContinueOperation.Default), encLog)
 
         let encMap = readEncMapEntriesFromMetadata artifacts.Delta.Metadata
-        Assert.Contains((DeltaTokens.tableStandAloneSig, 1), encMap)
+        Assert.Contains((TableNames.StandAloneSig.Index, 1), encMap)
 
     [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for property rows`` () =
@@ -2024,16 +2033,16 @@ module FSharpDeltaMetadataWriterTests =
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
 
-        Assert.Equal(1, metadataDelta.TableRowCounts.[int DeltaTokens.tableMethodDef])
-        Assert.Equal(1, metadataDelta.TableRowCounts.[int DeltaTokens.tableParam])
-        let expectedEncLog: (int * int * EditAndContinueOperation)[] =
-            [| (DeltaTokens.tableMethodDef, methodRows.Head.RowId, EditAndContinueOperation.AddMethod)
-               (DeltaTokens.tableParam, parameterRows.Head.RowId, EditAndContinueOperation.AddParameter) |]
+        Assert.Equal(1, metadataDelta.TableRowCounts.[TableNames.Method.Index])
+        Assert.Equal(1, metadataDelta.TableRowCounts.[TableNames.Param.Index])
+        let expectedEncLog: (TableName * int * EditAndContinueOperation)[] =
+            [| (TableNames.Method, methodRows.Head.RowId, EditAndContinueOperation.AddMethod)
+               (TableNames.Param, parameterRows.Head.RowId, EditAndContinueOperation.AddParameter) |]
             |> sortEncLogEntries
 
-        let expectedEncMap: (int * int)[] =
-            [| (DeltaTokens.tableMethodDef, methodRows.Head.RowId)
-               (DeltaTokens.tableParam, parameterRows.Head.RowId) |]
+        let expectedEncMap: (TableName * int)[] =
+            [| (TableNames.Method, methodRows.Head.RowId)
+               (TableNames.Param, parameterRows.Head.RowId) |]
             |> sortEncMapEntries
 
         assertEncLogEqual expectedEncLog metadataDelta.EncLog
@@ -2087,21 +2096,21 @@ module FSharpDeltaMetadataWriterTests =
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
 
-        Assert.Equal(2, metadataDelta.TableRowCounts.[int DeltaTokens.tableMethodDef])
-        Assert.Equal(2, metadataDelta.TableRowCounts.[int DeltaTokens.tableParam])
+        Assert.Equal(2, metadataDelta.TableRowCounts.[TableNames.Method.Index])
+        Assert.Equal(2, metadataDelta.TableRowCounts.[TableNames.Param.Index])
 
-        let expectedEncLog: (int * int * EditAndContinueOperation)[] =
-            [| (DeltaTokens.tableMethodDef, methodRows[0].RowId, EditAndContinueOperation.AddMethod)
-               (DeltaTokens.tableMethodDef, methodRows[1].RowId, EditAndContinueOperation.AddMethod)
-               (DeltaTokens.tableParam, parameterRows[0].RowId, EditAndContinueOperation.AddParameter)
-               (DeltaTokens.tableParam, parameterRows[1].RowId, EditAndContinueOperation.AddParameter) |]
+        let expectedEncLog: (TableName * int * EditAndContinueOperation)[] =
+            [| (TableNames.Method, methodRows[0].RowId, EditAndContinueOperation.AddMethod)
+               (TableNames.Method, methodRows[1].RowId, EditAndContinueOperation.AddMethod)
+               (TableNames.Param, parameterRows[0].RowId, EditAndContinueOperation.AddParameter)
+               (TableNames.Param, parameterRows[1].RowId, EditAndContinueOperation.AddParameter) |]
             |> sortEncLogEntries
 
-        let expectedEncMap: (int * int)[] =
-            [| (DeltaTokens.tableMethodDef, methodRows[0].RowId)
-               (DeltaTokens.tableMethodDef, methodRows[1].RowId)
-               (DeltaTokens.tableParam, parameterRows[0].RowId)
-               (DeltaTokens.tableParam, parameterRows[1].RowId) |]
+        let expectedEncMap: (TableName * int)[] =
+            [| (TableNames.Method, methodRows[0].RowId)
+               (TableNames.Method, methodRows[1].RowId)
+               (TableNames.Param, parameterRows[0].RowId)
+               (TableNames.Param, parameterRows[1].RowId) |]
             |> sortEncMapEntries
 
         assertEncLogEqual expectedEncLog metadataDelta.EncLog
@@ -2117,18 +2126,18 @@ module FSharpDeltaMetadataWriterTests =
     let ``closure multi-generation deltas preserve EncLog ordering`` () =
         let artifacts = MetadataDeltaTestHelpers.emitClosureMultiGenerationArtifacts ()
 
-        let expectedEncLog: (int * int * EditAndContinueOperation)[] =
-            [| (DeltaTokens.tableMethodDef, 1, EditAndContinueOperation.AddMethod)
-               (DeltaTokens.tableMethodDef, 2, EditAndContinueOperation.AddMethod)
-               (DeltaTokens.tableParam, 1, EditAndContinueOperation.AddParameter)
-               (DeltaTokens.tableParam, 2, EditAndContinueOperation.AddParameter) |]
+        let expectedEncLog: (TableName * int * EditAndContinueOperation)[] =
+            [| (TableNames.Method, 1, EditAndContinueOperation.AddMethod)
+               (TableNames.Method, 2, EditAndContinueOperation.AddMethod)
+               (TableNames.Param, 1, EditAndContinueOperation.AddParameter)
+               (TableNames.Param, 2, EditAndContinueOperation.AddParameter) |]
             |> sortEncLogEntries
 
-        let expectedEncMap: (int * int)[] =
-            [| (DeltaTokens.tableMethodDef, 1)
-               (DeltaTokens.tableMethodDef, 2)
-               (DeltaTokens.tableParam, 1)
-               (DeltaTokens.tableParam, 2) |]
+        let expectedEncMap: (TableName * int)[] =
+            [| (TableNames.Method, 1)
+               (TableNames.Method, 2)
+               (TableNames.Param, 1)
+               (TableNames.Param, 2) |]
             |> sortEncMapEntries
 
         let assertDelta (delta: DeltaWriter.MetadataDelta) =
@@ -2150,7 +2159,7 @@ module FSharpDeltaMetadataWriterTests =
 
         let methodRowId =
             delta.EncLog
-            |> Array.find (fun (table, _, _) -> table = DeltaTokens.tableMethodDef)
+            |> Array.find (fun (table, _, _) -> table = TableNames.Method)
             |> fun (_, rid, op) ->
                 Assert.Equal(EditAndContinueOperation.Default, op)
                 rid
@@ -2165,10 +2174,10 @@ module FSharpDeltaMetadataWriterTests =
         let _methodDef = reader.GetMethodDefinition methodHandle
 
         let encLog = readEncLogEntriesFromMetadata delta.Metadata
-        Assert.Contains((DeltaTokens.tableMethodDef, methodRowId, EditAndContinueOperation.Default), encLog)
+        Assert.Contains((TableNames.Method.Index, methodRowId, EditAndContinueOperation.Default), encLog)
 
         let encMap = readEncMapEntriesFromMetadata delta.Metadata
-        Assert.Contains((DeltaTokens.tableMethodDef, methodRowId), encMap)
+        Assert.Contains((TableNames.Method.Index, methodRowId), encMap)
 
     [<Fact>]
     let ``added method emits Param seq0 and enc entries`` () =
@@ -2205,17 +2214,17 @@ module FSharpDeltaMetadataWriterTests =
 
             // EncLog/EncMap include Param and MethodDef.
             let encLog = readEncLogEntriesFromMetadata delta.Metadata |> Array.ofSeq
-            Assert.Contains((DeltaTokens.tableMethodDef, methodRowId, EditAndContinueOperation.AddMethod), encLog)
+            Assert.Contains((TableNames.Method.Index, methodRowId, EditAndContinueOperation.AddMethod), encLog)
 
             let paramRowIds =
                 paramList |> Array.map MetadataTokens.GetRowNumber
             for rid in paramRowIds do
-                Assert.Contains((DeltaTokens.tableParam, rid, EditAndContinueOperation.AddParameter), encLog)
+                Assert.Contains((TableNames.Param.Index, rid, EditAndContinueOperation.AddParameter), encLog)
 
             let encMap = readEncMapEntriesFromMetadata delta.Metadata |> Array.ofSeq
-            Assert.Contains((DeltaTokens.tableMethodDef, methodRowId), encMap)
+            Assert.Contains((TableNames.Method.Index, methodRowId), encMap)
             for rid in paramRowIds do
-                Assert.Contains((DeltaTokens.tableParam, rid), encMap)
+                Assert.Contains((TableNames.Param.Index, rid), encMap)
 
     [<Fact>]
     let ``abstract metadata serializer matches metadata builder output for async methods`` () =
@@ -2259,19 +2268,19 @@ module FSharpDeltaMetadataWriterTests =
                 MetadataHeapOffsets.Zero
                 (getRowCounts metadataReader)
 
-        Assert.Equal(2, metadataDelta.TableRowCounts.[int DeltaTokens.tableMethodDef])
-        Assert.Equal(1, metadataDelta.TableRowCounts.[int DeltaTokens.tableParam])
+        Assert.Equal(2, metadataDelta.TableRowCounts.[TableNames.Method.Index])
+        Assert.Equal(1, metadataDelta.TableRowCounts.[TableNames.Param.Index])
 
-        let expectedEncLog: (int * int * EditAndContinueOperation)[] =
-            [| (DeltaTokens.tableMethodDef, methodRows[0].RowId, EditAndContinueOperation.AddMethod)
-               (DeltaTokens.tableMethodDef, methodRows[1].RowId, EditAndContinueOperation.AddMethod)
-               (DeltaTokens.tableParam, parameterRows[0].RowId, EditAndContinueOperation.AddParameter) |]
+        let expectedEncLog: (TableName * int * EditAndContinueOperation)[] =
+            [| (TableNames.Method, methodRows[0].RowId, EditAndContinueOperation.AddMethod)
+               (TableNames.Method, methodRows[1].RowId, EditAndContinueOperation.AddMethod)
+               (TableNames.Param, parameterRows[0].RowId, EditAndContinueOperation.AddParameter) |]
             |> sortEncLogEntries
 
-        let expectedEncMap: (int * int)[] =
-            [| (DeltaTokens.tableMethodDef, methodRows[0].RowId)
-               (DeltaTokens.tableMethodDef, methodRows[1].RowId)
-               (DeltaTokens.tableParam, parameterRows[0].RowId) |]
+        let expectedEncMap: (TableName * int)[] =
+            [| (TableNames.Method, methodRows[0].RowId)
+               (TableNames.Method, methodRows[1].RowId)
+               (TableNames.Param, parameterRows[0].RowId) |]
             |> sortEncMapEntries
 
         assertEncLogEqual expectedEncLog metadataDelta.EncLog
@@ -2326,7 +2335,7 @@ module FSharpDeltaMetadataWriterTests =
         // Look for MemberRef entries in the delta
         let memberRefEntries =
             artifacts.Delta.EncMap
-            |> Array.filter (fun (table, _) -> table = DeltaTokens.tableMemberRef)
+            |> Array.filter (fun (table, _) -> table = TableNames.MemberRef)
 
         // The property delta should have MemberRef entries
         if memberRefEntries.Length > 0 then
@@ -2344,7 +2353,7 @@ module FSharpDeltaMetadataWriterTests =
                     let _ = memberRef.Parent
                     ()
 
-                printfn "[memberref-test] Successfully read %d MemberRef entries" (metadataReader.GetTableRowCount(toTableIndex DeltaTokens.tableMemberRef))
+                printfn "[memberref-test] Successfully read %d MemberRef entries" (metadataReader.GetTableRowCount(toTableIndex TableNames.MemberRef))
             with
             | :? BadImageFormatException as ex ->
                 // This would indicate incorrect coded index encoding

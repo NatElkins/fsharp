@@ -26,6 +26,7 @@ open FSharp.Compiler.Text
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryReader
 open FSharp.Compiler.AbstractIL.ILPdbWriter
+open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.TypedTree
 open FSharp.Compiler.TypedTreeDiff
@@ -71,9 +72,9 @@ module MdvValidationTests =
         action reader
 
     module private RoslynBaseline =
-        // Helper to convert int table index to SRM TableIndex enum
-        let inline private toTableIndex (index: int) : TableIndex =
-            LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte index)
+        // Helper to convert TableName to SRM TableIndex enum
+        let inline private toTableIndex (table: TableName) : TableIndex =
+            LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte table.Index)
 
         let private baselines : Lazy<Map<string, Map<string, int>>> = lazy (
             let path = Path.Combine(__SOURCE_DIRECTORY__, "../../../../tools/baselines/roslyn_tables.json") |> Path.GetFullPath
@@ -93,27 +94,27 @@ module MdvValidationTests =
 
         let private tryFindTableIndex key =
             match key with
-            | "Module" -> Some DeltaTokens.tableModule
-            | "TypeRef" -> Some DeltaTokens.tableTypeRef
-            | "TypeDef" -> Some DeltaTokens.tableTypeDef
-            | "Field" -> Some DeltaTokens.tableField
-            | "MethodDef" -> Some DeltaTokens.tableMethodDef
-            | "Param" -> Some DeltaTokens.tableParam
-            | "MemberRef" -> Some DeltaTokens.tableMemberRef
-            | "StandAloneSig" -> Some DeltaTokens.tableStandAloneSig
-            | "Property" -> Some DeltaTokens.tableProperty
-            | "PropertyMap" -> Some DeltaTokens.tablePropertyMap
-            | "Event" -> Some DeltaTokens.tableEvent
-            | "EventMap" -> Some DeltaTokens.tableEventMap
-            | "MethodSemantics" -> Some DeltaTokens.tableMethodSemantics
-            | "TypeSpec" -> Some DeltaTokens.tableTypeSpec
-            | "AssemblyRef" -> Some DeltaTokens.tableAssemblyRef
-            | "EncLog" -> Some DeltaTokens.tableEncLog
-            | "EncMap" -> Some DeltaTokens.tableEncMap
+            | "Module" -> Some TableNames.Module
+            | "TypeRef" -> Some TableNames.TypeRef
+            | "TypeDef" -> Some TableNames.TypeDef
+            | "Field" -> Some TableNames.Field
+            | "MethodDef" -> Some TableNames.Method
+            | "Param" -> Some TableNames.Param
+            | "MemberRef" -> Some TableNames.MemberRef
+            | "StandAloneSig" -> Some TableNames.StandAloneSig
+            | "Property" -> Some TableNames.Property
+            | "PropertyMap" -> Some TableNames.PropertyMap
+            | "Event" -> Some TableNames.Event
+            | "EventMap" -> Some TableNames.EventMap
+            | "MethodSemantics" -> Some TableNames.MethodSemantics
+            | "TypeSpec" -> Some TableNames.TypeSpec
+            | "AssemblyRef" -> Some TableNames.AssemblyRef
+            | "EncLog" -> Some TableNames.ENCLog
+            | "EncMap" -> Some TableNames.ENCMap
             | _ -> None
 
-        let private countRows (metadata: byte[]) tableIndex =
-            withMetadataReader metadata (fun reader -> reader.GetTableRowCount(toTableIndex tableIndex))
+        let private countRows (metadata: byte[]) (table: TableName) =
+            withMetadataReader metadata (fun reader -> reader.GetTableRowCount(toTableIndex table))
 
         let assertWithin (scenario: string) (metadata: byte[]) =
             let expected =
@@ -169,22 +170,22 @@ module MdvValidationTests =
         let methodRowId = methodRowIdFromToken methodToken
         let moduleEntry =
             delta.EncLog
-            |> Array.exists (fun (table, _, _) -> table = DeltaTokens.tableModule)
+            |> Array.exists (fun (table, _, _) -> table = TableNames.Module)
         Assert.True(moduleEntry, "Expected EncLog entry for Module table")
 
         let methodEntry =
             delta.EncLog
             |> Array.exists (fun (table, row, op) ->
-                table = DeltaTokens.tableMethodDef
+                table = TableNames.Method
                 && row = methodRowId
                 && (op = EditAndContinueOperation.Default || op = EditAndContinueOperation.AddMethod))
         Assert.True(methodEntry, "Expected EncLog entry for updated method definition")
 
-    let private assertEncMapContains (delta: IlxDelta) (table: int) (rowId: int) =
+    let private assertEncMapContains (delta: IlxDelta) (table: TableName) (rowId: int) =
         let entryExists =
             delta.EncMap
             |> Array.exists (fun (t, r) -> t = table && r = rowId)
-        Assert.True(entryExists, $"Expected EncMap entry for table 0x{table:X2} row {rowId}")
+        Assert.True(entryExists, $"Expected EncMap entry for table 0x{table.Index:X2} row {rowId}")
 
     let private isDefinitionHandle (handle: EntityHandle) =
         match handle.Kind with
@@ -199,9 +200,9 @@ module MdvValidationTests =
         | _ -> false
 
 
-    // Helper to convert int table index to SRM TableIndex enum
-    let inline private toTableIndex (index: int) : TableIndex =
-        LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte index)
+    // Helper to convert TableName to SRM TableIndex enum
+    let inline private toTableIndex (table: TableName) : TableIndex =
+        LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte table.Index)
 
     let private assertEncMapDefinitionsMatch (delta: IlxDelta) (expected: EntityHandle list) =
         let actual =
@@ -1613,17 +1614,17 @@ type EventDemo() =
             Assert.True(hasAddedLiteral, "Expected user string updates to include the added property literal.")
 
             withMetadataReader delta.Metadata (fun reader ->
-                Assert.Equal(1, reader.GetTableRowCount(toTableIndex DeltaTokens.tableProperty))
-                Assert.Equal(1, reader.GetTableRowCount(toTableIndex DeltaTokens.tablePropertyMap)))
+                Assert.Equal(1, reader.GetTableRowCount(toTableIndex TableNames.Property))
+                Assert.Equal(1, reader.GetTableRowCount(toTableIndex TableNames.PropertyMap)))
 
             let hasPropertyLog =
                 delta.EncLog
-                |> Array.exists (fun (table, _, op) -> table = DeltaTokens.tableProperty && op = EditAndContinueOperation.AddProperty)
+                |> Array.exists (fun (table, _, op) -> table = TableNames.Property && op = EditAndContinueOperation.AddProperty)
             Assert.True(hasPropertyLog, "Expected EncLog entry for added property definition")
 
             let hasPropertyMapLog =
                 delta.EncLog
-                |> Array.exists (fun (table, _, op) -> table = DeltaTokens.tablePropertyMap && op = EditAndContinueOperation.AddProperty)
+                |> Array.exists (fun (table, _, op) -> table = TableNames.PropertyMap && op = EditAndContinueOperation.AddProperty)
             Assert.True(hasPropertyMapLog, "Expected EncLog entry for added property map")
 
             match runMdv baselineArtifacts.AssemblyPath metadataPath ilPath with
@@ -1752,17 +1753,17 @@ type EventDemo() =
             Assert.True(hasAddedLiteral, "Expected user string updates to include the added event literal.")
 
             withMetadataReader delta.Metadata (fun reader ->
-                Assert.Equal(1, reader.GetTableRowCount(toTableIndex DeltaTokens.tableEvent))
-                Assert.Equal(1, reader.GetTableRowCount(toTableIndex DeltaTokens.tableEventMap)))
+                Assert.Equal(1, reader.GetTableRowCount(toTableIndex TableNames.Event))
+                Assert.Equal(1, reader.GetTableRowCount(toTableIndex TableNames.EventMap)))
 
             let hasEventLog =
                 delta.EncLog
-                |> Array.exists (fun (table, _, op) -> table = DeltaTokens.tableEvent && op = EditAndContinueOperation.AddEvent)
+                |> Array.exists (fun (table, _, op) -> table = TableNames.Event && op = EditAndContinueOperation.AddEvent)
             Assert.True(hasEventLog, "Expected EncLog entry for added event definition")
 
             let hasEventMapLog =
                 delta.EncLog
-                |> Array.exists (fun (table, _, op) -> table = DeltaTokens.tableEventMap && op = EditAndContinueOperation.AddEvent)
+                |> Array.exists (fun (table, _, op) -> table = TableNames.EventMap && op = EditAndContinueOperation.AddEvent)
             Assert.True(hasEventMapLog, "Expected EncLog entry for added event map")
 
             match runMdv baselineArtifacts.AssemblyPath metadataPath ilPath with
@@ -1807,7 +1808,7 @@ type EventDemo() =
             let expectedLiteral1 = Text.Encoding.Unicode.GetBytes "Generation 1 helper message"
             Assert.True(containsSubsequence delta1.Metadata expectedLiteral1, "Expected generation 1 metadata to contain updated literal.")
             assertMethodEncLog delta1 methodToken
-            assertEncMapContains delta1 DeltaTokens.tableMethodDef methodRowId
+            assertEncMapContains delta1 TableNames.Method methodRowId
 
             let baseline2 =
                 match delta1.UpdatedBaseline with
@@ -1831,7 +1832,7 @@ type EventDemo() =
             Assert.True(containsSubsequence delta2.Metadata expectedLiteral2, "Expected generation 2 metadata to contain updated literal.")
             assertMethodEncLog delta2 methodToken
             Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
-            assertEncMapContains delta2 DeltaTokens.tableMethodDef methodRowId
+            assertEncMapContains delta2 TableNames.Method methodRowId
         finally
             if not (keepArtifacts ()) then
                 try File.Delete(meta1Path) with _ -> ()
@@ -1867,15 +1868,15 @@ type EventDemo() =
 
         // Updated methods should NOT have Param rows in the delta - baseline has them
         withMetadataReader delta.Metadata (fun reader ->
-            Assert.Equal(0, reader.GetTableRowCount(toTableIndex DeltaTokens.tableParam)))
+            Assert.Equal(0, reader.GetTableRowCount(toTableIndex TableNames.Param)))
 
         // No Param EncLog/EncMap entries for updated methods
         let hasParamEncLog =
-            delta.EncLog |> Array.exists (fun (t, _, _) -> t = DeltaTokens.tableParam)
+            delta.EncLog |> Array.exists (fun (t, _, _) -> t = TableNames.Param)
         Assert.False(hasParamEncLog, "Updated method should not have EncLog entry for Param table")
 
         let hasParamEncMap =
-            delta.EncMap |> Array.exists (fun (t, _) -> t = DeltaTokens.tableParam)
+            delta.EncMap |> Array.exists (fun (t, _) -> t = TableNames.Param)
         Assert.False(hasParamEncMap, "Updated method should not have EncMap entry for Param table")
 
         if not (keepArtifacts ()) then
@@ -2078,7 +2079,7 @@ type EventDemo() =
         match methodTokenOpt, methodRowIdOpt with
         | Some methodToken, Some methodRowId ->
             assertMethodEncLog delta1 methodToken
-            assertEncMapContains delta1 DeltaTokens.tableMethodDef methodRowId
+            assertEncMapContains delta1 TableNames.Method methodRowId
         | _ -> printfn "[hotreload-mdv] skipping method-token asserts for event delta; baseline token not found"
 
         let containsEventNameGen1 =
@@ -2107,7 +2108,7 @@ type EventDemo() =
         match methodTokenOpt, methodRowIdOpt with
         | Some methodToken, Some methodRowId ->
             assertMethodEncLog delta2 methodToken
-            assertEncMapContains delta2 DeltaTokens.tableMethodDef methodRowId
+            assertEncMapContains delta2 TableNames.Method methodRowId
         | _ -> ()
 
         let containsEventNameGen2 =
@@ -2167,9 +2168,9 @@ type EventDemo() =
         let methodToken = baselineArtifacts.Baseline.MethodTokens[methodKey]
         let methodRowId = methodRowIdFromToken methodToken
         assertMethodEncLog delta1 methodToken
-        assertEncMapContains delta1 DeltaTokens.tableMethodDef methodRowId
+        assertEncMapContains delta1 TableNames.Method methodRowId
         assertMethodEncLog delta2 methodToken
-        assertEncMapContains delta2 DeltaTokens.tableMethodDef methodRowId
+        assertEncMapContains delta2 TableNames.Method methodRowId
 
         let literal1 = Text.Encoding.Unicode.GetBytes "Closure helper generation 1"
         Assert.True(containsSubsequence delta1.Metadata literal1, "Expected generation 1 closure metadata to contain updated literal.")
@@ -2227,9 +2228,9 @@ type EventDemo() =
         let methodToken = baselineArtifacts.Baseline.MethodTokens[methodKey]
         let methodRowId = methodRowIdFromToken methodToken
         assertMethodEncLog delta1 methodToken
-        assertEncMapContains delta1 DeltaTokens.tableMethodDef methodRowId
+        assertEncMapContains delta1 TableNames.Method methodRowId
         assertMethodEncLog delta2 methodToken
-        assertEncMapContains delta2 DeltaTokens.tableMethodDef methodRowId
+        assertEncMapContains delta2 TableNames.Method methodRowId
 
         let literal1 = Text.Encoding.Unicode.GetBytes "Async helper generation 1"
         Assert.True(containsSubsequence delta1.Metadata literal1, "Expected generation 1 async metadata to contain updated literal.")

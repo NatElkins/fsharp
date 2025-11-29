@@ -666,21 +666,50 @@ type TypeOrMethodDef =
 // ============================================================================
 // DeltaTokens Module
 // ============================================================================
-// Utilities for metadata token manipulation, replacing MetadataTokens static methods
+// Utilities for metadata token manipulation, replacing MetadataTokens static methods.
+//
+// DESIGN NOTE: Table Index Strategy
+// ---------------------------------
+// For ECMA-335 metadata tables (Module, TypeDef, MethodDef, etc.), we use the
+// existing TableName/TableNames types from BinaryConstants.fs (ilbinary.fs).
+// This follows the established pattern in the F# compiler codebase where:
+//   - ilwrite.fs (baseline IL writer) uses TableNames for metadata tables
+//   - ilwritepdb.fs (baseline PDB writer) uses SRM's TableIndex directly
+//
+// For Portable PDB tables (Document, MethodDebugInformation, LocalScope, etc.),
+// we define constants here since they are not part of the core ECMA-335 spec
+// and are not included in TableNames. This mirrors how ilwritepdb.fs handles
+// PDB tables separately from metadata tables.
+//
+// Benefits of this approach:
+//   1. Type safety: TableName struct prevents accidental misuse of raw ints
+//   2. Minimal upstream churn: No modifications needed to ilbinary.fs
+//   3. Consistency: Follows existing patterns in the F# compiler
+//   4. Separation of concerns: ECMA-335 tables vs Portable PDB tables
 
 /// Token arithmetic utilities (replaces System.Reflection.Metadata.Ecma335.MetadataTokens)
 module DeltaTokens =
-    /// Number of metadata tables defined in ECMA-335
+    open FSharp.Compiler.AbstractIL.BinaryConstants
+
+    /// Number of metadata tables defined in ECMA-335 (includes reserved slots)
     let TableCount = 64
 
-    /// Extract the row number from a metadata token
+    /// Extract the row number (lower 24 bits) from a metadata token
     let getRowNumber (token: int) = token &&& 0x00FFFFFF
 
-    /// Extract the table index from a metadata token
+    /// Extract the table index (upper 8 bits) from a metadata token
     let getTableIndex (token: int) = (token >>> 24) &&& 0xFF
 
-    /// Create a metadata token from table index and row number
-    let makeToken (tableIndex: int) (rowNumber: int) =
+    /// Create a metadata token from a TableName and row number.
+    /// Token format: [table index : 8 bits][row number : 24 bits]
+    /// Internal: TableName is from BinaryConstants which is internal.
+    let internal makeToken (table: TableName) (rowNumber: int) =
+        (table.Index <<< 24) ||| (rowNumber &&& 0x00FFFFFF)
+
+    /// Create a metadata token from a raw table index (int) and row number.
+    /// Use this for PDB tables which don't have TableName definitions,
+    /// or when calling from outside the compiler assembly.
+    let makeTokenFromIndex (tableIndex: int) (rowNumber: int) =
         (tableIndex <<< 24) ||| (rowNumber &&& 0x00FFFFFF)
 
     /// Create an EntityToken from a raw token value
@@ -691,45 +720,16 @@ module DeltaTokens =
     /// Convert an EntityToken to a raw token value
     let fromEntityToken (entity: EntityToken) : int = entity.Token
 
-    // Table indices (matching TableIndex enum values)
-    let tableModule = 0x00
-    let tableTypeRef = 0x01
-    let tableTypeDef = 0x02
-    let tableField = 0x04
-    let tableMethodDef = 0x06
-    let tableParam = 0x08
-    let tableInterfaceImpl = 0x09
-    let tableMemberRef = 0x0A
-    let tableConstant = 0x0B
-    let tableCustomAttribute = 0x0C
-    let tableFieldMarshal = 0x0D
-    let tableDeclSecurity = 0x0E
-    let tableClassLayout = 0x0F
-    let tableFieldLayout = 0x10
-    let tableStandAloneSig = 0x11
-    let tableEventMap = 0x12
-    let tableEvent = 0x14
-    let tablePropertyMap = 0x15
-    let tableProperty = 0x17
-    let tableMethodSemantics = 0x18
-    let tableMethodImpl = 0x19
-    let tableModuleRef = 0x1A
-    let tableTypeSpec = 0x1B
-    let tableImplMap = 0x1C
-    let tableFieldRVA = 0x1D
-    let tableAssembly = 0x20
-    let tableAssemblyRef = 0x23
-    let tableFile = 0x26
-    let tableExportedType = 0x27
-    let tableManifestResource = 0x28
-    let tableNestedClass = 0x29
-    let tableGenericParam = 0x2A
-    let tableMethodSpec = 0x2B
-    let tableGenericParamConstraint = 0x2C
-    let tableEncLog = 0x1E
-    let tableEncMap = 0x1F
+    // -------------------------------------------------------------------------
+    // Portable PDB Table Indices (not part of ECMA-335, defined in Portable PDB spec)
+    // -------------------------------------------------------------------------
+    // These tables are used for debug information in Portable PDB format.
+    // They start at index 0x30 to avoid collision with ECMA-335 tables.
+    // Reference: https://github.com/dotnet/runtime/blob/main/docs/design/specs/PortablePdb-Metadata.md
+    //
+    // Note: ECMA-335 metadata tables (0x00-0x2C) are defined in TableNames module
+    // in BinaryConstants.fs. Use TableNames.Module, TableNames.TypeDef, etc.
 
-    // PDB table indices (Portable PDB spec)
     let tableDocument = 0x30
     let tableMethodDebugInformation = 0x31
     let tableLocalScope = 0x32

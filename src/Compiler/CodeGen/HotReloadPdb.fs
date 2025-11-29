@@ -7,6 +7,7 @@ open System.Collections.Immutable
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Security.Cryptography
+open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.HotReloadBaseline
 
@@ -43,13 +44,16 @@ let createSnapshot (pdbBytes: byte[]) : PortablePdbSnapshot =
       TableRowCounts = rowCounts
       EntryPointToken = entryPointToken }
 
+/// Emit a PDB delta for the given hot reload generation.
+/// Takes the metadata EncLog and EncMap (using TableName for type safety)
+/// and produces a Portable PDB delta that matches the metadata delta.
 let emitDelta
     (baseline: FSharpEmitBaseline)
     (updatedPdbBytes: byte[])
     (addedOrChangedMethods: AddedOrChangedMethodInfo list)
     (deltaToUpdatedMethodToken: IReadOnlyDictionary<int, int>)
-    (_metadataEncLog: (int * int * EditAndContinueOperation) array)
-    (_metadataEncMap: (int * int) array)
+    (_metadataEncLog: (TableName * int * EditAndContinueOperation) array)
+    (_metadataEncMap: (TableName * int) array)
     : byte[] option =
     match baseline.PortablePdb with
     | None -> None
