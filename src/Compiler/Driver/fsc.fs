@@ -1246,16 +1246,13 @@ let main6
                         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
 
                         let baseline =
-                            use stream = new MemoryStream(assemblyBytes, writable = false)
-                            use peReader = new PEReader(stream)
-                            let metadataReader = peReader.GetMetadataReader()
-                            let moduleDef = metadataReader.GetModuleDefinition()
+                            // Use byte-based functions to avoid SRM dependency
                             let moduleId =
-                                if moduleDef.Mvid.IsNil then
-                                    System.Guid.NewGuid()
-                                else
-                                    metadataReader.GetGuid(moduleDef.Mvid)
-                            let metadataSnapshot = HotReloadBaseline.metadataSnapshotFromReader metadataReader
+                                HotReloadBaseline.readModuleMvid assemblyBytes
+                                |> Option.defaultWith System.Guid.NewGuid
+                            let metadataSnapshot =
+                                HotReloadBaseline.metadataSnapshotFromBytes assemblyBytes
+                                |> Option.defaultWith (fun () -> failwith "Failed to read metadata from assembly bytes")
                             let coreBaseline =
                                 if obj.ReferenceEquals(ilxGenEnvSnapshot, null) then
                                     HotReloadBaseline.create
@@ -1272,7 +1269,7 @@ let main6
                                         ilxGenEnvSnapshot
                                         moduleId
                                         portablePdbSnapshot
-                            HotReloadBaseline.attachMetadataHandles metadataReader coreBaseline
+                            HotReloadBaseline.attachMetadataHandlesFromBytes assemblyBytes coreBaseline
 
                         FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, optimizedImpls)
                         match tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps with

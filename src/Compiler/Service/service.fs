@@ -454,20 +454,16 @@ type FSharpChecker
 
         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
 
-        use stream = File.OpenRead(outputPath)
-        use peReader = new PEReader(stream)
-        let metadataReader = peReader.GetMetadataReader()
-        let moduleDef = metadataReader.GetModuleDefinition()
-
+        // Use byte-based functions to avoid SRM dependency
+        let assemblyBytes = File.ReadAllBytes(outputPath)
         let moduleId =
-            if moduleDef.Mvid.IsNil then
-                System.Guid.NewGuid()
-            else
-                metadataReader.GetGuid(moduleDef.Mvid)
-
-        let metadataSnapshot = HotReloadBaseline.metadataSnapshotFromReader metadataReader
+            HotReloadBaseline.readModuleMvid assemblyBytes
+            |> Option.defaultWith System.Guid.NewGuid
+        let metadataSnapshot =
+            HotReloadBaseline.metadataSnapshotFromBytes assemblyBytes
+            |> Option.defaultWith (fun () -> failwith "Failed to read metadata from assembly bytes")
         let baselineCore = HotReloadBaseline.create ilModule tokenMappings metadataSnapshot moduleId portablePdbSnapshot
-        HotReloadBaseline.attachMetadataHandles metadataReader baselineCore
+        HotReloadBaseline.attachMetadataHandlesFromBytes assemblyBytes baselineCore
 
     static member getParallelReferenceResolutionFromEnvironment() =
         getParallelReferenceResolutionFromEnvironment ()
