@@ -444,7 +444,6 @@
     <Compile Include="CodeGen\DeltaIndexSizing.fs" />
     <Compile Include="CodeGen\DeltaMetadataSerializer.fs" />
     <Compile Include="CodeGen\FSharpDeltaMetadataWriter.fs" />
-    <Compile Include="HotReload\FSharpMetadataAggregator.fs" />
     <Compile Include="HotReload\SymbolMatcher.fs" />
     <Compile Include="HotReload\HotReloadAccessorTypes.fs" />
     <Compile Include="CodeGen\IlxDeltaEmitter.fs" />
