@@ -148,6 +148,15 @@ val metadataSnapshotFromReader: reader: MetadataReader -> MetadataSnapshot
 
 val attachMetadataHandles: metadataReader: MetadataReader -> baseline: FSharpEmitBaseline -> FSharpEmitBaseline
 
+/// Extract metadata snapshot from PE file bytes without using SRM.
+val metadataSnapshotFromBytes: bytes: byte[] -> MetadataSnapshot option
+
+/// Read Module.Mvid GUID from PE file bytes without using SRM.
+val readModuleMvid: bytes: byte[] -> System.Guid option
+
+/// Attach metadata handles from PE bytes without using SRM MetadataReader.
+val attachMetadataHandlesFromBytes: bytes: byte[] -> baseline: FSharpEmitBaseline -> FSharpEmitBaseline
+
 val applyDelta:
     baseline: FSharpEmitBaseline ->
     deltaTableCounts: int[] ->

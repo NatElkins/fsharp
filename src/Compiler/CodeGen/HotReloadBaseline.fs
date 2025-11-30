@@ -10,6 +10,8 @@ open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.IlxGen
+
+module ILBaselineReader = FSharp.Compiler.AbstractIL.ILBaselineReader
 open FSharp.Compiler.Syntax.PrettyNaming
 
 let private tableCount = DeltaTokens.TableCount
@@ -724,3 +726,169 @@ let attachMetadataHandles (metadataReader: MetadataReader) (baseline: FSharpEmit
         ModuleNameOffset = stringOffsetOption moduleDef.Name
         TypeReferenceTokens = typeReferenceTokens
         AssemblyReferenceTokens = assemblyReferenceTokens }
+
+// ============================================================================
+// Byte-based functions using ILBaselineReader (no SRM dependency)
+// ============================================================================
+
+/// Extract metadata snapshot from PE file bytes without using SRM.
+let metadataSnapshotFromBytes (bytes: byte[]) : MetadataSnapshot option =
+    ILBaselineReader.metadataSnapshotFromBytes bytes
+
+/// Read Module.Mvid GUID from PE file bytes without using SRM.
+let readModuleMvid (bytes: byte[]) : Guid option =
+    ILBaselineReader.readModuleMvidFromBytes bytes
+
+/// Build method handles from baseline using ILBaselineReader.
+let private buildMethodHandlesFromBytes (reader: ILBaselineReader.BaselineMetadataReader) (methodTokens: Map<MethodDefinitionKey, int>) : Map<MethodDefinitionKey, MethodDefinitionMetadataHandles> =
+    methodTokens
+    |> Seq.choose (fun kvp ->
+        let key = kvp.Key
+        let token = kvp.Value
+        let rowId = token &&& 0x00FFFFFF
+        match reader.GetMethodDef(rowId) with
+        | None -> None
+        | Some methodDef ->
+            let firstParamRowId =
+                match reader.GetMethodParamRange(rowId) with
+                | Some (first, _) -> Some first
+                | None -> None
+            let result : MethodDefinitionMetadataHandles =
+                { NameOffset = if methodDef.NameOffset = 0 then None else Some (StringOffset methodDef.NameOffset)
+                  SignatureOffset = if methodDef.SignatureOffset = 0 then None else Some (BlobOffset methodDef.SignatureOffset)
+                  FirstParameterRowId = firstParamRowId
+                  Rva = Some methodDef.RVA
+                  Attributes = Some (LanguagePrimitives.EnumOfValue<int, MethodAttributes> methodDef.Flags)
+                  ImplAttributes = Some (LanguagePrimitives.EnumOfValue<int, MethodImplAttributes> methodDef.ImplFlags) }
+            Some(key, result)
+    )
+    |> Map.ofSeq
+
+/// Build parameter handles from baseline using ILBaselineReader.
+let private buildParameterHandlesFromBytes
+    (reader: ILBaselineReader.BaselineMetadataReader)
+    (methodTokens: Map<MethodDefinitionKey, int>)
+    : Map<ParameterDefinitionKey, ParameterDefinitionMetadataHandles>
+    =
+    methodTokens
+    |> Seq.collect (fun kvp ->
+        let methodKey = kvp.Key
+        let token = kvp.Value
+        let methodRowId = token &&& 0x00FFFFFF
+        match reader.GetMethodParamRange(methodRowId) with
+        | None -> Seq.empty
+        | Some (firstParam, lastParam) ->
+            seq {
+                for paramRowId in firstParam..lastParam do
+                    match reader.GetParam(paramRowId) with
+                    | None -> ()
+                    | Some param ->
+                        let key =
+                            { ParameterDefinitionKey.Method = methodKey
+                              SequenceNumber = param.Sequence }
+                        let result : ParameterDefinitionMetadataHandles =
+                            { NameOffset = if param.NameOffset = 0 then None else Some (StringOffset param.NameOffset)
+                              RowId = Some paramRowId }
+                        yield key, result
+            }
+    )
+    |> Map.ofSeq
+
+/// Build property handles from baseline using ILBaselineReader.
+let private buildPropertyHandlesFromBytes (reader: ILBaselineReader.BaselineMetadataReader) (propertyTokens: Map<PropertyDefinitionKey, int>) : Map<PropertyDefinitionKey, PropertyDefinitionMetadataHandles> =
+    propertyTokens
+    |> Seq.choose (fun kvp ->
+        let key = kvp.Key
+        let token = kvp.Value
+        let rowId = token &&& 0x00FFFFFF
+        match reader.GetProperty(rowId) with
+        | None -> None
+        | Some prop ->
+            let result : PropertyDefinitionMetadataHandles =
+                { NameOffset = if prop.NameOffset = 0 then None else Some (StringOffset prop.NameOffset)
+                  SignatureOffset = if prop.SignatureOffset = 0 then None else Some (BlobOffset prop.SignatureOffset) }
+            Some(key, result)
+    )
+    |> Map.ofSeq
+
+/// Build event handles from baseline using ILBaselineReader.
+let private buildEventHandlesFromBytes (reader: ILBaselineReader.BaselineMetadataReader) (eventTokens: Map<EventDefinitionKey, int>) : Map<EventDefinitionKey, EventDefinitionMetadataHandles> =
+    eventTokens
+    |> Seq.choose (fun kvp ->
+        let key = kvp.Key
+        let token = kvp.Value
+        let rowId = token &&& 0x00FFFFFF
+        match reader.GetEvent(rowId) with
+        | None -> None
+        | Some event ->
+            let result : EventDefinitionMetadataHandles =
+                { NameOffset = if event.NameOffset = 0 then None else Some (StringOffset event.NameOffset) }
+            Some(key, result)
+    )
+    |> Map.ofSeq
+
+/// Build assembly reference tokens from baseline using ILBaselineReader.
+let private buildAssemblyReferenceTokensFromBytes (reader: ILBaselineReader.BaselineMetadataReader) : Map<string, int> =
+    seq {
+        for rowId in 1..reader.AssemblyRefCount do
+            match reader.GetAssemblyRef(rowId) with
+            | Some assemblyRef ->
+                let name = reader.GetString(assemblyRef.NameOffset)
+                // AssemblyRef table index is 0x23, token = (0x23 << 24) | rowId
+                let token = (0x23 <<< 24) ||| rowId
+                yield name, token
+            | None -> ()
+    }
+    |> Map.ofSeq
+
+/// Build type reference tokens from baseline using ILBaselineReader.
+let private buildTypeReferenceTokensFromBytes (reader: ILBaselineReader.BaselineMetadataReader) : Map<TypeReferenceKey, int> =
+    seq {
+        for rowId in 1..reader.TypeRefCount do
+            match reader.GetTypeRef(rowId) with
+            | Some typeRef ->
+                let (tableIndex, scopeRowId) = reader.DecodeResolutionScope(typeRef.ResolutionScope)
+                // Only include TypeRefs with AssemblyRef scope (tableIndex = 35)
+                if tableIndex = 35 then
+                    match reader.GetAssemblyRef(scopeRowId) with
+                    | Some assemblyRef ->
+                        let scopeName = reader.GetString(assemblyRef.NameOffset)
+                        let name = reader.GetString(typeRef.NameOffset)
+                        let namespaceName = reader.GetString(typeRef.NamespaceOffset)
+                        let key =
+                            { TypeReferenceKey.Scope = scopeName
+                              Namespace = namespaceName
+                              Name = name }
+                        // TypeRef table index is 0x01, token = (0x01 << 24) | rowId
+                        let token = (0x01 <<< 24) ||| rowId
+                        yield key, token
+                    | None -> ()
+            | None -> ()
+    }
+    |> Map.ofSeq
+
+/// Attach metadata handles from PE bytes without using SRM MetadataReader.
+let attachMetadataHandlesFromBytes (bytes: byte[]) (baseline: FSharpEmitBaseline) : FSharpEmitBaseline =
+    match ILBaselineReader.BaselineMetadataReader.Create(bytes) with
+    | None -> baseline  // Return unchanged if we can't read the metadata
+    | Some reader ->
+        let methodHandles = buildMethodHandlesFromBytes reader baseline.MethodTokens
+        let parameterHandles = buildParameterHandlesFromBytes reader baseline.MethodTokens
+        let propertyHandles = buildPropertyHandlesFromBytes reader baseline.PropertyTokens
+        let eventHandles = buildEventHandlesFromBytes reader baseline.EventTokens
+        let typeReferenceTokens = buildTypeReferenceTokensFromBytes reader
+        let assemblyReferenceTokens = buildAssemblyReferenceTokensFromBytes reader
+        let cache =
+            { MethodHandles = methodHandles
+              ParameterHandles = parameterHandles
+              PropertyHandles = propertyHandles
+              EventHandles = eventHandles }
+        let moduleNameOffset =
+            match reader.GetModule() with
+            | Some m when m.NameOffset > 0 -> Some (StringOffset m.NameOffset)
+            | _ -> None
+        { baseline with
+            MetadataHandles = cache
+            ModuleNameOffset = moduleNameOffset
+            TypeReferenceTokens = typeReferenceTokens
+            AssemblyReferenceTokens = assemblyReferenceTokens }
