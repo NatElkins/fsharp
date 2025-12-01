@@ -2,10 +2,6 @@ module internal FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
 open System
 open System.Collections.Generic
-open System.Collections.Immutable
-open System.Reflection.Metadata
-open System.Reflection.Metadata.Ecma335
-open System.Reflection
 open Microsoft.FSharp.Collections
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.AbstractIL.BinaryConstants
@@ -46,7 +42,7 @@ type MethodMetadataUpdate =
     {
         MethodKey: MethodDefinitionKey
         MethodToken: int
-        MethodHandle: MethodDefinitionHandle
+        MethodHandle: MethodDefHandle
         Body: MethodBodyUpdate
     }
 
@@ -214,7 +210,7 @@ let emitWithUserStrings
             encMap.Add(struct (TableNames.AssemblyRef, row.RowId))
 
         for signature in standaloneSignatureRows do
-            let rowId = MetadataTokens.GetRowNumber signature.Handle
+            let rowId = signature.RowId
             tableMirror.AddStandaloneSignatureRow(signature.Blob)
 
             let operation = EditAndContinueOperation.Default
@@ -367,30 +363,6 @@ let emitWithUserStrings
                 heapStreams.BlobsLength
                 heapStreams.GuidsLength
             printfn "[fsharp-hotreload][heap-bytes] blob-bytes=%A" heapStreams.Blobs
-
-        // Debug: verify module GenerationId/BaseGenerationId encoding
-        try
-            use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(metadataBytes))
-            let reader = provider.GetMetadataReader()
-            let moduleDef = reader.GetModuleDefinition()
-            let guidHeapSize = reader.GetHeapSize(HeapIndex.Guid)
-            // Get actual GUID values from the reader
-            let mvidGuid = if moduleDef.Mvid.IsNil then System.Guid.Empty else reader.GetGuid(moduleDef.Mvid)
-            let genIdGuid = if moduleDef.GenerationId.IsNil then System.Guid.Empty else reader.GetGuid(moduleDef.GenerationId)
-            let baseGenIdGuid = if moduleDef.BaseGenerationId.IsNil then System.Guid.Empty else reader.GetGuid(moduleDef.BaseGenerationId)
-            printfn
-                "[fsharp-hotreload][module-row-debug] generation=%d guidHeapSize=%d"
-                generation
-                guidHeapSize
-            printfn "[fsharp-hotreload][module-row-debug] MVID=%A" mvidGuid
-            printfn "[fsharp-hotreload][module-row-debug] EncId=%A (expected: %A)" genIdGuid encId
-            printfn "[fsharp-hotreload][module-row-debug] EncBaseId=%A (expected: %A)" baseGenIdGuid encBaseId
-            if genIdGuid <> encId then
-                printfn "[fsharp-hotreload][module-row-debug] WARNING: EncId mismatch!"
-            if baseGenIdGuid <> encBaseId then
-                printfn "[fsharp-hotreload][module-row-debug] WARNING: EncBaseId mismatch!"
-        with ex ->
-            printfn "[fsharp-hotreload][module-row-debug] ERROR: %s" ex.Message
 
         // HeapSizes should match what SRM's GetHeapSize returns:
         // - StringHeap: SRM trims trailing zeros, so use unpadded size

@@ -40,6 +40,42 @@ let private normalizeGeneratedFieldName (name: string) =
     | idx when idx > 0 -> name.Substring(0, idx)
     | _ -> name
 
+/// Converts an SRM EntityHandle to our TypeDefOrRef type for EventType fields
+let private entityHandleToTypeDefOrRef (handle: EntityHandle) : TypeDefOrRef =
+    let rowId = MetadataTokens.GetRowNumber handle
+    match handle.Kind with
+    | HandleKind.TypeDefinition -> TDR_TypeDef(TypeDefHandle rowId)
+    | HandleKind.TypeReference -> TDR_TypeRef(TypeRefHandle rowId)
+    | HandleKind.TypeSpecification -> TDR_TypeSpec(TypeSpecHandle rowId)
+    | _ -> TDR_TypeDef(TypeDefHandle 0) // Nil handle maps to TypeDef 0
+
+/// Converts SRM ExceptionRegion to our IlExceptionRegion type
+let private convertExceptionRegions (regions: ImmutableArray<ExceptionRegion>) : IlExceptionRegion[] =
+    if regions.IsDefaultOrEmpty then
+        [||]
+    else
+        regions.ToArray()
+        |> Array.map (fun region ->
+            let kind =
+                match region.Kind with
+                | ExceptionRegionKind.Catch -> IlExceptionRegionKind.Catch
+                | ExceptionRegionKind.Filter -> IlExceptionRegionKind.Filter
+                | ExceptionRegionKind.Finally -> IlExceptionRegionKind.Finally
+                | ExceptionRegionKind.Fault -> IlExceptionRegionKind.Fault
+                | _ -> IlExceptionRegionKind.Catch
+            let catchToken =
+                if region.CatchType.IsNil then 0
+                else MetadataTokens.GetToken(region.CatchType)
+            {
+                IlExceptionRegion.Kind = kind
+                TryOffset = region.TryOffset
+                TryLength = region.TryLength
+                HandlerOffset = region.HandlerOffset
+                HandlerLength = region.HandlerLength
+                CatchTypeToken = catchToken
+                FilterOffset = region.FilterOffset
+            })
+
 /// Represents the emitted artifacts for a hot reload delta.
 /// This is the primary output from IlxDeltaEmitter, containing all deltas needed
 /// for MetadataUpdater.ApplyUpdate.
@@ -563,8 +599,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 if not (addedPropertyTokens.ContainsKey propertyKey) then
                     addedPropertyTokens[propertyKey] <- newPropertyToken
                     addedPropertyTokenLookup[newPropertyToken] <- propertyKey
-                    let handleRow = newPropertyToken &&& 0x00FFFFFF
-                    propertyHandleLookup[propertyKey] <- MetadataTokens.PropertyDefinitionHandle handleRow)
+                    let rowId = newPropertyToken &&& 0x00FFFFFF
+                    propertyHandleLookup[propertyKey] <- MetadataTokens.PropertyDefinitionHandle rowId)
 
         typeDef.Events.AsList()
         |> List.iter (fun eventDef ->
@@ -584,8 +620,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 if not (addedEventTokens.ContainsKey eventKey) then
                     addedEventTokens[eventKey] <- newEventToken
                     addedEventTokenLookup[newEventToken] <- eventKey
-                    let handleRow = newEventToken &&& 0x00FFFFFF
-                    eventHandleLookup[eventKey] <- MetadataTokens.EventDefinitionHandle handleRow)
+                    let rowId = newEventToken &&& 0x00FFFFFF
+                    eventHandleLookup[eventKey] <- MetadataTokens.EventDefinitionHandle rowId)
 
         typeDef.NestedTypes.AsList()
         |> List.iter (fun nested -> collectTypeMappings (enclosing @ [ typeDef ]) nested)
@@ -1163,13 +1199,16 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         ilBytes,
                         body.MaxStack,
                         body.LocalVariablesInitialized,
-                        body.ExceptionRegions,
+                        convertExceptionRegions body.ExceptionRegions,
                         remapEntityToken
                     )
 
+                // Convert SRM MethodDefinitionHandle to F# MethodDefHandle
+                let methodHandleEntity: EntityHandle = methodHandle
+                let methodRowId = MetadataTokens.GetRowNumber(methodHandleEntity)
                 ({ MethodKey = key
                    MethodToken = methodToken
-                   MethodHandle = methodHandle
+                   MethodHandle = MethodDefHandle methodRowId
                    Body = bodyUpdate }, methodDef))
 
         let methodMetadataLookup =
@@ -1359,7 +1398,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                           Name = name
                           NameOffset = resolvedNameOffset
                           Attributes = eventDef.Attributes
-                          EventType = eventDef.Type }
+                          EventType = entityHandleToTypeDefOrRef eventDef.Type }
                 | _ -> None)
 
         let propertyRowsByType =
@@ -1531,15 +1570,11 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                                 nextMethodSemanticsRowId <- nextMethodSemanticsRowId + 1
                                 Some
                                     { MethodSemanticsMetadataUpdate.RowId = nextMethodSemanticsRowId
-                                      Association =
-                                        MetadataTokens.PropertyDefinitionHandle propertyRowId
-                                        |> PropertyDefinitionHandle.op_Implicit
                                       MethodToken = methodToken
                                       Attributes = attrs
                                       IsAdded = true
                                       AssociationInfo =
-                                        MethodSemanticsAssociation.PropertyAssociation(propertyKey, propertyRowId)
-                                        |> Some }
+                                        MethodSemanticsAssociation.PropertyAssociation(propertyKey, propertyRowId) }
                             | None -> None
                         | (SymbolMemberKind.EventAdd _
                           | SymbolMemberKind.EventRemove _
@@ -1549,15 +1584,11 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                                 nextMethodSemanticsRowId <- nextMethodSemanticsRowId + 1
                                 Some
                                     { MethodSemanticsMetadataUpdate.RowId = nextMethodSemanticsRowId
-                                      Association =
-                                        MetadataTokens.EventDefinitionHandle eventRowId
-                                        |> EventDefinitionHandle.op_Implicit
                                       MethodToken = methodToken
                                       Attributes = attrs
                                       IsAdded = true
                                       AssociationInfo =
-                                        MethodSemanticsAssociation.EventAssociation(eventKey, eventRowId)
-                                        |> Some }
+                                        MethodSemanticsAssociation.EventAssociation(eventKey, eventRowId) }
                             | None -> None
                         | _ -> None)
 
@@ -2150,22 +2181,19 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             if row.IsAdded then
                 match methodTokenToKey.TryGetValue row.MethodToken with
                 | true, methodKey ->
-                    match row.AssociationInfo with
-                    | Some association ->
-                        let newEntry =
-                            { MethodSemanticsEntry.RowId = row.RowId
-                              Attributes = row.Attributes
-                              Association = association }
+                    let newEntry =
+                        { MethodSemanticsEntry.RowId = row.RowId
+                          Attributes = row.Attributes
+                          Association = row.AssociationInfo }
 
-                        let updatedList =
-                            match entries |> Map.tryFind methodKey with
-                            | Some existing ->
-                                newEntry :: existing
-                                |> List.distinctBy (fun entry -> entry.RowId)
-                            | None -> [ newEntry ]
+                    let updatedList =
+                        match entries |> Map.tryFind methodKey with
+                        | Some existing ->
+                            newEntry :: existing
+                            |> List.distinctBy (fun entry -> entry.RowId)
+                        | None -> [ newEntry ]
 
-                        entries |> Map.add methodKey updatedList
-                    | None -> entries
+                    entries |> Map.add methodKey updatedList
                 | _ -> entries
             else
                 entries

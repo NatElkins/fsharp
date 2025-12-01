@@ -1,13 +1,13 @@
 module internal FSharp.Compiler.IlxDeltaStreams
 
 open System
-open System.IO
 open System.Collections.Generic
-open System.Collections.Immutable
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
+open FSharp.Compiler.AbstractIL.ILDeltaHandles
+open FSharp.Compiler.IO
 
 /// <summary>Represents a method body update captured for an Edit-and-Continue delta.</summary>
 type MethodBodyUpdate =
@@ -21,7 +21,7 @@ type MethodBodyUpdate =
 /// <summary>Represents a standalone signature (e.g., local signature) emitted in the delta metadata.</summary>
 type StandaloneSignatureUpdate =
     {
-        Handle: StandaloneSignatureHandle
+        RowId: int
         Blob: byte[]
     }
 
@@ -35,7 +35,7 @@ type IlDeltaStreams =
 
 /// <summary>
 /// Accumulates metadata tables, Edit-and-Continue bookkeeping, and encoded method bodies prior to serialising
-/// a hot reload delta. The builder owns private instances of <see cref="MetadataBuilder"/> and <see cref="BlobBuilder"/>;
+/// a hot reload delta. The builder owns private instances of <see cref="MetadataBuilder"/> and <see cref="ByteBuffer"/>;
 /// callers retrieve the resulting byte arrays via <see cref="Build"/>.
 /// </summary>
 type IlDeltaStreamBuilder(baselineMetadata: MetadataSnapshot option) =
@@ -56,15 +56,18 @@ type IlDeltaStreamBuilder(baselineMetadata: MetadataSnapshot option) =
                 guidHeapStartOffset = alignedGuidStart
             )
         | None -> MetadataBuilder()
-    let methodBodyStream = BlobBuilder()
+    let methodBodyStream = ByteBuffer.Create(256)
     let methodBodies = ResizeArray<MethodBodyUpdate>()
     let standaloneSigs = ResizeArray<StandaloneSignatureUpdate>()
     let standaloneSigCache = Dictionary<int, StandaloneSignatureHandle>()
     let mutable isBuilt = false
 
-    let alignMethodStream () =
-        // ECMA-335 II.25.4.5 requires method bodies to start at 4-byte aligned addresses.
-        methodBodyStream.Align(4)
+    let alignStream alignment =
+        // Align to N-byte boundary by padding with zeros
+        let pos = methodBodyStream.Position
+        let padding = (alignment - (pos % alignment)) % alignment
+        for _ = 1 to padding do
+            methodBodyStream.EmitByte 0uy
 
     /// <summary>Expose the underlying metadata builder for advanced scenarios.</summary>
     member _.MetadataBuilder = metadataBuilder
@@ -81,87 +84,84 @@ type IlDeltaStreamBuilder(baselineMetadata: MetadataSnapshot option) =
         ilBytes: byte[],
         maxStack: int,
         initLocals: bool,
-        exceptionRegions: ImmutableArray<ExceptionRegion>,
+        exceptionRegions: IlExceptionRegion[],
         remapEntityToken: int -> int
     ) =
         let ilLength = ilBytes.Length
-        let hasExceptionRegions = not exceptionRegions.IsDefaultOrEmpty
+        let hasExceptionRegions = exceptionRegions.Length > 0
 
         let flags =
             int e_CorILMethod_FatFormat
             ||| (if hasExceptionRegions then int e_CorILMethod_MoreSects else 0)
             ||| (if initLocals then int e_CorILMethod_InitLocals else 0)
 
-        alignMethodStream ()
-        let offset = methodBodyStream.Count
+        alignStream 4
+        let offset = methodBodyStream.Position
 
-        methodBodyStream.WriteByte(byte flags)
-        methodBodyStream.WriteByte(0x30uy)
-        methodBodyStream.WriteUInt16(uint16 maxStack)
-        methodBodyStream.WriteInt32(ilLength)
-        methodBodyStream.WriteInt32(localSignatureToken)
-        methodBodyStream.WriteBytes(ilBytes)
+        methodBodyStream.EmitByte(byte flags)
+        methodBodyStream.EmitByte(0x30uy)
+        methodBodyStream.EmitUInt16(uint16 maxStack)
+        methodBodyStream.EmitInt32(ilLength)
+        methodBodyStream.EmitInt32(localSignatureToken)
+        methodBodyStream.EmitBytes(ilBytes)
 
         let padding = (4 - (ilLength % 4)) &&& 0x3
         if padding > 0 then
-            let padBytes: byte[] = Array.zeroCreate padding
-            methodBodyStream.WriteBytes(padBytes)
+            for _ = 1 to padding do
+                methodBodyStream.EmitByte 0uy
 
         if hasExceptionRegions then
-            methodBodyStream.Align(4)
-            let regions = exceptionRegions |> Seq.toList
+            alignStream 4
+            let regions = exceptionRegions
             let smallSize = regions.Length * 12 + 4
             let canUseSmall =
                 smallSize <= 0xFF
                 && regions
-                   |> List.forall (fun region ->
+                   |> Array.forall (fun region ->
                        region.TryOffset <= 0xFFFF
                        && region.HandlerOffset <= 0xFFFF
                        && region.TryLength <= 0xFF
                        && region.HandlerLength <= 0xFF)
 
-            let encodeKind (region: ExceptionRegion) : int * int =
+            let encodeKind (region: IlExceptionRegion) : int * int =
                 match region.Kind with
-                | ExceptionRegionKind.Catch ->
+                | IlExceptionRegionKind.Catch ->
                     let token =
-                        if region.CatchType.IsNil then
-                            0
-                        else
-                            let original = MetadataTokens.GetToken(region.CatchType)
-                            remapEntityToken original
+                        if region.CatchTypeToken = 0 then 0
+                        else remapEntityToken region.CatchTypeToken
                     e_COR_ILEXCEPTION_CLAUSE_EXCEPTION, token
-                | ExceptionRegionKind.Filter -> e_COR_ILEXCEPTION_CLAUSE_FILTER, region.FilterOffset
-                | ExceptionRegionKind.Finally -> e_COR_ILEXCEPTION_CLAUSE_FINALLY, 0
-                | ExceptionRegionKind.Fault -> e_COR_ILEXCEPTION_CLAUSE_FAULT, 0
+                | IlExceptionRegionKind.Filter -> e_COR_ILEXCEPTION_CLAUSE_FILTER, region.FilterOffset
+                | IlExceptionRegionKind.Finally -> e_COR_ILEXCEPTION_CLAUSE_FINALLY, 0
+                | IlExceptionRegionKind.Fault -> e_COR_ILEXCEPTION_CLAUSE_FAULT, 0
                 | _ -> e_COR_ILEXCEPTION_CLAUSE_EXCEPTION, 0
 
             if canUseSmall then
-                methodBodyStream.WriteByte(e_CorILMethod_Sect_EHTable)
-                methodBodyStream.WriteByte(byte smallSize)
-                methodBodyStream.WriteByte(0uy)
-                methodBodyStream.WriteByte(0uy)
+                methodBodyStream.EmitByte(e_CorILMethod_Sect_EHTable)
+                methodBodyStream.EmitByte(byte smallSize)
+                methodBodyStream.EmitByte(0uy)
+                methodBodyStream.EmitByte(0uy)
                 for region in regions do
                     let kind, extra = encodeKind region
-                    methodBodyStream.WriteUInt16(uint16 kind)
-                    methodBodyStream.WriteUInt16(uint16 region.TryOffset)
-                    methodBodyStream.WriteByte(byte region.TryLength)
-                    methodBodyStream.WriteUInt16(uint16 region.HandlerOffset)
-                    methodBodyStream.WriteByte(byte region.HandlerLength)
-                    methodBodyStream.WriteInt32(extra)
+                    methodBodyStream.EmitUInt16(uint16 kind)
+                    methodBodyStream.EmitUInt16(uint16 region.TryOffset)
+                    methodBodyStream.EmitByte(byte region.TryLength)
+                    methodBodyStream.EmitUInt16(uint16 region.HandlerOffset)
+                    methodBodyStream.EmitByte(byte region.HandlerLength)
+                    methodBodyStream.EmitInt32(extra)
             else
                 let bigSize = regions.Length * 24 + 4
-                methodBodyStream.WriteByte(e_CorILMethod_Sect_EHTable ||| e_CorILMethod_Sect_FatFormat)
-                methodBodyStream.WriteByte(byte bigSize)
-                methodBodyStream.WriteByte(byte (bigSize >>> 8))
-                methodBodyStream.WriteByte(byte (bigSize >>> 16))
+                methodBodyStream.EmitByte(e_CorILMethod_Sect_EHTable ||| e_CorILMethod_Sect_FatFormat)
+                methodBodyStream.EmitByte(byte bigSize)
+                methodBodyStream.EmitByte(byte (bigSize >>> 8))
+                methodBodyStream.EmitByte(byte (bigSize >>> 16))
                 for region in regions do
                     let kind, extra = encodeKind region
-                    methodBodyStream.WriteInt32(kind)
-                    methodBodyStream.WriteInt32(region.TryOffset)
-                    methodBodyStream.WriteInt32(region.TryLength)
-                    methodBodyStream.WriteInt32(region.HandlerOffset)
-                    methodBodyStream.WriteInt32(region.HandlerLength)
-                    methodBodyStream.WriteInt32(extra)
+                    methodBodyStream.EmitInt32(kind)
+                    methodBodyStream.EmitInt32(region.TryOffset)
+                    methodBodyStream.EmitInt32(region.TryLength)
+                    methodBodyStream.EmitInt32(region.HandlerOffset)
+                    methodBodyStream.EmitInt32(region.HandlerLength)
+                    methodBodyStream.EmitInt32(extra)
 
         let update =
             {
@@ -182,12 +182,16 @@ type IlDeltaStreamBuilder(baselineMetadata: MetadataSnapshot option) =
             let blobHandle = metadataBuilder.GetOrAddBlob(signature)
             let blobOffset = MetadataTokens.GetHeapOffset blobHandle
             match standaloneSigCache.TryGetValue blobOffset with
-            | true, existing -> MetadataTokens.GetToken(EntityHandle.op_Implicit existing)
+            | true, existing ->
+                let entityHandle: EntityHandle = existing
+                MetadataTokens.GetToken(entityHandle)
             | _ ->
                 let handle = metadataBuilder.AddStandaloneSignature(blobHandle)
                 standaloneSigCache[blobOffset] <- handle
-                let token = MetadataTokens.GetToken(EntityHandle.op_Implicit handle)
-                standaloneSigs.Add({ Handle = handle; Blob = Array.copy signature })
+                let entityHandle: EntityHandle = handle
+                let token = MetadataTokens.GetToken(entityHandle)
+                let rowId = MetadataTokens.GetRowNumber(entityHandle)
+                standaloneSigs.Add({ RowId = rowId; Blob = Array.copy signature })
                 token
 
     /// <summary>
@@ -199,7 +203,7 @@ type IlDeltaStreamBuilder(baselineMetadata: MetadataSnapshot option) =
         isBuilt <- true
 
         {
-            IL = methodBodyStream.ToArray()
+            IL = methodBodyStream.AsMemory().ToArray()
             MethodBodies = methodBodies |> Seq.toList
             StandaloneSignatures = standaloneSigs |> Seq.toList
         }

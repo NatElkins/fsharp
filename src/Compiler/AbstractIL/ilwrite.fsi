@@ -76,6 +76,10 @@ val SimpleIndex: table: TableName * index: int -> RowElement
 val TypeDefOrRefOrSpec: tag: TypeDefOrRefTag * index: int -> RowElement
 val HasSemantics: tag: HasSemanticsTag * index: int -> RowElement
 
+/// Computes the trailing byte for a user string blob per ECMA-335 II.24.2.4.
+/// Returns 1 if any character needs special handling, 0 otherwise.
+val markerForUnicodeBytes: b: byte[] -> int
+
 [<Struct; CustomEquality; NoComparison>]
 type UnsharedRow =
     new: RowElement[] -> UnsharedRow

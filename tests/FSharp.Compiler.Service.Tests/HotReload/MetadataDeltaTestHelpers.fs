@@ -1,5 +1,7 @@
 namespace FSharp.Compiler.Service.Tests.HotReload
 
+#nowarn "3391" // Suppress implicit conversion warnings for SRM handle conversions
+
 open System
 open System.IO
 open System.Reflection
@@ -32,6 +34,11 @@ module internal MetadataDeltaTestHelpers =
         | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
         | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
         | _ -> false
+
+    /// Convert SRM MethodDefinitionHandle to F# MethodDefHandle
+    let private toMethodDefHandle (handle: MethodDefinitionHandle) =
+        let entityHandle: EntityHandle = handle
+        MethodDefHandle (MetadataTokens.GetRowNumber entityHandle)
 
     let private mscorlibToken =
         PublicKeyToken [|
@@ -849,7 +856,7 @@ module internal MetadataDeltaTestHelpers =
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
                 MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit getterHandle)
-                MethodHandle = getterHandle
+                MethodHandle = toMethodDefHandle getterHandle
                 Body =
                     { MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit getterHandle)
                       LocalSignatureToken = 0
@@ -1009,7 +1016,7 @@ module internal MetadataDeltaTestHelpers =
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
                 MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle)
-                MethodHandle = methodHandle
+                MethodHandle = toMethodDefHandle methodHandle
                 Body =
                     { MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle)
                       LocalSignatureToken = localSignatureToken
@@ -1129,7 +1136,7 @@ module internal MetadataDeltaTestHelpers =
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
                 MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle)
-                MethodHandle = methodHandle
+                MethodHandle = toMethodDefHandle methodHandle
                 Body =
                     { MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit methodHandle)
                       LocalSignatureToken = localSignatureToken
@@ -1528,7 +1535,7 @@ module internal MetadataDeltaTestHelpers =
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
                 MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit addHandle)
-                MethodHandle = addHandle
+                MethodHandle = toMethodDefHandle addHandle
                 Body =
                     { MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit addHandle)
                       LocalSignatureToken = 0
@@ -1696,7 +1703,7 @@ module internal MetadataDeltaTestHelpers =
         let update : DeltaWriter.MethodMetadataUpdate =
             { MethodKey = methodKey
               MethodToken = methodToken
-              MethodHandle = methodHandle
+              MethodHandle = toMethodDefHandle methodHandle
               Body =
                 { MethodToken = methodToken
                   LocalSignatureToken = 0

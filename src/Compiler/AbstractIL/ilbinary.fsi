@@ -178,6 +178,287 @@ val tomd_TypeDef: TypeOrMethodDefTag
 val tomd_MethodDef: TypeOrMethodDefTag
 
 val mkTypeDefOrRefOrSpecTag: int32 -> TypeDefOrRefTag
+
+// ============================================================================
+// Typed Row Handles
+// ============================================================================
+
+[<Struct>]
+type ModuleHandle =
+    | ModuleHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type TypeRefHandle =
+    | TypeRefHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type TypeDefHandle =
+    | TypeDefHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type FieldHandle =
+    | FieldHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type MethodDefHandle =
+    | MethodDefHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type ParamHandle =
+    | ParamHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type InterfaceImplHandle =
+    | InterfaceImplHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type MemberRefHandle =
+    | MemberRefHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type ConstantHandle =
+    | ConstantHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type CustomAttributeHandle =
+    | CustomAttributeHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type FieldMarshalHandle =
+    | FieldMarshalHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type DeclSecurityHandle =
+    | DeclSecurityHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type ClassLayoutHandle =
+    | ClassLayoutHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type FieldLayoutHandle =
+    | FieldLayoutHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type StandAloneSigHandle =
+    | StandAloneSigHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type EventMapHandle =
+    | EventMapHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type EventHandle =
+    | EventHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type PropertyMapHandle =
+    | PropertyMapHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type PropertyHandle =
+    | PropertyHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type MethodSemanticsHandle =
+    | MethodSemanticsHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type MethodImplHandle =
+    | MethodImplHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type ModuleRefHandle =
+    | ModuleRefHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type TypeSpecHandle =
+    | TypeSpecHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type ImplMapHandle =
+    | ImplMapHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type FieldRvaHandle =
+    | FieldRvaHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type AssemblyHandle =
+    | AssemblyHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type AssemblyRefHandle =
+    | AssemblyRefHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type FileHandle =
+    | FileHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type ExportedTypeHandle =
+    | ExportedTypeHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type ManifestResourceHandle =
+    | ManifestResourceHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type NestedClassHandle =
+    | NestedClassHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type GenericParamHandle =
+    | GenericParamHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type MethodSpecHandle =
+    | MethodSpecHandle of rowId: int
+    member RowId: int
+
+[<Struct>]
+type GenericParamConstraintHandle =
+    | GenericParamConstraintHandle of rowId: int
+    member RowId: int
+
+// ============================================================================
+// Typed Heap Offsets
+// ============================================================================
+
+[<Struct>]
+type StringOffset =
+    | StringOffset of offset: int
+    member Value: int
+    static member Zero: StringOffset
+
+[<Struct>]
+type BlobOffset =
+    | BlobOffset of offset: int
+    member Value: int
+    static member Zero: BlobOffset
+
+[<Struct>]
+type GuidIndex =
+    | GuidIndex of index: int
+    member Value: int
+    static member Zero: GuidIndex
+
+[<Struct>]
+type UserStringOffset =
+    | UserStringOffset of offset: int
+    member Value: int
+    static member Zero: UserStringOffset
+
+// ============================================================================
+// Coded Index Discriminated Unions
+// ============================================================================
+
+type TypeDefOrRef =
+    | TDR_TypeDef of TypeDefHandle
+    | TDR_TypeRef of TypeRefHandle
+    | TDR_TypeSpec of TypeSpecHandle
+    member CodedTag: int32
+    member RowId: int
+
+type HasConstant =
+    | HC_Field of FieldHandle
+    | HC_Param of ParamHandle
+    | HC_Property of PropertyHandle
+    member CodedTag: int32
+    member RowId: int
+
+type HasCustomAttribute =
+    | HCA_MethodDef of MethodDefHandle
+    | HCA_Field of FieldHandle
+    | HCA_TypeRef of TypeRefHandle
+    | HCA_TypeDef of TypeDefHandle
+    | HCA_Param of ParamHandle
+    | HCA_InterfaceImpl of InterfaceImplHandle
+    | HCA_MemberRef of MemberRefHandle
+    | HCA_Module of ModuleHandle
+    | HCA_DeclSecurity of DeclSecurityHandle
+    | HCA_Property of PropertyHandle
+    | HCA_Event of EventHandle
+    | HCA_StandAloneSig of StandAloneSigHandle
+    | HCA_ModuleRef of ModuleRefHandle
+    | HCA_TypeSpec of TypeSpecHandle
+    | HCA_Assembly of AssemblyHandle
+    | HCA_AssemblyRef of AssemblyRefHandle
+    | HCA_File of FileHandle
+    | HCA_ExportedType of ExportedTypeHandle
+    | HCA_ManifestResource of ManifestResourceHandle
+    | HCA_GenericParam of GenericParamHandle
+    | HCA_GenericParamConstraint of GenericParamConstraintHandle
+    | HCA_MethodSpec of MethodSpecHandle
+    member CodedTag: int32
+    member RowId: int
+
+type MemberRefParent =
+    | MRP_TypeDef of TypeDefHandle
+    | MRP_TypeRef of TypeRefHandle
+    | MRP_ModuleRef of ModuleRefHandle
+    | MRP_MethodDef of MethodDefHandle
+    | MRP_TypeSpec of TypeSpecHandle
+    member CodedTag: int32
+    member RowId: int
+
+type HasSemantics =
+    | HS_Event of EventHandle
+    | HS_Property of PropertyHandle
+    member CodedTag: int32
+    member RowId: int
+
+type CustomAttributeType =
+    | CAT_MethodDef of MethodDefHandle
+    | CAT_MemberRef of MemberRefHandle
+    member CodedTag: int32
+    member RowId: int
+
+type ResolutionScope =
+    | RS_Module of ModuleHandle
+    | RS_ModuleRef of ModuleRefHandle
+    | RS_AssemblyRef of AssemblyRefHandle
+    | RS_TypeRef of TypeRefHandle
+    member CodedTag: int32
+    member RowId: int
+
+type MethodDefOrRef =
+    | MDOR_MethodDef of MethodDefHandle
+    | MDOR_MemberRef of MemberRefHandle
+    member CodedTag: int32
+    member RowId: int
 val mkHasConstantTag: int32 -> HasConstantTag
 val mkHasCustomAttributeTag: int32 -> HasCustomAttributeTag
 val mkHasFieldMarshalTag: int32 -> HasFieldMarshalTag

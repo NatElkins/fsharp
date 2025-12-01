@@ -2,8 +2,8 @@ module internal FSharp.Compiler.CodeGen.DeltaMetadataTypes
 
 open System
 open System.Reflection
-open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
+open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.HotReloadBaseline
 
@@ -88,7 +88,7 @@ type EventDefinitionRowInfo =
       Name: string
       NameOffset: StringOffset option
       Attributes: EventAttributes
-      EventType: EntityHandle }
+      EventType: TypeDefOrRef }
 
 type PropertyMapRowInfo =
     { DeclaringType: string
@@ -106,11 +106,11 @@ type EventMapRowInfo =
 
 type MethodSemanticsMetadataUpdate =
     { RowId: int
-      Association: EntityHandle
       MethodToken: int
       Attributes: MethodSemanticsAttributes
       IsAdded: bool
-      AssociationInfo: MethodSemanticsAssociation option }
+      /// Association info is required - provides property/event key and rowId
+      AssociationInfo: MethodSemanticsAssociation }
 
 type TableRows =
     { Module: RowElementData[][]

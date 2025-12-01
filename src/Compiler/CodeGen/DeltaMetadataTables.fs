@@ -3,8 +3,6 @@ module internal FSharp.Compiler.CodeGen.DeltaMetadataTables
 open System
 open System.Collections.Generic
 open System.IO
-open System.Reflection.Metadata
-open System.Reflection.Metadata.Ecma335
 open System.Text
 open Microsoft.FSharp.Collections
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
@@ -211,10 +209,25 @@ type private UserStringHeapBuilder() =
     let mutable maxLength = 1
     let mutable bytesCache : byte[] option = None
 
+    /// Encodes a user string per ECMA-335 II.24.2.4:
+    /// - Compressed unsigned length prefix (byte count including trailing flag)
+    /// - UTF-16LE encoded string bytes
+    /// - Trailing flag byte (computed via markerForUnicodeBytes from ILBinaryWriter)
     let encodeUserString (value: string) =
-        let blobBuilder = BlobBuilder()
-        blobBuilder.WriteUserString(value)
-        blobBuilder.ToArray()
+        let utf16Bytes = Text.Encoding.Unicode.GetBytes(value)
+        let byteCount = utf16Bytes.Length + 1 // +1 for trailing flag
+
+        // Use existing markerForUnicodeBytes from ilwrite.fs for trailing flag
+        let trailingFlag = byte (markerForUnicodeBytes utf16Bytes)
+
+        // Encode compressed length prefix
+        use ms = new MemoryStream()
+        use writer = new BinaryWriter(ms, Text.Encoding.UTF8, leaveOpen = true)
+        writeCompressedUnsigned writer byteCount
+        writer.Write(utf16Bytes)
+        writer.Write(trailingFlag)
+        writer.Flush()
+        ms.ToArray()
 
     let ensureBuffer lengthNeeded =
         let requiredLength = max lengthNeeded 1
@@ -377,16 +390,11 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let stringElement (token, isAbsolute) = if isAbsolute then rowElementStringAbsolute token else rowElementString token
     let blobElement (token, isAbsolute) = if isAbsolute then rowElementBlobAbsolute token else rowElementBlob token
 
-    let encodeTypeDefOrRef (handle: EntityHandle) =
-        if handle.IsNil then
-            tdor_TypeDef, 0
-        else
-            let baseHandle = EntityHandle.op_Implicit handle
-            match handle.Kind with
-            | HandleKind.TypeDefinition -> tdor_TypeDef, MetadataTokens.GetRowNumber(TypeDefinitionHandle.op_Explicit baseHandle)
-            | HandleKind.TypeReference -> tdor_TypeRef, MetadataTokens.GetRowNumber(TypeReferenceHandle.op_Explicit baseHandle)
-            | HandleKind.TypeSpecification -> tdor_TypeSpec, MetadataTokens.GetRowNumber(TypeSpecificationHandle.op_Explicit baseHandle)
-            | _ -> tdor_TypeDef, 0
+    let encodeTypeDefOrRef (typeRef: TypeDefOrRef) =
+        match typeRef with
+        | TDR_TypeDef(TypeDefHandle rowId) -> tdor_TypeDef, rowId
+        | TDR_TypeRef(TypeRefHandle rowId) -> tdor_TypeRef, rowId
+        | TDR_TypeSpec(TypeSpecHandle rowId) -> tdor_TypeSpec, rowId
 
     let buildStringHeapBytes () = strings.Bytes
 
@@ -593,17 +601,8 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         let methodRowId = DeltaTokens.getRowNumber row.MethodToken
         let assocTag, assocRowId =
             match row.AssociationInfo with
-            | Some(MethodSemanticsAssociation.PropertyAssociation(_, propertyRowId)) -> hs_Property, propertyRowId
-            | Some(MethodSemanticsAssociation.EventAssociation(_, eventRowId)) -> hs_Event, eventRowId
-            | None ->
-                match row.Association.Kind with
-                | HandleKind.PropertyDefinition ->
-                    let assocHandle = PropertyDefinitionHandle.op_Explicit(EntityHandle.op_Implicit row.Association)
-                    hs_Property, MetadataTokens.GetRowNumber assocHandle
-                | HandleKind.EventDefinition ->
-                    let assocHandle = EventDefinitionHandle.op_Explicit(EntityHandle.op_Implicit row.Association)
-                    hs_Event, MetadataTokens.GetRowNumber assocHandle
-                | _ -> hs_Property, 0
+            | MethodSemanticsAssociation.PropertyAssociation(_, propertyRowId) -> hs_Property, propertyRowId
+            | MethodSemanticsAssociation.EventAssociation(_, eventRowId) -> hs_Event, eventRowId
         let rowElements =
             [|
                 rowElementUShort (uint16 row.Attributes)
@@ -620,7 +619,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         let rowElements =
             [|
                 rowElementULong token
-                rowElementULong (int operation)
+                rowElementULong operation.Value
             |]
         encLogRows.Add rowElements
 

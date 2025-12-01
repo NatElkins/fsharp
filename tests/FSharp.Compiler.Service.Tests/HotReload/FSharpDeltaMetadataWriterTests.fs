@@ -1,5 +1,7 @@
 namespace FSharp.Compiler.Service.Tests.HotReload
 
+#nowarn "3391" // Suppress implicit conversion warnings for SRM handle conversions
+
 open System
 open System.IO
 open System.Reflection
@@ -46,6 +48,11 @@ module FSharpDeltaMetadataWriterTests =
         try
             action ()
         with :? BadImageFormatException -> ()
+
+    /// Convert SRM MethodDefinitionHandle to F# MethodDefHandle
+    let private toMethodDefHandle (handle: MethodDefinitionHandle) =
+        let entityHandle: EntityHandle = handle
+        MethodDefHandle (MetadataTokens.GetRowNumber entityHandle)
 
     // Helper to convert TableName to SRM TableIndex enum for boundary calls
     let inline private toTableIndex (table: TableName) : TableIndex =
@@ -291,12 +298,14 @@ module FSharpDeltaMetadataWriterTests =
         let rowId = token &&& 0x00FFFFFF
         (tableIndex, rowId)
 
+    /// Read EncLog entries from metadata, returning (tableIndex, rowId, operationValue) tuples
     let private readEncLogEntriesFromMetadata metadata =
         withMetadataReader metadata (fun reader ->
             reader.GetEditAndContinueLogEntries()
             |> Seq.map (fun entry ->
                 let (table, rowId) = decodeEntityHandle entry.Handle
-                (table, rowId, entry.Operation))
+                // Convert SRM operation enum to int for comparison
+                (table, rowId, int entry.Operation))
             |> Seq.toArray)
 
     let private readEncMapEntriesFromMetadata metadata =
@@ -306,8 +315,8 @@ module FSharpDeltaMetadataWriterTests =
             |> Seq.toArray)
 
     /// Convert TableName-based EncLog entries to raw int tuples for comparison with metadata bytes.
-    let private toRawEncLog (entries: (TableName * int * EditAndContinueOperation)[]) : (int * int * EditAndContinueOperation)[] =
-        entries |> Array.map (fun (table, row, op) -> (table.Index, row, op))
+    let private toRawEncLog (entries: (TableName * int * EditAndContinueOperation)[]) : (int * int * int)[] =
+        entries |> Array.map (fun (table, row, op) -> (table.Index, row, op.Value))
 
     /// Convert TableName-based EncMap entries to raw int tuples for comparison with metadata bytes.
     let private toRawEncMap (entries: (TableName * int)[]) : (int * int)[] =
@@ -315,7 +324,7 @@ module FSharpDeltaMetadataWriterTests =
 
     let private assertEncLogMatches metadata (expected: (TableName * int * EditAndContinueOperation)[]) =
         let actual = readEncLogEntriesFromMetadata metadata
-        Assert.Equal<(int * int * EditAndContinueOperation)[]>(toRawEncLog expected, actual)
+        Assert.Equal<(int * int * int)[]>(toRawEncLog expected, actual)
 
     let private assertEncMapMatches metadata (expected: (TableName * int)[]) =
         let actual = readEncMapEntriesFromMetadata metadata
@@ -556,7 +565,7 @@ module FSharpDeltaMetadataWriterTests =
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
                 MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit getterHandle)
-                MethodHandle = getterHandle
+                MethodHandle = toMethodDefHandle getterHandle
                 Body =
                     { MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit getterHandle)
                       LocalSignatureToken = 0
@@ -1014,7 +1023,7 @@ module FSharpDeltaMetadataWriterTests =
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
                 MethodToken = methodToken
-                MethodHandle = methodHandle
+                MethodHandle = toMethodDefHandle methodHandle
                 Body =
                     { MethodToken = methodToken
                       LocalSignatureToken = 0
@@ -1202,7 +1211,7 @@ module FSharpDeltaMetadataWriterTests =
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
                 MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit addHandle)
-                MethodHandle = addHandle
+                MethodHandle = toMethodDefHandle addHandle
                 Body =
                     { MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit addHandle)
                       LocalSignatureToken = 0
@@ -1835,7 +1844,7 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(1, rowCount)
 
         let encLog = readEncLogEntriesFromMetadata artifacts.Delta.Metadata
-        Assert.Contains((TableNames.StandAloneSig.Index, 1, EditAndContinueOperation.Default), encLog)
+        Assert.Contains((TableNames.StandAloneSig.Index, 1, EditAndContinueOperation.Default.Value), encLog)
 
         let encMap = readEncMapEntriesFromMetadata artifacts.Delta.Metadata
         Assert.Contains((TableNames.StandAloneSig.Index, 1), encMap)
@@ -1882,7 +1891,7 @@ module FSharpDeltaMetadataWriterTests =
         let updates: DeltaWriter.MethodMetadataUpdate list =
             [ { MethodKey = methodKey
                 MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit getterHandle)
-                MethodHandle = getterHandle
+                MethodHandle = toMethodDefHandle getterHandle
                 Body =
                     { MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit getterHandle)
                       LocalSignatureToken = 0
@@ -2174,7 +2183,7 @@ module FSharpDeltaMetadataWriterTests =
         let _methodDef = reader.GetMethodDefinition methodHandle
 
         let encLog = readEncLogEntriesFromMetadata delta.Metadata
-        Assert.Contains((TableNames.Method.Index, methodRowId, EditAndContinueOperation.Default), encLog)
+        Assert.Contains((TableNames.Method.Index, methodRowId, EditAndContinueOperation.Default.Value), encLog)
 
         let encMap = readEncMapEntriesFromMetadata delta.Metadata
         Assert.Contains((TableNames.Method.Index, methodRowId), encMap)
@@ -2214,12 +2223,12 @@ module FSharpDeltaMetadataWriterTests =
 
             // EncLog/EncMap include Param and MethodDef.
             let encLog = readEncLogEntriesFromMetadata delta.Metadata |> Array.ofSeq
-            Assert.Contains((TableNames.Method.Index, methodRowId, EditAndContinueOperation.AddMethod), encLog)
+            Assert.Contains((TableNames.Method.Index, methodRowId, EditAndContinueOperation.AddMethod.Value), encLog)
 
             let paramRowIds =
                 paramList |> Array.map MetadataTokens.GetRowNumber
             for rid in paramRowIds do
-                Assert.Contains((TableNames.Param.Index, rid, EditAndContinueOperation.AddParameter), encLog)
+                Assert.Contains((TableNames.Param.Index, rid, EditAndContinueOperation.AddParameter.Value), encLog)
 
             let encMap = readEncMapEntriesFromMetadata delta.Metadata |> Array.ofSeq
             Assert.Contains((TableNames.Method.Index, methodRowId), encMap)
