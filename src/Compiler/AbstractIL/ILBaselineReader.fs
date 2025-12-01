@@ -840,3 +840,95 @@ let readModuleMvidFromBytes (bytes: byte[]) : System.Guid option =
                         int (readUInt16 bytes mvidOffset)
 
                 readGuidFromBytes bytes mvidIndex
+
+// ============================================================================
+// Portable PDB Reader
+// ============================================================================
+
+/// Portable PDB table indices (start at 0x30 to avoid collision with ECMA-335 tables)
+module private PdbTableIndices =
+    let Document = 0x30
+    let MethodDebugInformation = 0x31
+    let LocalScope = 0x32
+    let LocalVariable = 0x33
+    let LocalConstant = 0x34
+    let ImportScope = 0x35
+    let StateMachineMethod = 0x36
+    let CustomDebugInformation = 0x37
+
+/// Portable PDB metadata snapshot.
+/// Contains table row counts and entry point info for hot reload baseline.
+type PortablePdbMetadata = {
+    /// Row counts for PDB tables (indexed by PDB table index - 0x30)
+    /// Index 0 = Document, 1 = MethodDebugInformation, etc.
+    TableRowCounts: int[]
+    /// Entry point method token (if present)
+    EntryPointToken: int option
+}
+
+/// Parse the #Pdb stream to extract PDB-specific info.
+/// The #Pdb stream contains: PdbId (20 bytes), EntryPoint token (4 bytes), ReferencedTypeSystemTables (8 bytes), TypeSystemTableRows (var)
+let private parsePdbStream (bytes: byte[]) (pdbStream: StreamHeader) : int option =
+    if pdbStream.Size < 24 then
+        None
+    else
+        let offset = pdbStream.Offset
+        // PdbId: 20 bytes (GUID + 4 bytes stamp)
+        // EntryPoint: 4 bytes (method def token, or 0 if no entry point)
+        let entryPointToken = readInt32 bytes (offset + 20)
+        if entryPointToken = 0 then None else Some entryPointToken
+
+/// Parse Portable PDB table row counts from the #~ stream.
+/// Portable PDB uses tables 0x30-0x37, but the valid bits are still in position 0x30+.
+let private parsePdbTablesStream (bytes: byte[]) (tablesStream: StreamHeader) : int[] =
+    let offset = tablesStream.Offset
+
+    // Header: Reserved(4) + MajorVersion(1) + MinorVersion(1) + HeapSizes(1) + Reserved(1) + Valid(8) + Sorted(8) + RowCounts(var)
+    let valid = readInt64 bytes (offset + 8)
+
+    // PDB table row counts (8 tables, indices 0x30-0x37)
+    let pdbRowCounts = Array.zeroCreate 8
+    let mutable rowCountOffset = offset + 24
+
+    for i in 0..63 do
+        if (valid &&& (1L <<< i)) <> 0L then
+            let count = readInt32 bytes rowCountOffset
+            // Map table index to PDB array index
+            if i >= 0x30 && i <= 0x37 then
+                pdbRowCounts.[i - 0x30] <- count
+            rowCountOffset <- rowCountOffset + 4
+
+    pdbRowCounts
+
+/// Extract metadata from Portable PDB bytes.
+/// This replaces MetadataReaderProvider.FromPortablePdbImage for hot reload baseline creation.
+let readPortablePdbMetadata (pdbBytes: byte[]) : PortablePdbMetadata option =
+    // Portable PDB starts directly with metadata root (no PE header)
+    // Check for BSJB signature at offset 0
+    if pdbBytes.Length < 4 then
+        None
+    else
+        let signature = readInt32 pdbBytes 0
+        if signature <> 0x424A5342 then // "BSJB"
+            None
+        else
+            // Parse from offset 0 (metadata root)
+            let metadataRoot = 0
+            let streamHeaders = parseStreamHeaders pdbBytes metadataRoot
+
+            // Find required streams
+            let tablesStreamOpt =
+                findStream streamHeaders "#~"
+                |> Option.orElse (findStream streamHeaders "#-")
+            let pdbStreamOpt = findStream streamHeaders "#Pdb"
+
+            match tablesStreamOpt with
+            | None -> None
+            | Some tablesStream ->
+                let rowCounts = parsePdbTablesStream pdbBytes tablesStream
+                let entryPoint = pdbStreamOpt |> Option.bind (fun s -> parsePdbStream pdbBytes s)
+
+                Some {
+                    TableRowCounts = rowCounts
+                    EntryPointToken = entryPoint
+                }

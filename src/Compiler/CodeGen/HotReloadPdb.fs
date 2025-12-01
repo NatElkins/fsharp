@@ -11,38 +11,30 @@ open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.HotReloadBaseline
 
-let private computeRowCounts (reader: MetadataReader) : ImmutableArray<int> =
-    let counts = Array.zeroCreate<int> DeltaTokens.TableCount
+module ILBaselineReader = FSharp.Compiler.AbstractIL.ILBaselineReader
 
-    let inline setCount (index: int) (value: int) =
-        counts[index] <- value
-
-    setCount DeltaTokens.tableDocument reader.Documents.Count
-    setCount DeltaTokens.tableMethodDebugInformation reader.MethodDebugInformation.Count
-    setCount DeltaTokens.tableLocalScope reader.LocalScopes.Count
-    setCount DeltaTokens.tableLocalVariable reader.LocalVariables.Count
-    setCount DeltaTokens.tableLocalConstant reader.LocalConstants.Count
-    setCount DeltaTokens.tableImportScope reader.ImportScopes.Count
-    setCount DeltaTokens.tableCustomDebugInformation reader.CustomDebugInformation.Count
-
-    ImmutableArray.CreateRange counts
-
+/// Create a PDB snapshot from Portable PDB bytes.
+/// Uses pure F# parsing instead of SRM for the reading path.
 let createSnapshot (pdbBytes: byte[]) : PortablePdbSnapshot =
-    use provider = MetadataReaderProvider.FromPortablePdbImage(ImmutableArray.CreateRange pdbBytes)
-    let reader = provider.GetMetadataReader()
-    let rowCounts = computeRowCounts reader
-    let entryPointHandle = reader.DebugMetadataHeader.EntryPoint
+    match ILBaselineReader.readPortablePdbMetadata pdbBytes with
+    | None -> failwith "Failed to parse Portable PDB metadata"
+    | Some pdbMeta ->
+        // Convert PDB table row counts to full 64-element array
+        // PDB tables start at index 0x30
+        let counts = Array.zeroCreate<int> DeltaTokens.TableCount
+        // pdbMeta.TableRowCounts has 8 elements (indices 0-7 map to PDB tables 0x30-0x37)
+        counts.[DeltaTokens.tableDocument] <- pdbMeta.TableRowCounts.[0]
+        counts.[DeltaTokens.tableMethodDebugInformation] <- pdbMeta.TableRowCounts.[1]
+        counts.[DeltaTokens.tableLocalScope] <- pdbMeta.TableRowCounts.[2]
+        counts.[DeltaTokens.tableLocalVariable] <- pdbMeta.TableRowCounts.[3]
+        counts.[DeltaTokens.tableLocalConstant] <- pdbMeta.TableRowCounts.[4]
+        counts.[DeltaTokens.tableImportScope] <- pdbMeta.TableRowCounts.[5]
+        // Index 6 = StateMachineMethod (0x36), not commonly used
+        counts.[DeltaTokens.tableCustomDebugInformation] <- pdbMeta.TableRowCounts.[7]
 
-    let entryPointToken =
-        if entryPointHandle.IsNil then
-            None
-        else
-            let entityHandle: EntityHandle = MethodDefinitionHandle.op_Implicit entryPointHandle
-            Some(MetadataTokens.GetToken entityHandle)
-
-    { Bytes = Array.copy pdbBytes
-      TableRowCounts = rowCounts
-      EntryPointToken = entryPointToken }
+        { Bytes = Array.copy pdbBytes
+          TableRowCounts = ImmutableArray.CreateRange counts
+          EntryPointToken = pdbMeta.EntryPointToken }
 
 /// Emit a PDB delta for the given hot reload generation.
 /// Takes the metadata EncLog and EncMap (using TableName for type safety)
