@@ -17,8 +17,6 @@ open System.Diagnostics
 open System.Globalization
 open System.IO
 open System.Reflection
-open System.Reflection.Metadata
-open System.Reflection.PortableExecutable
 open System.Text
 open System.Threading
 

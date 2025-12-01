@@ -7,9 +7,6 @@ open System.Collections
 open System.Diagnostics
 open System.IO
 open System.Reflection
-open System.Reflection.Emit
-open System.Reflection.Metadata
-open System.Reflection.PortableExecutable
 open System.Security.Cryptography
 open System.Threading
 open Internal.Utilities.Collections

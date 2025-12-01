@@ -3,8 +3,6 @@ module internal FSharp.Compiler.HotReloadBaseline
 open System
 open System.Collections.Immutable
 open System.Reflection
-open System.Reflection.Metadata
-open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
@@ -143,10 +141,6 @@ val createWithEnvironment:
     moduleId: Guid ->
     portablePdbSnapshot: PortablePdbSnapshot option ->
         FSharpEmitBaseline
-
-val metadataSnapshotFromReader: reader: MetadataReader -> MetadataSnapshot
-
-val attachMetadataHandles: metadataReader: MetadataReader -> baseline: FSharpEmitBaseline -> FSharpEmitBaseline
 
 /// Extract metadata snapshot from PE file bytes without using SRM.
 val metadataSnapshotFromBytes: bytes: byte[] -> MetadataSnapshot option
