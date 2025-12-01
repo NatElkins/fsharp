@@ -1,3 +1,14 @@
+/// PDB delta emission for hot reload.
+///
+/// SRM Boundary Note:
+/// - createSnapshot: Uses pure F# parsing via ILBaselineReader (SRM-free)
+/// - emitDelta: Uses SRM's MetadataBuilder and PortablePdbBuilder for PDB delta serialization
+///
+/// Full SRM removal from emitDelta would require implementing a pure F# Portable PDB
+/// delta writer. This is deferred as non-blocking work since:
+/// 1. Core metadata delta emission is fully SRM-free (DeltaMetadataTables, DeltaMetadataSerializer)
+/// 2. PDB deltas are a separate concern (debug info only)
+/// 3. The PDB read path is already SRM-free
 module internal FSharp.Compiler.HotReloadPdb
 
 open System
