@@ -17,9 +17,9 @@ open System.Collections.Generic
 open System.Collections.Immutable
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
-open System.Security.Cryptography
 open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
+open FSharp.Compiler.AbstractIL.ILPdbWriter
 open FSharp.Compiler.HotReloadBaseline
 
 module ILBaselineReader = FSharp.Compiler.AbstractIL.ILBaselineReader
@@ -184,15 +184,8 @@ let emitDelta
                     | Some token -> MetadataTokens.MethodDefinitionHandle token
                     | None -> MethodDefinitionHandle()
 
-                let idProvider =
-                    Func<IEnumerable<Blob>, BlobContentId>(fun content ->
-                        use hasher = SHA256.Create()
-                        let bytes =
-                            content
-                            |> Seq.collect (fun blob -> blob.GetBytes())
-                            |> Array.ofSeq
-
-                        BlobContentId.FromHash(hasher.ComputeHash bytes))
+                // Use shared content ID provider from ILPdbWriter
+                let idProvider = createContentIdProvider HashAlgorithm.Sha256
 
                 let zeroCounts =
                     ImmutableArray.CreateRange(Array.zeroCreate<int> DeltaTokens.TableCount)

@@ -102,6 +102,31 @@ type HashAlgorithm =
     | Sha1
     | Sha256
 
+// ============================================================================
+// Well-known PDB GUIDs (shared with hot reload PDB delta emission)
+// ============================================================================
+
+/// Document checksum algorithm: SHA-1 (Portable PDB spec)
+val guidSha1: System.Guid
+
+/// Document checksum algorithm: SHA-256 (Portable PDB spec)
+val guidSha2: System.Guid
+
+/// F# language GUID for Portable PDB Document.Language field
+val corSymLanguageTypeFSharp: System.Guid
+
+/// Embedded source custom debug information GUID
+val embeddedSourceGuid: System.Guid
+
+/// Source link custom debug information GUID
+val sourceLinkGuid: System.Guid
+
+/// Create a deterministic content ID provider for Portable PDB serialization.
+/// The content ID is computed by hashing the PDB content using the specified algorithm.
+val createContentIdProvider:
+    checksumAlgorithm: HashAlgorithm ->
+        System.Func<System.Collections.Generic.IEnumerable<System.Reflection.Metadata.Blob>, BlobContentId>
+
 val generatePortablePdb:
     embedAllSource: bool ->
     embedSourceList: string list ->
