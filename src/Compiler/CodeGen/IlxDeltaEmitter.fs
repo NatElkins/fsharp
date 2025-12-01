@@ -359,7 +359,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let moduleDef = metadataReader.GetModuleDefinition()
     let moduleName = metadataReader.GetString moduleDef.Name
     let baselineModuleNameOffset = request.Baseline.ModuleNameOffset
-    let metadataBuilder = builder.MetadataBuilder
+    let userStringCalculator = builder.UserStringCalculator
     let stringTokenCache = Dictionary<int, int>()
     let userStringUpdates = ResizeArray<int * int * string>()
 
@@ -372,8 +372,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         | _ ->
             let handle = MetadataTokens.UserStringHandle token
             let value = metadataReader.GetUserString handle
-            let newHandle = metadataBuilder.GetOrAddUserString value
-            let newToken = MetadataTokens.GetToken newHandle
+            let newToken = userStringCalculator.GetOrAddUserString value
             stringTokenCache[token] <- newToken
             userStringUpdates.Add((token, newToken, value))
             logUserString token newToken value

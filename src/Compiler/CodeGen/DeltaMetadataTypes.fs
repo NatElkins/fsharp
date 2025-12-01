@@ -2,7 +2,6 @@ module internal FSharp.Compiler.CodeGen.DeltaMetadataTypes
 
 open System
 open System.Reflection
-open System.Reflection.Metadata.Ecma335
 open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.HotReloadBaseline

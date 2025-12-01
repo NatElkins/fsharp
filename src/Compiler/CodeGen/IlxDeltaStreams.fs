@@ -2,12 +2,113 @@ module internal FSharp.Compiler.IlxDeltaStreams
 
 open System
 open System.Collections.Generic
-open System.Reflection.Metadata
-open System.Reflection.Metadata.Ecma335
+open System.Text
 open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.IO
+
+// ============================================================================
+// Pure F# Token Calculators (replaces SRM MetadataBuilder for token arithmetic)
+// ============================================================================
+
+/// User string heap token calculator.
+/// Tracks user strings added during delta emission and computes tokens.
+/// Token format: 0x70000000 | heap_offset
+type UserStringTokenCalculator(heapStartOffset: int) =
+    let cache = Dictionary<string, int>(StringComparer.Ordinal)
+    let mutable currentOffset = 0
+
+    /// Encode a user string per ECMA-335 II.24.2.4:
+    /// - Compressed length prefix (1-4 bytes)
+    /// - UTF-16LE encoded characters
+    /// - Terminal byte: 0x00 if all chars <= 0x7F and no special chars, else 0x01
+    let encodeUserString (value: string) : byte[] =
+        let utf16Bytes = Encoding.Unicode.GetBytes(value)
+        let blobLength = utf16Bytes.Length + 1 // +1 for terminal byte
+
+        // Compute compressed length encoding size
+        let lengthBytes =
+            if blobLength <= 0x7F then 1
+            elif blobLength <= 0x3FFF then 2
+            else 4
+
+        let result = Array.zeroCreate<byte>(lengthBytes + utf16Bytes.Length + 1)
+        let mutable pos = 0
+
+        // Write compressed length
+        if blobLength <= 0x7F then
+            result.[pos] <- byte blobLength
+            pos <- pos + 1
+        elif blobLength <= 0x3FFF then
+            result.[pos] <- byte (0x80 ||| (blobLength >>> 8))
+            result.[pos + 1] <- byte blobLength
+            pos <- pos + 2
+        else
+            result.[pos] <- byte (0xC0 ||| (blobLength >>> 24))
+            result.[pos + 1] <- byte (blobLength >>> 16)
+            result.[pos + 2] <- byte (blobLength >>> 8)
+            result.[pos + 3] <- byte blobLength
+            pos <- pos + 4
+
+        // Write UTF-16LE bytes
+        Buffer.BlockCopy(utf16Bytes, 0, result, pos, utf16Bytes.Length)
+        pos <- pos + utf16Bytes.Length
+
+        // Write terminal byte (0x01 if any char > 0x7F or special, else 0x00)
+        let hasSpecial =
+            value |> Seq.exists (fun c ->
+                int c > 0x7F ||
+                c = '\000' || c = '\t' || c = '\n' || c = '\r' ||
+                (int c >= 0x01 && int c <= 0x08) ||
+                (int c >= 0x0E && int c <= 0x1F) ||
+                c = '\'' || c = '-')
+        result.[pos] <- if hasSpecial then 1uy else 0uy
+
+        result
+
+    /// Get or add a user string, returning the absolute token.
+    member _.GetOrAddUserString(value: string) : int =
+        match cache.TryGetValue(value) with
+        | true, token -> token
+        | _ ->
+            let absoluteOffset = heapStartOffset + currentOffset
+            let token = 0x70000000 ||| absoluteOffset
+            cache.[value] <- token
+            let encoded = encodeUserString value
+            currentOffset <- currentOffset + encoded.Length
+            token
+
+    /// Get the list of (originalToken, newToken, value) tuples for all added strings.
+    member _.GetUpdates() : (int * string) list =
+        cache |> Seq.map (fun kvp -> (kvp.Value, kvp.Key)) |> Seq.toList
+
+/// Standalone signature token calculator.
+/// Tracks signatures added during delta emission and computes tokens.
+/// Token format: 0x11000000 | row_id (StandaloneSig table = 0x11)
+type StandaloneSignatureTokenCalculator(baselineRowCount: int) =
+    let cache = Dictionary<byte[], int>(HashIdentity.Structural)
+    let signatures = ResizeArray<int * byte[]>()
+    let mutable nextRowId = baselineRowCount + 1
+
+    /// Add a standalone signature and return its token.
+    member _.AddStandaloneSignature(signature: byte[]) : int =
+        if signature.Length = 0 then
+            0
+        else
+            match cache.TryGetValue(signature) with
+            | true, token -> token
+            | _ ->
+                let rowId = nextRowId
+                nextRowId <- nextRowId + 1
+                let token = 0x11000000 ||| rowId
+                cache.[Array.copy signature] <- token
+                signatures.Add((rowId, Array.copy signature))
+                token
+
+    /// Get the list of (rowId, blob) tuples for serialization.
+    member _.GetSignatures() : (int * byte[]) list =
+        signatures |> Seq.toList
 
 /// <summary>Represents a method body update captured for an Edit-and-Continue delta.</summary>
 type MethodBodyUpdate =
@@ -35,31 +136,23 @@ type IlDeltaStreams =
 
 /// <summary>
 /// Accumulates metadata tables, Edit-and-Continue bookkeeping, and encoded method bodies prior to serialising
-/// a hot reload delta. The builder owns private instances of <see cref="MetadataBuilder"/> and <see cref="ByteBuffer"/>;
-/// callers retrieve the resulting byte arrays via <see cref="Build"/>.
+/// a hot reload delta. Uses pure F# token calculators instead of SRM MetadataBuilder.
+/// Callers retrieve the resulting byte arrays via <see cref="Build"/>.
 /// </summary>
 type IlDeltaStreamBuilder(baselineMetadata: MetadataSnapshot option) =
-    let metadataBuilder =
+    // Initialize token calculators with baseline heap/table offsets
+    let userStringHeapStart, standaloneSigRowCount =
         match baselineMetadata with
         | Some snapshot ->
-            let heaps = snapshot.HeapSizes
-            let alignedGuidStart =
-                let offset = snapshot.GuidHeapStart
-                if offset % 16 = 0 then
-                    offset
-                else
-                    ((offset + 15) / 16) * 16
-            MetadataBuilder(
-                userStringHeapStartOffset = heaps.UserStringHeapSize,
-                stringHeapStartOffset = heaps.StringHeapSize,
-                blobHeapStartOffset = heaps.BlobHeapSize,
-                guidHeapStartOffset = alignedGuidStart
-            )
-        | None -> MetadataBuilder()
+            snapshot.HeapSizes.UserStringHeapSize,
+            snapshot.TableRowCounts.[TableNames.StandAloneSig.Index]
+        | None -> 0, 0
+
+    let userStringCalculator = UserStringTokenCalculator(userStringHeapStart)
+    let standaloneSigCalculator = StandaloneSignatureTokenCalculator(standaloneSigRowCount)
+
     let methodBodyStream = ByteBuffer.Create(256)
     let methodBodies = ResizeArray<MethodBodyUpdate>()
-    let standaloneSigs = ResizeArray<StandaloneSignatureUpdate>()
-    let standaloneSigCache = Dictionary<int, StandaloneSignatureHandle>()
     let mutable isBuilt = false
 
     let alignStream alignment =
@@ -69,13 +162,16 @@ type IlDeltaStreamBuilder(baselineMetadata: MetadataSnapshot option) =
         for _ = 1 to padding do
             methodBodyStream.EmitByte 0uy
 
-    /// <summary>Expose the underlying metadata builder for advanced scenarios.</summary>
-    member _.MetadataBuilder = metadataBuilder
+    /// <summary>Expose the user string token calculator for advanced scenarios.</summary>
+    member _.UserStringCalculator = userStringCalculator
 
     /// <summary>Inspection hook primarily used in unit tests.</summary>
     member _.MethodBodies = methodBodies |> Seq.toList
 
-    member _.StandaloneSignatures = standaloneSigs |> Seq.toList
+    /// <summary>Get the standalone signatures that were added.</summary>
+    member _.StandaloneSignatures =
+        standaloneSigCalculator.GetSignatures()
+        |> List.map (fun (rowId, blob) -> { RowId = rowId; Blob = blob })
 
     /// <summary>Add a method body update for the supplied metadata token.</summary>
     member _.AddMethodBody(
@@ -176,34 +272,18 @@ type IlDeltaStreamBuilder(baselineMetadata: MetadataSnapshot option) =
 
     /// <summary>Adds a standalone signature blob to the metadata stream and returns its token.</summary>
     member _.AddStandaloneSignature(signature: byte[]) =
-        if signature.Length = 0 then
-            0
-        else
-            let blobHandle = metadataBuilder.GetOrAddBlob(signature)
-            let blobOffset = MetadataTokens.GetHeapOffset blobHandle
-            match standaloneSigCache.TryGetValue blobOffset with
-            | true, existing ->
-                let entityHandle: EntityHandle = existing
-                MetadataTokens.GetToken(entityHandle)
-            | _ ->
-                let handle = metadataBuilder.AddStandaloneSignature(blobHandle)
-                standaloneSigCache[blobOffset] <- handle
-                let entityHandle: EntityHandle = handle
-                let token = MetadataTokens.GetToken(entityHandle)
-                let rowId = MetadataTokens.GetRowNumber(entityHandle)
-                standaloneSigs.Add({ RowId = rowId; Blob = Array.copy signature })
-                token
+        standaloneSigCalculator.AddStandaloneSignature(signature)
 
     /// <summary>
     /// Finalise the builder and emit the metadata and IL blobs. The builder can only be consumed once; subsequent
     /// invocations throw to prevent mismatched Edit-and-Continue state.
     /// </summary>
-    member _.Build() =
+    member this.Build() =
         if isBuilt then invalidOp "IlDeltaStreamBuilder.Build may only be called once per builder instance."
         isBuilt <- true
 
         {
             IL = methodBodyStream.AsMemory().ToArray()
             MethodBodies = methodBodies |> Seq.toList
-            StandaloneSignatures = standaloneSigs |> Seq.toList
+            StandaloneSignatures = this.StandaloneSignatures
         }
