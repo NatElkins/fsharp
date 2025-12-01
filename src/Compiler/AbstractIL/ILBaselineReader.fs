@@ -908,27 +908,31 @@ let readPortablePdbMetadata (pdbBytes: byte[]) : PortablePdbMetadata option =
     if pdbBytes.Length < 4 then
         None
     else
-        let signature = readInt32 pdbBytes 0
-        if signature <> 0x424A5342 then // "BSJB"
-            None
-        else
-            // Parse from offset 0 (metadata root)
-            let metadataRoot = 0
-            let streamHeaders = parseStreamHeaders pdbBytes metadataRoot
+        try
+            let signature = readInt32 pdbBytes 0
+            if signature <> 0x424A5342 then // "BSJB"
+                None
+            else
+                // Parse from offset 0 (metadata root)
+                let metadataRoot = 0
+                let streamHeaders = parseStreamHeaders pdbBytes metadataRoot
 
-            // Find required streams
-            let tablesStreamOpt =
-                findStream streamHeaders "#~"
-                |> Option.orElse (findStream streamHeaders "#-")
-            let pdbStreamOpt = findStream streamHeaders "#Pdb"
+                // Find required streams
+                let tablesStreamOpt =
+                    findStream streamHeaders "#~"
+                    |> Option.orElse (findStream streamHeaders "#-")
+                let pdbStreamOpt = findStream streamHeaders "#Pdb"
 
-            match tablesStreamOpt with
-            | None -> None
-            | Some tablesStream ->
-                let rowCounts = parsePdbTablesStream pdbBytes tablesStream
-                let entryPoint = pdbStreamOpt |> Option.bind (fun s -> parsePdbStream pdbBytes s)
+                match tablesStreamOpt with
+                | None -> None
+                | Some tablesStream ->
+                    let rowCounts = parsePdbTablesStream pdbBytes tablesStream
+                    let entryPoint = pdbStreamOpt |> Option.bind (fun s -> parsePdbStream pdbBytes s)
 
-                Some {
-                    TableRowCounts = rowCounts
-                    EntryPointToken = entryPoint
-                }
+                    Some {
+                        TableRowCounts = rowCounts
+                        EntryPointToken = entryPoint
+                    }
+        with
+        | :? System.IndexOutOfRangeException -> None
+        | :? System.ArgumentOutOfRangeException -> None
