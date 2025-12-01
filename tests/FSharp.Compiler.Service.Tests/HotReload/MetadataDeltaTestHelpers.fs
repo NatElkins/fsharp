@@ -907,7 +907,7 @@ module internal MetadataDeltaTestHelpers =
     let private emitPropertyDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) (generation: int) (encBaseId: Guid) =
         use peReader = new PEReader(new MemoryStream(baselineBytes, false))
         let metadataReader = peReader.GetMetadataReader()
-        let metadataSnapshot = metadataSnapshotFromReader metadataReader
+        let metadataSnapshot = metadataSnapshotFromBytes baselineBytes |> Option.get
         let builder = IlDeltaStreamBuilder(Some metadataSnapshot)
         printfn "[property-delta] generation=%d encBaseId=%A" generation encBaseId
         emitPropertyDeltaCore metadataReader builder heapOffsets generation encBaseId
@@ -1429,7 +1429,7 @@ module internal MetadataDeltaTestHelpers =
     let private emitAsyncDeltaFromBaseline (baselineBytes: byte[]) (heapOffsets: MetadataHeapOffsets) =
         use peReader = new PEReader(new MemoryStream(baselineBytes, false))
         let metadataReader = peReader.GetMetadataReader()
-        let metadataSnapshot = metadataSnapshotFromReader metadataReader
+        let metadataSnapshot = metadataSnapshotFromBytes baselineBytes |> Option.get
         let builder = IlDeltaStreamBuilder(Some metadataSnapshot)
         emitAsyncDeltaCore metadataReader peReader builder heapOffsets
 

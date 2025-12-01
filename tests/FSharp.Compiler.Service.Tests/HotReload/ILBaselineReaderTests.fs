@@ -3,8 +3,10 @@ namespace FSharp.Compiler.Service.Tests.HotReload
 open System
 open System.IO
 open System.Reflection.Metadata
+open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
 open Xunit
+open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.AbstractIL.ILBaselineReader
 open FSharp.Compiler.HotReloadBaseline
 
@@ -21,6 +23,19 @@ module ILBaselineReaderTests =
         let assembly = typeof<TestMarker>.Assembly
         let assemblyPath = assembly.Location
         File.ReadAllBytes(assemblyPath)
+
+    /// Helper to get SRM heap sizes for comparison
+    let private getSrmHeapSizes (metadataReader: MetadataReader) =
+        { StringHeapSize = metadataReader.GetHeapSize(HeapIndex.String)
+          UserStringHeapSize = metadataReader.GetHeapSize(HeapIndex.UserString)
+          BlobHeapSize = metadataReader.GetHeapSize(HeapIndex.Blob)
+          GuidHeapSize = metadataReader.GetHeapSize(HeapIndex.Guid) }
+
+    /// Helper to get SRM table row counts for comparison
+    let private getSrmTableRowCounts (metadataReader: MetadataReader) =
+        Array.init 64 (fun i ->
+            let tableIndex = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte i)
+            metadataReader.GetTableRowCount(tableIndex))
 
     [<Fact>]
     let ``metadataSnapshotFromBytes parses valid PE file`` () =
@@ -47,7 +62,7 @@ module ILBaselineReaderTests =
         use stream = new MemoryStream(bytes)
         use peReader = new PEReader(stream)
         let metadataReader = peReader.GetMetadataReader()
-        let srmSnapshot = metadataSnapshotFromReader metadataReader
+        let srmHeapSizes = getSrmHeapSizes metadataReader
 
         // Compare heap sizes - our parser reads raw stream sizes from headers,
         // while SRM's GetHeapSize may return content-only size (excluding padding).
@@ -55,15 +70,15 @@ module ILBaselineReaderTests =
         let heapSizeTolerance = 4
 
         Assert.True(
-            abs(srmSnapshot.HeapSizes.StringHeapSize - byteSnapshot.HeapSizes.StringHeapSize) <= heapSizeTolerance,
-            $"String heap size mismatch: SRM={srmSnapshot.HeapSizes.StringHeapSize}, byte-based={byteSnapshot.HeapSizes.StringHeapSize}")
+            abs(srmHeapSizes.StringHeapSize - byteSnapshot.HeapSizes.StringHeapSize) <= heapSizeTolerance,
+            $"String heap size mismatch: SRM={srmHeapSizes.StringHeapSize}, byte-based={byteSnapshot.HeapSizes.StringHeapSize}")
         Assert.True(
-            abs(srmSnapshot.HeapSizes.UserStringHeapSize - byteSnapshot.HeapSizes.UserStringHeapSize) <= heapSizeTolerance,
-            $"UserString heap size mismatch: SRM={srmSnapshot.HeapSizes.UserStringHeapSize}, byte-based={byteSnapshot.HeapSizes.UserStringHeapSize}")
+            abs(srmHeapSizes.UserStringHeapSize - byteSnapshot.HeapSizes.UserStringHeapSize) <= heapSizeTolerance,
+            $"UserString heap size mismatch: SRM={srmHeapSizes.UserStringHeapSize}, byte-based={byteSnapshot.HeapSizes.UserStringHeapSize}")
         Assert.True(
-            abs(srmSnapshot.HeapSizes.BlobHeapSize - byteSnapshot.HeapSizes.BlobHeapSize) <= heapSizeTolerance,
-            $"Blob heap size mismatch: SRM={srmSnapshot.HeapSizes.BlobHeapSize}, byte-based={byteSnapshot.HeapSizes.BlobHeapSize}")
-        Assert.Equal(srmSnapshot.HeapSizes.GuidHeapSize, byteSnapshot.HeapSizes.GuidHeapSize)
+            abs(srmHeapSizes.BlobHeapSize - byteSnapshot.HeapSizes.BlobHeapSize) <= heapSizeTolerance,
+            $"Blob heap size mismatch: SRM={srmHeapSizes.BlobHeapSize}, byte-based={byteSnapshot.HeapSizes.BlobHeapSize}")
+        Assert.Equal(srmHeapSizes.GuidHeapSize, byteSnapshot.HeapSizes.GuidHeapSize)
 
     [<Fact>]
     let ``metadataSnapshotFromBytes matches MetadataReader for table row counts`` () =
@@ -78,20 +93,20 @@ module ILBaselineReaderTests =
         use stream = new MemoryStream(bytes)
         use peReader = new PEReader(stream)
         let metadataReader = peReader.GetMetadataReader()
-        let srmSnapshot = metadataSnapshotFromReader metadataReader
+        let srmTableCounts = getSrmTableRowCounts metadataReader
 
         // Compare all 64 table row counts
-        Assert.Equal(srmSnapshot.TableRowCounts.Length, byteSnapshot.TableRowCounts.Length)
+        Assert.Equal(srmTableCounts.Length, byteSnapshot.TableRowCounts.Length)
         for i in 0..63 do
-            if srmSnapshot.TableRowCounts.[i] <> byteSnapshot.TableRowCounts.[i] then
-                Assert.Fail($"Table {i} row count mismatch: expected {srmSnapshot.TableRowCounts.[i]}, got {byteSnapshot.TableRowCounts.[i]}")
+            if srmTableCounts.[i] <> byteSnapshot.TableRowCounts.[i] then
+                Assert.Fail($"Table {i} row count mismatch: expected {srmTableCounts.[i]}, got {byteSnapshot.TableRowCounts.[i]}")
 
     [<Fact>]
     let ``readModuleMvidFromBytes returns valid GUID`` () =
         let bytes = getTestAssemblyBytes ()
         let result = readModuleMvidFromBytes bytes
         Assert.True(result.IsSome, "Should successfully read MVID")
-        Assert.NotEqual(Guid.Empty, result.Value)
+        Assert.NotEqual(System.Guid.Empty, result.Value)
 
     [<Fact>]
     let ``readModuleMvidFromBytes matches MetadataReader`` () =
@@ -107,7 +122,7 @@ module ILBaselineReaderTests =
         let metadataReader = peReader.GetMetadataReader()
         let moduleDef = metadataReader.GetModuleDefinition()
         let srmMvid =
-            if moduleDef.Mvid.IsNil then Guid.Empty
+            if moduleDef.Mvid.IsNil then System.Guid.Empty
             else metadataReader.GetGuid(moduleDef.Mvid)
 
         Assert.Equal(srmMvid, byteResult.Value)
@@ -126,22 +141,23 @@ module ILBaselineReaderTests =
         use stream = new MemoryStream(bytes)
         use peReader = new PEReader(stream)
         let metadataReader = peReader.GetMetadataReader()
-        let srmSnapshot = metadataSnapshotFromReader metadataReader
+        let srmHeapSizes = getSrmHeapSizes metadataReader
+        let srmTableCounts = getSrmTableRowCounts metadataReader
 
         // Compare heap sizes - with tolerance for stream alignment
         let heapSizeTolerance = 4
         Assert.True(
-            abs(srmSnapshot.HeapSizes.StringHeapSize - byteSnapshot.HeapSizes.StringHeapSize) <= heapSizeTolerance,
-            $"String heap size mismatch: SRM={srmSnapshot.HeapSizes.StringHeapSize}, byte-based={byteSnapshot.HeapSizes.StringHeapSize}")
+            abs(srmHeapSizes.StringHeapSize - byteSnapshot.HeapSizes.StringHeapSize) <= heapSizeTolerance,
+            $"String heap size mismatch: SRM={srmHeapSizes.StringHeapSize}, byte-based={byteSnapshot.HeapSizes.StringHeapSize}")
         Assert.True(
-            abs(srmSnapshot.HeapSizes.UserStringHeapSize - byteSnapshot.HeapSizes.UserStringHeapSize) <= heapSizeTolerance,
-            $"UserString heap size mismatch: SRM={srmSnapshot.HeapSizes.UserStringHeapSize}, byte-based={byteSnapshot.HeapSizes.UserStringHeapSize}")
+            abs(srmHeapSizes.UserStringHeapSize - byteSnapshot.HeapSizes.UserStringHeapSize) <= heapSizeTolerance,
+            $"UserString heap size mismatch: SRM={srmHeapSizes.UserStringHeapSize}, byte-based={byteSnapshot.HeapSizes.UserStringHeapSize}")
         Assert.True(
-            abs(srmSnapshot.HeapSizes.BlobHeapSize - byteSnapshot.HeapSizes.BlobHeapSize) <= heapSizeTolerance,
-            $"Blob heap size mismatch: SRM={srmSnapshot.HeapSizes.BlobHeapSize}, byte-based={byteSnapshot.HeapSizes.BlobHeapSize}")
-        Assert.Equal(srmSnapshot.HeapSizes.GuidHeapSize, byteSnapshot.HeapSizes.GuidHeapSize)
+            abs(srmHeapSizes.BlobHeapSize - byteSnapshot.HeapSizes.BlobHeapSize) <= heapSizeTolerance,
+            $"Blob heap size mismatch: SRM={srmHeapSizes.BlobHeapSize}, byte-based={byteSnapshot.HeapSizes.BlobHeapSize}")
+        Assert.Equal(srmHeapSizes.GuidHeapSize, byteSnapshot.HeapSizes.GuidHeapSize)
 
         // Compare all table row counts
         for i in 0..63 do
-            if srmSnapshot.TableRowCounts.[i] <> byteSnapshot.TableRowCounts.[i] then
-                Assert.Fail($"Table {i} row count mismatch: expected {srmSnapshot.TableRowCounts.[i]}, got {byteSnapshot.TableRowCounts.[i]}")
+            if srmTableCounts.[i] <> byteSnapshot.TableRowCounts.[i] then
+                Assert.Fail($"Table {i} row count mismatch: expected {srmTableCounts.[i]}, got {byteSnapshot.TableRowCounts.[i]}")
