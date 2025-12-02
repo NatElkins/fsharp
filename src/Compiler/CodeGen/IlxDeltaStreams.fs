@@ -22,7 +22,7 @@ type UserStringTokenCalculator(heapStartOffset: int) =
     /// Encode a user string per ECMA-335 II.24.2.4:
     /// - Compressed length prefix (1-4 bytes)
     /// - UTF-16LE encoded characters
-    /// - Terminal byte: 0x00 if all chars <= 0x7F and no special chars, else 0x01
+    /// - Terminal byte computed via markerForUnicodeBytes (shared with ilwrite.fs)
     let encodeUserString (value: string) : byte[] =
         let utf16Bytes = Encoding.Unicode.GetBytes(value)
         let blobLength = utf16Bytes.Length + 1 // +1 for terminal byte
@@ -55,15 +55,8 @@ type UserStringTokenCalculator(heapStartOffset: int) =
         Buffer.BlockCopy(utf16Bytes, 0, result, pos, utf16Bytes.Length)
         pos <- pos + utf16Bytes.Length
 
-        // Write terminal byte (0x01 if any char > 0x7F or special, else 0x00)
-        let hasSpecial =
-            value |> Seq.exists (fun c ->
-                int c > 0x7F ||
-                c = '\000' || c = '\t' || c = '\n' || c = '\r' ||
-                (int c >= 0x01 && int c <= 0x08) ||
-                (int c >= 0x0E && int c <= 0x1F) ||
-                c = '\'' || c = '-')
-        result.[pos] <- if hasSpecial then 1uy else 0uy
+        // Write terminal byte - use shared markerForUnicodeBytes from ILBinaryWriter
+        result.[pos] <- byte (markerForUnicodeBytes utf16Bytes)
 
         result
 
