@@ -1268,8 +1268,11 @@ module DeltaEmitterTests =
 
         Assert.Equal(1, deltaReader.GetTableRowCount(toTableIndex TableNames.StandAloneSig))
         let bodyInfo = Assert.Single(delta.MethodBodies)
-        let expectedToken =
-            MetadataTokens.GetToken(EntityHandle.op_Implicit (MetadataTokens.StandaloneSignatureHandle 1))
+        // Delta token should be baseline row count + 1 (cumulative numbering)
+        let baselineStandAloneSigCount =
+            baselineArtifacts.Baseline.Metadata.TableRowCounts.[TableNames.StandAloneSig.Index]
+        let expectedRowId = baselineStandAloneSigCount + 1
+        let expectedToken = 0x11000000 ||| expectedRowId
         Assert.Equal(expectedToken, bodyInfo.LocalSignatureToken)
         let signatureBlob = Assert.Single(delta.StandaloneSignatures)
         Assert.Equal<byte>(baselineSigBytes, signatureBlob.Blob)
@@ -1327,8 +1330,11 @@ module DeltaEmitterTests =
         let deltaReader = deltaProvider.GetMetadataReader()
 
         Assert.Equal(1, deltaReader.GetTableRowCount(toTableIndex TableNames.StandAloneSig))
-        let expectedToken =
-            MetadataTokens.GetToken(EntityHandle.op_Implicit (MetadataTokens.StandaloneSignatureHandle 1))
+        // Delta token should be baseline row count + 1 (cumulative numbering)
+        let baselineStandAloneSigCount =
+            baselineArtifacts.Baseline.Metadata.TableRowCounts.[TableNames.StandAloneSig.Index]
+        let expectedRowId = baselineStandAloneSigCount + 1
+        let expectedToken = 0x11000000 ||| expectedRowId
         let bodyInfo = Assert.Single(delta.MethodBodies)
         Assert.Equal(expectedToken, bodyInfo.LocalSignatureToken)
 

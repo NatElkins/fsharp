@@ -1224,6 +1224,15 @@ module FSharpDeltaMetadataWriterTests =
               EventType = Some ilGlobals.typ_Object }
 
         let eventDef = metadataReader.GetEventDefinition eventHandle
+        // Convert SRM EntityHandle to our TypeDefOrRef DU
+        let eventTypeHandle = eventDef.Type
+        let eventType =
+            match eventTypeHandle.Kind with
+            | HandleKind.TypeReference -> TDR_TypeRef(TypeRefHandle(MetadataTokens.GetRowNumber eventTypeHandle))
+            | HandleKind.TypeDefinition -> TDR_TypeDef(TypeDefHandle(MetadataTokens.GetRowNumber eventTypeHandle))
+            | HandleKind.TypeSpecification -> TDR_TypeSpec(TypeSpecHandle(MetadataTokens.GetRowNumber eventTypeHandle))
+            | _ -> failwith $"Unexpected EventType handle kind: {eventTypeHandle.Kind}"
+
         let eventRows: DeltaWriter.EventDefinitionRowInfo list =
             [ { Key = eventKey
                 RowId = 1
@@ -1231,7 +1240,7 @@ module FSharpDeltaMetadataWriterTests =
                 Name = metadataReader.GetString eventDef.Name
                 NameOffset = None
                 Attributes = eventDef.Attributes
-                EventType = eventDef.Type } ]
+                EventType = eventType } ]
 
         let eventMapRows: DeltaWriter.EventMapRowInfo list =
             [ { DeclaringType = "Sample.EventHost"
@@ -1240,15 +1249,12 @@ module FSharpDeltaMetadataWriterTests =
                 FirstEventRowId = Some 1
                 IsAdded = true } ]
 
-        let associationHandle = MetadataTokens.EntityHandle(toTableIndex TableNames.Event, 1)
-
         let methodSemanticsRows: DeltaWriter.MethodSemanticsMetadataUpdate list =
             [ { RowId = 1
-                Association = associationHandle
                 MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit addHandle)
                 Attributes = MethodSemanticsAttributes.Adder
                 IsAdded = true
-                AssociationInfo = Some(MethodSemanticsAssociation.EventAssociation(eventKey, 1)) } ]
+                AssociationInfo = MethodSemanticsAssociation.EventAssociation(eventKey, 1) } ]
 
         let moduleName = metadataReader.GetString(metadataReader.GetModuleDefinition().Name)
 
@@ -1470,13 +1476,14 @@ module FSharpDeltaMetadataWriterTests =
         Assert.Equal(1, metadataDelta.TableRowCounts.[TableNames.Method.Index])
         Assert.Equal(0, metadataDelta.TableRowCounts.[TableNames.Param.Index])
 
+        // StandAloneSig row 2 because baseline has 1 row (Roslyn parity)
         let expectedEncLog: (TableName * int * EditAndContinueOperation)[] =
             [| (TableNames.Method, 1, EditAndContinueOperation.Default)
                (TableNames.TypeRef, 1, EditAndContinueOperation.Default)
                (TableNames.TypeRef, 2, EditAndContinueOperation.Default)
                (TableNames.MemberRef, 1, EditAndContinueOperation.Default)
                (TableNames.AssemblyRef, 1, EditAndContinueOperation.Default)
-               (TableNames.StandAloneSig, 1, EditAndContinueOperation.Default)
+               (TableNames.StandAloneSig, 2, EditAndContinueOperation.Default)
                (TableNames.CustomAttribute, 1, EditAndContinueOperation.Default) |]
             |> sortEncLogEntries
             |> sortEncLogEntries
@@ -1487,7 +1494,7 @@ module FSharpDeltaMetadataWriterTests =
                (TableNames.TypeRef, 2)
                (TableNames.MemberRef, 1)
                (TableNames.AssemblyRef, 1)
-               (TableNames.StandAloneSig, 1)
+               (TableNames.StandAloneSig, 2)
                (TableNames.CustomAttribute, 1) |]
             |> sortEncMapEntries
             |> sortEncMapEntries
@@ -1575,13 +1582,15 @@ module FSharpDeltaMetadataWriterTests =
     let ``async multi-generation deltas preserve EncLog ordering`` () =
         let artifacts = MetadataDeltaTestHelpers.emitAsyncMultiGenerationArtifacts ()
 
+        // Both generations use baseline metadata with 1 StandAloneSig row,
+        // so both add row 2 (continuing from baseline per Roslyn parity)
         let expectedEncLog: (TableName * int * EditAndContinueOperation)[] =
             [| (TableNames.Method, 1, EditAndContinueOperation.Default)
                (TableNames.TypeRef, 1, EditAndContinueOperation.Default)
                (TableNames.TypeRef, 2, EditAndContinueOperation.Default)
                (TableNames.MemberRef, 1, EditAndContinueOperation.Default)
                (TableNames.AssemblyRef, 1, EditAndContinueOperation.Default)
-               (TableNames.StandAloneSig, 1, EditAndContinueOperation.Default)
+               (TableNames.StandAloneSig, 2, EditAndContinueOperation.Default)
                (TableNames.CustomAttribute, 1, EditAndContinueOperation.Default) |]
             |> sortEncLogEntries
 
@@ -1591,7 +1600,7 @@ module FSharpDeltaMetadataWriterTests =
                (TableNames.TypeRef, 2)
                (TableNames.MemberRef, 1)
                (TableNames.AssemblyRef, 1)
-               (TableNames.StandAloneSig, 1)
+               (TableNames.StandAloneSig, 2)
                (TableNames.CustomAttribute, 1) |]
             |> sortEncMapEntries
 

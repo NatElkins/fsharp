@@ -21,6 +21,7 @@ open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.CodeGen
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
+open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 
 module internal MetadataDeltaTestHelpers =
@@ -933,16 +934,13 @@ module internal MetadataDeltaTestHelpers =
         inspectDeltaMetadata "delta" metadataDelta.Metadata
 
         if shouldTraceMetadata () then
-            let srmMetadata = serializeWithMetadataBuilder builder.MetadataBuilder
+            // Note: SRM MetadataBuilder comparison removed after SRM removal from IlDeltaStreamBuilder
             dumpMetadataLayout "delta-custom" metadataDelta.Metadata
-            dumpMetadataLayout "delta-srm" srmMetadata
             printfn "[hotreload-metadata] delta-custom total-bytes=%d" metadataDelta.Metadata.Length
-            printfn "[hotreload-metadata] delta-srm     total-bytes=%d" srmMetadata.Length
             let dumpDir = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-md-dumps")
             Directory.CreateDirectory(dumpDir) |> ignore
             File.WriteAllBytes(Path.Combine(dumpDir, "delta-custom.bin"), metadataDelta.Metadata)
             File.WriteAllBytes(Path.Combine(dumpDir, "delta-custom-table.bin"), metadataDelta.TableStream.Bytes)
-            File.WriteAllBytes(Path.Combine(dumpDir, "delta-srm.bin"), srmMetadata)
             let logRowCounts label (counts: int[]) =
                 counts
                 |> Array.mapi (fun idx count -> idx, count)
@@ -957,19 +955,6 @@ module internal MetadataDeltaTestHelpers =
                 metadataDelta.HeapSizes.StringHeapSize
                 metadataDelta.HeapSizes.BlobHeapSize
                 metadataDelta.HeapSizes.GuidHeapSize
-
-            use srmProvider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(srmMetadata))
-            let srmReader = srmProvider.GetMetadataReader()
-            let srmCounts =
-                Array.init MetadataTokens.TableCount (fun idx ->
-                    let table = LanguagePrimitives.EnumOfValue<byte, TableIndex>(byte idx)
-                    srmReader.GetTableRowCount table)
-            logRowCounts "delta-srm" srmCounts
-            printfn
-                "[hotreload-metadata] delta-srm     heap sizes strings=%d blobs=%d guids=%d"
-                (srmReader.GetHeapSize HeapIndex.String)
-                (srmReader.GetHeapSize HeapIndex.Blob)
-                (srmReader.GetHeapSize HeapIndex.Guid)
 
         { BaselineBytes = assemblyBytes
           BaselineHeapSizes = baselineHeapSizes
@@ -1423,7 +1408,9 @@ module internal MetadataDeltaTestHelpers =
         use peReader = new PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()
         let baselineHeapSizes = getHeapSizes metadataReader
-        let builder = IlDeltaStreamBuilder None
+        // Use baseline metadata so row IDs continue from baseline counts (Roslyn parity)
+        let metadataSnapshot = metadataSnapshotFromBytes assemblyBytes |> Option.get
+        let builder = IlDeltaStreamBuilder(Some metadataSnapshot)
         let heapOffsets = computeHeapOffsets metadataReader
         let metadataDelta = emitAsyncDeltaCore metadataReader peReader builder heapOffsets
 
@@ -1552,6 +1539,15 @@ module internal MetadataDeltaTestHelpers =
             |> Seq.find (fun handle -> metadataReader.GetString(metadataReader.GetEventDefinition(handle).Name) = "OnChanged")
 
         let eventDef = metadataReader.GetEventDefinition eventHandle
+        // Convert SRM EntityHandle to our TypeDefOrRef DU
+        let eventTypeHandle = eventDef.Type
+        let eventType =
+            match eventTypeHandle.Kind with
+            | HandleKind.TypeReference -> TDR_TypeRef(TypeRefHandle(MetadataTokens.GetRowNumber eventTypeHandle))
+            | HandleKind.TypeDefinition -> TDR_TypeDef(TypeDefHandle(MetadataTokens.GetRowNumber eventTypeHandle))
+            | HandleKind.TypeSpecification -> TDR_TypeSpec(TypeSpecHandle(MetadataTokens.GetRowNumber eventTypeHandle))
+            | _ -> failwith $"Unexpected EventType handle kind: {eventTypeHandle.Kind}"
+
         let eventRows: DeltaWriter.EventDefinitionRowInfo list =
             [ { Key = eventKey
                 RowId = 1
@@ -1559,7 +1555,7 @@ module internal MetadataDeltaTestHelpers =
                 Name = metadataReader.GetString eventDef.Name
                 NameOffset = None
                 Attributes = eventDef.Attributes
-                EventType = eventDef.Type } ]
+                EventType = eventType } ]
 
         let eventMapRows: DeltaWriter.EventMapRowInfo list =
             [ { DeclaringType = "Sample.EventHost"
@@ -1575,11 +1571,10 @@ module internal MetadataDeltaTestHelpers =
 
         let methodSemanticsRows: DeltaWriter.MethodSemanticsMetadataUpdate list =
             [ { RowId = 1
-                Association = MetadataTokens.EventDefinitionHandle 1 |> EventDefinitionHandle.op_Implicit
                 MethodToken = MetadataTokens.GetToken(EntityHandle.op_Implicit addHandle)
                 Attributes = MethodSemanticsAttributes.Adder
                 IsAdded = true
-                AssociationInfo = Some(MethodSemanticsAssociation.EventAssociation(eventKey, 1)) } ]
+                AssociationInfo = MethodSemanticsAssociation.EventAssociation(eventKey, 1) } ]
 
         DeltaWriter.emit
             moduleName

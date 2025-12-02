@@ -245,7 +245,9 @@ type private UserStringHeapBuilder() =
             initial
 
     member _.AddEntry(offset: int, value: string) =
-        if offset <= 0 then
+        // Use < 0 instead of <= 0 because offset 0 is valid for delta heaps
+        // (the null byte at offset 0 is only in the baseline heap, not the delta)
+        if offset < 0 then
             ()
         elif entries.Add offset then
             let bytes = encodeUserString value
@@ -733,7 +735,8 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     /// This matches how the runtime resolves tokens: absolute_token - stream_header_offset = position_in_delta_bytes.
     member _.AddUserStringLiteral(offset: int, value: string) =
         let start = heapOffsets.UserStringHeapStart
-        let relativeOffset = if offset > start then offset - start else offset
+        // Use >= to properly compute relative offset when offset equals the heap start
+        let relativeOffset = if offset >= start then offset - start else offset
         if traceHeapOffsets.Value then
             printfn "[fsharp-hotreload][heap-offsets] AddUserStringLiteral: absolute offset=%d, heapStart=%d, relative=%d, value=%A%s"
                 offset start relativeOffset (value.Substring(0, min 20 value.Length)) (if value.Length > 20 then "..." else "")
