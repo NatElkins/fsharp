@@ -27,6 +27,9 @@ open FSharp.Compiler.HotReload.SymbolMatcher
 open FSharp.Compiler.TypedTreeDiff
 open FSharp.Compiler.ComponentTests.HotReload.TestHelpers
 
+// Use our custom EditAndContinueOperation, not System.Reflection.Metadata.Ecma335's
+type EditAndContinueOperation = FSharp.Compiler.AbstractIL.ILDeltaHandles.EditAndContinueOperation
+
 [<Collection(nameof NotThreadSafeResourceCollection)>]
 module DeltaEmitterTests =
 
@@ -1464,7 +1467,7 @@ module DeltaEmitterTests =
                 ilBytes,
                 8,
                 false,
-                ImmutableArray<ExceptionRegion>.Empty,
+                [||],  // Empty exception regions
                 id
             )
 
@@ -1485,7 +1488,8 @@ module DeltaEmitterTests =
 
         let streams = builder.Build()
         let standalone = Assert.Single(streams.StandaloneSignatures)
-        let expected = MetadataTokens.GetToken(EntityHandle.op_Implicit standalone.Handle)
+        // StandAloneSig table index is 0x11, token = (0x11 << 24) | rowId
+        let expected = 0x11000000 ||| standalone.RowId
         Assert.Equal(expected, token)
         Assert.Equal<byte[]>(signature, standalone.Blob)
 

@@ -253,7 +253,7 @@ module MdvValidationTests =
         readEncTables reader
 
     let private sortEncLogEntries (entries: (int * int * EditAndContinueOperation)[]) =
-        entries |> Array.sortBy (fun (t, r, op) -> int t, r, int op)
+        entries |> Array.sortBy (fun (t, r, op) -> int t, r, op.Value)
 
     let private sortEncMapEntries (entries: (int * int)[]) =
         entries |> Array.sortBy (fun (t, r) -> int t, r)
@@ -568,16 +568,22 @@ module MdvValidationTests =
         let assemblyBytes, pdbBytesOpt, tokenMappings, _ =
             ILWriter.WriteILBinaryInMemoryWithArtifacts(writerOptions, ilModule, id)
 
+        // Extract module ID from PE metadata
         use peReader = new System.Reflection.PortableExecutable.PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()
         let moduleDef = metadataReader.GetModuleDefinition()
         let moduleId = if moduleDef.Mvid.IsNil then System.Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
-        let metadataSnapshot = HotReloadBaseline.metadataSnapshotFromReader metadataReader
+
+        // Use SRM-free byte-based APIs
+        let metadataSnapshot =
+            match HotReloadBaseline.metadataSnapshotFromBytes assemblyBytes with
+            | Some snapshot -> snapshot
+            | None -> failwith "Failed to parse metadata snapshot from assembly bytes"
 
         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
 
         let baselineCore = HotReloadBaseline.create ilModule tokenMappings metadataSnapshot moduleId portablePdbSnapshot
-        HotReloadBaseline.attachMetadataHandles metadataReader baselineCore
+        HotReloadBaseline.attachMetadataHandlesFromBytes assemblyBytes baselineCore
 
     let private getTypedAssembly (projectResults: FSharpCheckProjectResults) =
         let property =

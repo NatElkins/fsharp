@@ -824,18 +824,24 @@ module internal TestHelpers =
                 Some path
             | _ -> None
 
+        // Extract module ID from PE metadata
         use peReader = new PEReader(new MemoryStream(assemblyBytes, writable = false))
         let metadataReader = peReader.GetMetadataReader()
-        let metadataSnapshot = metadataSnapshotFromReader metadataReader
         let moduleDef = metadataReader.GetModuleDefinition()
         let moduleId =
             if moduleDef.Mvid.IsNil then System.Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
+
+        // Use SRM-free byte-based APIs
+        let metadataSnapshot =
+            match metadataSnapshotFromBytes assemblyBytes with
+            | Some snapshot -> snapshot
+            | None -> failwith "Failed to parse metadata snapshot from assembly bytes"
 
         let portablePdbSnapshot = pdbBytesOpt |> Option.map createPortablePdbSnapshot
 
         let baseline =
             let core = create ilModule tokenMappings metadataSnapshot moduleId portablePdbSnapshot
-            attachMetadataHandles metadataReader core
+            attachMetadataHandlesFromBytes assemblyBytes core
 
         { Baseline = baseline
           TokenMappings = tokenMappings
@@ -903,12 +909,18 @@ module internal TestHelpers =
                 |> Seq.tryHead
                 |> Option.defaultWith (fun () -> failwithf "%s.dll not found after build" assemblyName)
 
-        // Load metadata snapshot from the real assembly
-        use peReader = new PEReader(File.OpenRead(dllPath))
+        // Load assembly bytes and metadata
+        let assemblyBytes = File.ReadAllBytes(dllPath)
+        use peReader = new PEReader(new MemoryStream(assemblyBytes, writable = false))
         let reader = peReader.GetMetadataReader()
-        let metadataSnapshot = metadataSnapshotFromReader reader
         let moduleDef = reader.GetModuleDefinition()
         let moduleId = if moduleDef.Mvid.IsNil then System.Guid.NewGuid() else reader.GetGuid moduleDef.Mvid
+
+        // Use SRM-free byte-based API for metadata snapshot
+        let metadataSnapshot =
+            match metadataSnapshotFromBytes assemblyBytes with
+            | Some snapshot -> snapshot
+            | None -> failwith "Failed to parse metadata snapshot from assembly bytes"
 
         // Build token maps directly from metadata
         let typeTokens =
@@ -984,7 +996,7 @@ module internal TestHelpers =
               AddedOrChangedMethods = [] }
 
         // Attach string handles from baseline metadata so delta can reuse them
-        let baselineWithHandles = attachMetadataHandles reader baseline
+        let baselineWithHandles = attachMetadataHandlesFromBytes assemblyBytes baseline
 
         { Baseline = baselineWithHandles
           TokenMappings = dummyMappings

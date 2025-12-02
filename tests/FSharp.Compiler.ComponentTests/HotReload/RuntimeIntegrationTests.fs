@@ -159,16 +159,22 @@ type Type =
         let assemblyBytes, pdbBytesOpt, tokenMappings, _ =
             FSharp.Compiler.AbstractIL.ILBinaryWriter.WriteILBinaryInMemoryWithArtifacts(writerOptions, ilModule, id)
 
+        // Extract module ID from the PE metadata
         use peReader = new System.Reflection.PortableExecutable.PEReader(new MemoryStream(assemblyBytes, false))
         let metadataReader = peReader.GetMetadataReader()
         let moduleDef = metadataReader.GetModuleDefinition()
         let moduleId = if moduleDef.Mvid.IsNil then System.Guid.NewGuid() else metadataReader.GetGuid(moduleDef.Mvid)
-        let metadataSnapshot = HotReloadBaseline.metadataSnapshotFromReader metadataReader
+
+        // Use the SRM-free byte-based APIs
+        let metadataSnapshot =
+            match HotReloadBaseline.metadataSnapshotFromBytes assemblyBytes with
+            | Some snapshot -> snapshot
+            | None -> failwith "Failed to parse metadata snapshot from assembly bytes"
 
         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
 
         let coreBaseline = HotReloadBaseline.create ilModule tokenMappings metadataSnapshot moduleId portablePdbSnapshot
-        HotReloadBaseline.attachMetadataHandles metadataReader coreBaseline
+        HotReloadBaseline.attachMetadataHandlesFromBytes assemblyBytes coreBaseline
 
     [<Fact>]
     let ``EmitDeltaForCompilation produces IL/metadata deltas`` () =
