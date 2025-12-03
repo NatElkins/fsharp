@@ -57,6 +57,13 @@ type RudeEditKind =
     | DeclarationAdded
     | DeclarationRemoved
     | Unsupported
+    // Method addition restrictions (following Roslyn patterns)
+    | InsertVirtual           // Virtual/abstract/override methods cannot be added
+    | InsertConstructor       // Constructors cannot be added to existing types
+    | InsertOperator          // User-defined operators cannot be added
+    | InsertExplicitInterface // Explicit interface implementations cannot be added
+    | InsertIntoInterface     // Members cannot be added to interfaces
+    | FieldAdded              // Fields cannot be added (type layout change)
 
 type SemanticEdit =
     { Symbol: SymbolId
@@ -381,6 +388,26 @@ and private bindingDigest denv (TBind (var, body, _)) =
     let sigHash = tyToString denv var.Type |> stableHash
     hashCombine sigHash (exprDigest denv body)
 
+/// Properties needed to check if a method addition is allowed.
+/// Following Roslyn patterns for Edit and Continue restrictions.
+type private MethodAdditionInfo =
+    { IsMethod: bool                    // True if this is a method (vs module value/field)
+      IsDispatchSlot: bool              // Virtual or abstract
+      IsOverrideOrExplicitImpl: bool    // Override or explicit interface impl
+      IsConstructor: bool               // .ctor or .cctor
+      IsOperator: bool                  // User-defined operator
+      IsInInterface: bool               // Member of an interface type
+      IsField: bool }                   // Field (not a method)
+
+    static member Default =
+        { IsMethod = false
+          IsDispatchSlot = false
+          IsOverrideOrExplicitImpl = false
+          IsConstructor = false
+          IsOperator = false
+          IsInInterface = false
+          IsField = false }
+
 type private BindingSnapshot =
     { Symbol: SymbolId
       InlineInfo: ValInline
@@ -388,7 +415,8 @@ type private BindingSnapshot =
       ConstraintsText: string
       BodyHash: int
       IsSynthesized: bool
-      ContainingEntity: string option }
+      ContainingEntity: string option
+      AdditionInfo: MethodAdditionInfo }
 
 type private EntitySnapshot =
     { Symbol: SymbolId
@@ -455,13 +483,44 @@ and private snapshotBinding denv path (TBind (var, expr, _)) =
     let memberKind = memberKindOfVal var
     let symbol = symbolId path var.LogicalName var.Stamp SymbolKind.Value memberKind var.IsCompilerGenerated
 
+    // Determine addition info for hot reload restrictions
+    let additionInfo =
+        let isMethod = memberKind.IsSome
+        let isDispatchSlot =
+            match var.MemberInfo with
+            | Some memberInfo -> memberInfo.MemberFlags.IsDispatchSlot
+            | None -> false
+        let isOverrideOrExplicitImpl =
+            match var.MemberInfo with
+            | Some memberInfo -> memberInfo.MemberFlags.IsOverrideOrExplicitImpl
+            | None -> false
+        let isConstructor = var.IsConstructor || var.IsClassConstructor
+        // Operators have logical names starting with "op_"
+        let isOperator = var.LogicalName.StartsWith("op_", StringComparison.Ordinal)
+        let isInInterface =
+            match var.MemberInfo with
+            | Some memberInfo ->
+                try memberInfo.ApparentEnclosingEntity.IsFSharpInterfaceTycon
+                with _ -> false
+            | None -> false
+        // A field is a module-level mutable value or a non-method member
+        let isField = not isMethod && var.IsMutable
+        { IsMethod = isMethod
+          IsDispatchSlot = isDispatchSlot
+          IsOverrideOrExplicitImpl = isOverrideOrExplicitImpl
+          IsConstructor = isConstructor
+          IsOperator = isOperator
+          IsInInterface = isInInterface
+          IsField = isField }
+
     { Symbol = symbol
       InlineInfo = var.InlineInfo
       SignatureText = signature
       ConstraintsText = constraints
       BodyHash = bodyHash
       IsSynthesized = var.IsCompilerGenerated
-      ContainingEntity = containingEntity }: BindingSnapshot
+      ContainingEntity = containingEntity
+      AdditionInfo = additionInfo }: BindingSnapshot
 
 and private snapshotTycon denv path (tycon: Tycon) =
     let reprText =
@@ -581,11 +640,53 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
 
     for KeyValue(key, updatedBinding) in updated do
         if not (Map.containsKey key baseline) then
-            rude.Add(
-                { Symbol = Some updatedBinding.Symbol
-                  Kind = RudeEditKind.DeclarationAdded
-                  Message = "New declaration added." }
-            )
+            let info = updatedBinding.AdditionInfo
+            // Check restrictions following Roslyn patterns
+            if info.IsField then
+                // Fields cannot be added - they change type layout
+                rude.Add(
+                    { Symbol = Some updatedBinding.Symbol
+                      Kind = RudeEditKind.FieldAdded
+                      Message = "Adding fields is not supported. Fields change type layout." }
+                )
+            elif info.IsDispatchSlot || info.IsOverrideOrExplicitImpl then
+                // Virtual, abstract, or override methods cannot be added
+                rude.Add(
+                    { Symbol = Some updatedBinding.Symbol
+                      Kind = RudeEditKind.InsertVirtual
+                      Message = "Adding virtual, abstract, or override methods is not supported." }
+                )
+            elif info.IsConstructor then
+                // Constructors cannot be added to existing types
+                rude.Add(
+                    { Symbol = Some updatedBinding.Symbol
+                      Kind = RudeEditKind.InsertConstructor
+                      Message = "Adding constructors is not supported." }
+                )
+            elif info.IsOperator then
+                // User-defined operators cannot be added
+                rude.Add(
+                    { Symbol = Some updatedBinding.Symbol
+                      Kind = RudeEditKind.InsertOperator
+                      Message = "Adding user-defined operators is not supported." }
+                )
+            elif info.IsInInterface then
+                // Members cannot be added to interfaces
+                rude.Add(
+                    { Symbol = Some updatedBinding.Symbol
+                      Kind = RudeEditKind.InsertIntoInterface
+                      Message = "Adding members to interfaces is not supported." }
+                )
+            elif info.IsMethod then
+                // Method can be added - emit as Insert edit
+                handleEdit updatedBinding SemanticEditKind.Insert None (Some updatedBinding.BodyHash)
+            else
+                // Other additions (module-level values) are still rude edits for now
+                rude.Add(
+                    { Symbol = Some updatedBinding.Symbol
+                      Kind = RudeEditKind.DeclarationAdded
+                      Message = "Adding module-level values is not supported." }
+                )
 
     edits |> Seq.toList, rude |> Seq.toList
 

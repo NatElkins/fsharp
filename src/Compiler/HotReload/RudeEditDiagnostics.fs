@@ -27,6 +27,18 @@ module internal RudeEditDiagnostics =
             sprintf "Adding a new declaration '%s' requires a rebuild." name
         | RudeEditKind.DeclarationRemoved ->
             sprintf "Removing the declaration '%s' requires a rebuild." name
+        | RudeEditKind.InsertVirtual ->
+            sprintf "Adding virtual, abstract, or override method '%s' is not supported." name
+        | RudeEditKind.InsertConstructor ->
+            sprintf "Adding constructor '%s' is not supported." name
+        | RudeEditKind.InsertOperator ->
+            sprintf "Adding user-defined operator '%s' is not supported." name
+        | RudeEditKind.InsertExplicitInterface ->
+            sprintf "Adding explicit interface implementation '%s' is not supported." name
+        | RudeEditKind.InsertIntoInterface ->
+            sprintf "Adding member '%s' to an interface is not supported." name
+        | RudeEditKind.FieldAdded ->
+            sprintf "Adding field '%s' is not supported (changes type layout)." name
         | RudeEditKind.Unsupported -> fallback
 
     let private diagnosticId kind =
@@ -36,6 +48,12 @@ module internal RudeEditDiagnostics =
         | RudeEditKind.TypeLayoutChange -> "FSHRDL003"
         | RudeEditKind.DeclarationAdded -> "FSHRDL004"
         | RudeEditKind.DeclarationRemoved -> "FSHRDL005"
+        | RudeEditKind.InsertVirtual -> "FSHRDL006"
+        | RudeEditKind.InsertConstructor -> "FSHRDL007"
+        | RudeEditKind.InsertOperator -> "FSHRDL008"
+        | RudeEditKind.InsertExplicitInterface -> "FSHRDL009"
+        | RudeEditKind.InsertIntoInterface -> "FSHRDL010"
+        | RudeEditKind.FieldAdded -> "FSHRDL011"
         | RudeEditKind.Unsupported -> "FSHRDL099"
 
     let ofRudeEdit (edit: RudeEdit) : RudeEditDiagnostic =

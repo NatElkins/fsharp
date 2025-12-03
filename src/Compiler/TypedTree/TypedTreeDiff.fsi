@@ -48,6 +48,13 @@ type RudeEditKind =
     | DeclarationAdded
     | DeclarationRemoved
     | Unsupported
+    // Method addition restrictions (following Roslyn patterns)
+    | InsertVirtual           // Virtual/abstract/override methods cannot be added
+    | InsertConstructor       // Constructors cannot be added to existing types
+    | InsertOperator          // User-defined operators cannot be added
+    | InsertExplicitInterface // Explicit interface implementations cannot be added
+    | InsertIntoInterface     // Members cannot be added to interfaces
+    | FieldAdded              // Fields cannot be added (type layout change)
 
 type SemanticEdit =
     { Symbol: SymbolId

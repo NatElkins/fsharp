@@ -202,3 +202,269 @@ module TypedTreeDiffTests =
         // Should produce a rude edit (type layout change) since mutability affects representation
         Assert.NotEmpty(result.RudeEdits)
         Assert.Equal(RudeEditKind.TypeLayoutChange, result.RudeEdits[0].Kind)
+
+    // =========================================================================
+    // Method Addition Tests
+    // Following Roslyn patterns for Edit and Continue restrictions
+    // =========================================================================
+
+    [<Fact>]
+    let ``adding instance method to class produces semantic edit`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+type MyClass() =
+    member this.Existing() = 1
+"""
+        let updated_source = """
+module Library
+type MyClass() =
+    member this.Existing() = 1
+    member this.NewMethod() = 42
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        // Adding a non-virtual instance method should produce an Insert semantic edit
+        Assert.Empty(result.RudeEdits)
+        Assert.Single(result.SemanticEdits) |> ignore
+        Assert.Equal(SemanticEditKind.Insert, result.SemanticEdits[0].Kind)
+
+    [<Fact>]
+    let ``adding static method to class produces semantic edit`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+type MyClass() =
+    static member Existing() = 1
+"""
+        let updated_source = """
+module Library
+type MyClass() =
+    static member Existing() = 1
+    static member NewStaticMethod() = 42
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        // Adding a static method should produce an Insert semantic edit
+        Assert.Empty(result.RudeEdits)
+        Assert.Single(result.SemanticEdits) |> ignore
+        Assert.Equal(SemanticEditKind.Insert, result.SemanticEdits[0].Kind)
+
+    [<Fact>]
+    let ``adding virtual method produces rude edit`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+type MyClass() =
+    member this.Existing() = 1
+"""
+        let updated_source = """
+module Library
+type MyClass() =
+    member this.Existing() = 1
+    abstract member NewVirtual : unit -> int
+    default this.NewVirtual() = 42
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        // Adding a virtual method should produce a rude edit
+        Assert.NotEmpty(result.RudeEdits)
+        // At least one should be InsertVirtual
+        let hasVirtualRudeEdit = result.RudeEdits |> List.exists (fun e -> e.Kind = RudeEditKind.InsertVirtual)
+        Assert.True(hasVirtualRudeEdit, "Expected InsertVirtual rude edit for adding virtual method")
+
+    [<Fact>]
+    let ``adding override method produces rude edit`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+type BaseClass() =
+    abstract member Method : unit -> int
+    default this.Method() = 1
+
+type DerivedClass() =
+    inherit BaseClass()
+"""
+        let updated_source = """
+module Library
+type BaseClass() =
+    abstract member Method : unit -> int
+    default this.Method() = 1
+
+type DerivedClass() =
+    inherit BaseClass()
+    override this.Method() = 42
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        // Adding an override method should produce a rude edit
+        Assert.NotEmpty(result.RudeEdits)
+        let hasVirtualRudeEdit = result.RudeEdits |> List.exists (fun e -> e.Kind = RudeEditKind.InsertVirtual)
+        Assert.True(hasVirtualRudeEdit, "Expected InsertVirtual rude edit for adding override method")
+
+    [<Fact>]
+    let ``adding operator produces rude edit`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+type MyNumber(value: int) =
+    member this.Value = value
+"""
+        let updated_source = """
+module Library
+type MyNumber(value: int) =
+    member this.Value = value
+    static member (+) (a: MyNumber, b: MyNumber) = MyNumber(a.Value + b.Value)
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        // Adding an operator should produce a rude edit
+        Assert.NotEmpty(result.RudeEdits)
+        let hasOperatorRudeEdit = result.RudeEdits |> List.exists (fun e -> e.Kind = RudeEditKind.InsertOperator)
+        Assert.True(hasOperatorRudeEdit, "Expected InsertOperator rude edit for adding operator")
+
+    [<Fact>]
+    let ``adding module-level value produces rude edit`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+let existingValue = 1
+"""
+        let updated_source = """
+module Library
+let existingValue = 1
+let newValue = 42
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        // Adding a module-level value should still produce a rude edit
+        Assert.NotEmpty(result.RudeEdits)
+        Assert.Equal(RudeEditKind.DeclarationAdded, result.RudeEdits[0].Kind)
+
+    // =========================================================================
+    // Property Addition Tests
+    // =========================================================================
+
+    [<Fact>]
+    let ``adding auto-property to class produces rude edit due to backing field`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+type MyClass() =
+    member val ExistingProp = 1 with get, set
+"""
+        let updated_source = """
+module Library
+type MyClass() =
+    member val ExistingProp = 1 with get, set
+    member val NewProp = 42 with get, set
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        // Adding an auto-property creates a backing field, which changes type layout
+        // This is correctly detected as a rude edit (TypeLayoutChange)
+        Assert.NotEmpty(result.RudeEdits)
+        let layoutChange = result.RudeEdits |> List.exists (fun e -> e.Kind = RudeEditKind.TypeLayoutChange)
+        Assert.True(layoutChange, "Expected TypeLayoutChange rude edit for auto-property addition")
+
+    [<Fact>]
+    let ``adding readonly property to class produces semantic edit`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+type MyClass() =
+    member this.ExistingProp = 1
+"""
+        let updated_source = """
+module Library
+type MyClass() =
+    member this.ExistingProp = 1
+    member this.NewReadonlyProp = 42
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        // Adding a readonly property should produce an Insert semantic edit
+        Assert.Empty(result.RudeEdits)
+        Assert.Single(result.SemanticEdits) |> ignore
+        Assert.Equal(SemanticEditKind.Insert, result.SemanticEdits[0].Kind)
+
+    // =========================================================================
+    // Event Addition Tests
+    // =========================================================================
+
+    [<Fact>]
+    let ``adding event with backing field produces rude edit due to type layout change`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+open System
+
+type MyClass() =
+    let existingEvent = Event<EventHandler, EventArgs>()
+    [<CLIEvent>]
+    member this.ExistingEvent = existingEvent.Publish
+"""
+        let updated_source = """
+module Library
+open System
+
+type MyClass() =
+    let existingEvent = Event<EventHandler, EventArgs>()
+    let newEvent = Event<EventHandler, EventArgs>()
+    [<CLIEvent>]
+    member this.ExistingEvent = existingEvent.Publish
+    [<CLIEvent>]
+    member this.NewEvent = newEvent.Publish
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        // Adding an event with a backing field (let newEvent = ...) adds a field to the class,
+        // which changes the type layout. This is correctly detected as a TypeLayoutChange rude edit.
+        Assert.NotEmpty(result.RudeEdits)
+        let hasLayoutChange = result.RudeEdits |> List.exists (fun e -> e.Kind = RudeEditKind.TypeLayoutChange)
+        Assert.True(hasLayoutChange, "Expected TypeLayoutChange rude edit for event backing field")

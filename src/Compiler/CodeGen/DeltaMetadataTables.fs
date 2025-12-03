@@ -8,6 +8,8 @@ open Microsoft.FSharp.Collections
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
+open FSharp.Compiler.AbstractIL.ILMetadataHeaps
+open FSharp.Compiler.AbstractIL.ILEncLogWriter
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
@@ -744,3 +746,35 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
                 printfn "[fsharp-hotreload][heap-offsets] WARNING: offset %d <= heapStart %d - this may indicate stale baseline!" offset start
         userStrings.AddEntry(relativeOffset, value)
         userStringHeapBytesCache <- None
+
+    // =========================================================================
+    // IMetadataHeaps interface implementation
+    // Provides unified heap access for code that works with both full assembly
+    // and delta emission.
+    // =========================================================================
+
+    /// Get the IMetadataHeaps interface for unified heap access.
+    member this.AsMetadataHeaps() : IMetadataHeaps =
+        { new IMetadataHeaps with
+            member _.GetStringHeapIdx s = addStringValue s
+            member _.GetBlobHeapIdx bytes = addBlobBytes bytes
+            member _.GetGuidIdx info = guids.AddSharedEntry info
+            member _.GetUserStringHeapIdx s =
+                // For user strings, we need to track them differently
+                // since they're position-based in delta heaps
+                addStringValue s }
+
+    // =========================================================================
+    // IEncLogWriter interface implementation
+    // Provides unified EncLog recording for delta emission.
+    // =========================================================================
+
+    /// Get an IEncLogWriter that records to this table's EncLog/EncMap.
+    member this.AsEncLogWriter() : IEncLogWriter =
+        { new IEncLogWriter with
+            member _.RecordAddition(table, rowId, operation) =
+                this.AddEncLogRow(table, rowId, operation)
+            member _.RecordUpdate(table, rowId) =
+                this.AddEncLogRow(table, rowId, EditAndContinueOperation.Default)
+            member _.RecordEncMapEntry(table, rowId) =
+                this.AddEncMapRow(table, rowId) }
