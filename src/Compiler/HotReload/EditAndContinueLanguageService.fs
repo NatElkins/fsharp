@@ -19,9 +19,6 @@ open FSharp.Compiler.SynthesizedTypeMaps
 type internal FSharpEditAndContinueLanguageService private () =
 
     static let lazyInstance = lazy FSharpEditAndContinueLanguageService()
-    /// Lock to coordinate updates between HotReloadState.session and lastBaselineState
-    static let stateLock = obj ()
-    static let mutable lastBaselineState : (FSharpEmitBaseline * CheckedAssemblyAfterOptimization) option = None
     static let shouldTraceMetadata () =
         match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METADATA") with
         | null -> false
@@ -45,9 +42,7 @@ type internal FSharpEditAndContinueLanguageService private () =
                 Activity.Tags.hotReloadAction, "baseline"
             |]
 
-        lock stateLock (fun () ->
-            FSharp.Compiler.HotReloadState.setBaseline baseline (CheckedAssemblyAfterOptimization [])
-            lastBaselineState <- Some(baseline, CheckedAssemblyAfterOptimization []))
+        FSharp.Compiler.HotReloadState.setBaseline baseline (CheckedAssemblyAfterOptimization [])
 
     member _.StartSession(baseline: FSharpEmitBaseline, implementationFiles: CheckedAssemblyAfterOptimization) =
         use _ =
@@ -56,9 +51,7 @@ type internal FSharpEditAndContinueLanguageService private () =
                 Activity.Tags.hotReloadAction, "baseline+impl"
             |]
 
-        lock stateLock (fun () ->
-            FSharp.Compiler.HotReloadState.setBaseline baseline implementationFiles
-            lastBaselineState <- Some(baseline, implementationFiles))
+        FSharp.Compiler.HotReloadState.setBaseline baseline implementationFiles
 
     /// <summary>Attempts to fetch the current baseline.</summary>
     member _.TryGetBaseline() =
@@ -68,17 +61,21 @@ type internal FSharpEditAndContinueLanguageService private () =
     member _.TryGetSession() =
         FSharp.Compiler.HotReloadState.tryGetSession()
 
+    /// <summary>Attempts to restore the active session from the last committed snapshot.</summary>
+    member _.TryRestoreSession() =
+        FSharp.Compiler.HotReloadState.tryRestoreSession()
+
     /// <summary>Updates the stored EncId after a successful delta application.</summary>
     member _.OnDeltaApplied(generationId: Guid) =
-        lock stateLock (fun () ->
-            FSharp.Compiler.HotReloadState.recordDeltaApplied generationId
-            match FSharp.Compiler.HotReloadState.tryGetSession() with
-            | ValueSome session -> lastBaselineState <- Some(session.Baseline, session.ImplementationFiles)
-            | ValueNone -> ())
+        FSharp.Compiler.HotReloadState.recordDeltaApplied generationId
 
     /// <summary>Clears the session, typically when hot reload is disabled or the build finishes.</summary>
     member _.EndSession() =
         FSharp.Compiler.HotReloadState.clearBaseline()
+
+    /// <summary>Clears both active and restorable session state.</summary>
+    member _.ResetSessionState() =
+        FSharp.Compiler.HotReloadState.clearSessionState()
 
     /// <summary>
     /// Emits a delta for the supplied request; callers may commit the delta by invoking <see cref="OnDeltaApplied"/>.
@@ -139,8 +136,7 @@ type internal FSharpEditAndContinueLanguageService private () =
                             delta.GenerationId
                             delta.BaseGenerationId
                             updatedBaseline.EncId
-                    lock stateLock (fun () ->
-                        FSharp.Compiler.HotReloadState.updateBaseline updatedBaseline)
+                    FSharp.Compiler.HotReloadState.updateBaseline updatedBaseline
                 | None -> ()
                 Ok { Delta = delta }
             with
@@ -166,26 +162,9 @@ type internal FSharpEditAndContinueLanguageService private () =
         updatedImplementation: CheckedAssemblyAfterOptimization,
         ilModule: ILModuleDef
     ) : Result<DeltaEmissionResult, HotReloadError> =
-        // Atomic check-then-restore to prevent TOCTOU race between tryGetSession
-        // returning ValueNone and setBaseline being called by another thread.
-        //
-        // State restoration rationale: In some IDE scenarios, the HotReloadState.session
-        // may be cleared by EndSession() while a compilation is still in progress. The
-        // lastBaselineState serves as a backup to restore the session state, allowing
-        // delta emission to proceed even if the primary state was reset. This ensures
-        // continuous delta emission during rapid recompilation cycles without requiring
-        // explicit session restart by the host.
-        let sessionOpt =
-            lock stateLock (fun () ->
-                match FSharp.Compiler.HotReloadState.tryGetSession() with
-                | ValueNone ->
-                    // Restore from backup if primary session was cleared
-                    match lastBaselineState with
-                    | Some(baseline, implementationFiles) ->
-                        FSharp.Compiler.HotReloadState.setBaseline baseline implementationFiles
-                        FSharp.Compiler.HotReloadState.tryGetSession()
-                    | None -> ValueNone
-                | ValueSome _ as session -> session)
+        // Session ownership is centralized in HotReloadState. If an active session was cleared
+        // by an overlapping build, restore from the last committed snapshot before emitting.
+        let sessionOpt = FSharp.Compiler.HotReloadState.tryRestoreSession ()
 
         match sessionOpt with
         | ValueNone -> Error HotReloadError.NoActiveSession
@@ -228,11 +207,6 @@ type internal FSharpEditAndContinueLanguageService private () =
                             this.CommitPendingUpdate(result.Delta.GenerationId)
 
                         FSharp.Compiler.HotReloadState.updateImplementationFiles updatedImplementation
-                        lock stateLock (fun () ->
-                            match FSharp.Compiler.HotReloadState.tryGetSession() with
-                            | ValueSome updatedSession ->
-                                lastBaselineState <- Some(updatedSession.Baseline, updatedImplementation)
-                            | ValueNone -> ())
                         Ok result
                     | Error error -> Error error
 

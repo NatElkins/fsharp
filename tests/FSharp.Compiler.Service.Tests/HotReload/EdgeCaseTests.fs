@@ -402,9 +402,20 @@ module EdgeCaseTests =
             let initialSession = tryGetSession ()
             let initialGen = initialSession.Value.CurrentGeneration
 
-            // Act - simulate 100+ consecutive deltas
+            // Act - simulate 100+ consecutive committed deltas using pending-update semantics
+            let mutable workingBaseline = baseline
+
             for _ in 1..150 do
-                recordDeltaApplied (System.Guid.NewGuid())
+                let generationId = System.Guid.NewGuid()
+
+                let stagedBaseline =
+                    { workingBaseline with
+                        EncId = generationId
+                        NextGeneration = workingBaseline.NextGeneration + 1 }
+
+                updateBaseline stagedBaseline
+                recordDeltaApplied generationId
+                workingBaseline <- stagedBaseline
 
             // Assert
             let finalSession = tryGetSession ()

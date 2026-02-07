@@ -1244,30 +1244,18 @@ let main6
                         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
 
                         let baseline =
-                            // Use byte-based functions to avoid SRM dependency
-                            let moduleId =
-                                HotReloadBaseline.readModuleMvid assemblyBytes
-                                |> Option.defaultWith System.Guid.NewGuid
-                            let metadataSnapshot =
-                                HotReloadBaseline.metadataSnapshotFromBytes assemblyBytes
-                                |> Option.defaultWith (fun () -> failwith "Failed to read metadata from assembly bytes")
-                            let coreBaseline =
+                            let ilxGenEnvironment =
                                 if obj.ReferenceEquals(ilxGenEnvSnapshot, null) then
-                                    HotReloadBaseline.create
-                                        ilxMainModule
-                                        tokenMappings
-                                        metadataSnapshot
-                                        moduleId
-                                        portablePdbSnapshot
+                                    None
                                 else
-                                    HotReloadBaseline.createWithEnvironment
-                                        ilxMainModule
-                                        tokenMappings
-                                        metadataSnapshot
-                                        ilxGenEnvSnapshot
-                                        moduleId
-                                        portablePdbSnapshot
-                            HotReloadBaseline.attachMetadataHandlesFromBytes assemblyBytes coreBaseline
+                                    Some ilxGenEnvSnapshot
+
+                            HotReloadBaseline.createFromEmittedArtifacts
+                                ilxMainModule
+                                tokenMappings
+                                assemblyBytes
+                                portablePdbSnapshot
+                                ilxGenEnvironment
 
                         FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, optimizedImpls)
                         match tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps with

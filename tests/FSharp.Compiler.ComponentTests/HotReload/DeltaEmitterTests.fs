@@ -1705,6 +1705,28 @@ module DeltaEmitterTests =
         service.EndSession()
 
     [<Fact>]
+    let ``TryRestoreSession rehydrates committed snapshot and ResetSessionState clears it`` () =
+        let service = FSharpEditAndContinueLanguageService.Instance
+        service.ResetSessionState()
+
+        let _, baseline = createBaseline ()
+        service.StartSession baseline
+        service.EndSession()
+
+        let restored =
+            match service.TryRestoreSession() with
+            | ValueSome session -> session
+            | ValueNone -> failwith "Expected committed session snapshot to be restorable."
+
+        Assert.Equal(1, restored.CurrentGeneration)
+        Assert.Equal(baseline.ModuleId, restored.Baseline.ModuleId)
+        Assert.True(service.IsSessionActive)
+
+        service.ResetSessionState()
+        Assert.False(service.IsSessionActive)
+        Assert.True(service.TryRestoreSession().IsNone)
+
+    [<Fact>]
     let ``EditAndContinueLanguageService emits delta`` () =
         let service = FSharpEditAndContinueLanguageService.Instance
         service.EndSession()

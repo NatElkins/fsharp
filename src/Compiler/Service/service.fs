@@ -220,8 +220,6 @@ type FSharpChecker
 
     let mutable currentSynthesizedTypeMaps: FSharpSynthesizedTypeMaps option = None
 
-    let mutable currentBaselineState: (FSharpEmitBaseline * CheckedAssemblyAfterOptimization) option = None
-
     // Snapshot of the last committed output assembly. If semantic edits are detected while this
     // fingerprint remains unchanged, we refuse to emit deltas from stale binaries.
     let mutable currentOutputFingerprint: (DateTime * byte[] option) option = None
@@ -440,17 +438,14 @@ type FSharpChecker
             ILBinaryWriter.WriteILBinaryInMemoryWithArtifacts(writerOptions, ilModule, id)
 
         let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
-
-        // Use byte-based functions to avoid SRM dependency
         let assemblyBytes = File.ReadAllBytes(outputPath)
-        let moduleId =
-            HotReloadBaseline.readModuleMvid assemblyBytes
-            |> Option.defaultWith System.Guid.NewGuid
-        let metadataSnapshot =
-            HotReloadBaseline.metadataSnapshotFromBytes assemblyBytes
-            |> Option.defaultWith (fun () -> failwith "Failed to read metadata from assembly bytes")
-        let baselineCore = HotReloadBaseline.create ilModule tokenMappings metadataSnapshot moduleId portablePdbSnapshot
-        HotReloadBaseline.attachMetadataHandlesFromBytes assemblyBytes baselineCore
+
+        HotReloadBaseline.createFromEmittedArtifacts
+            ilModule
+            tokenMappings
+            assemblyBytes
+            portablePdbSnapshot
+            None
 
     static member getParallelReferenceResolutionFromEnvironment() =
         getParallelReferenceResolutionFromEnvironment ()
@@ -591,7 +586,6 @@ type FSharpChecker
 
                             FSharpEditAndContinueLanguageService.Instance.EndSession()
                             FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
-                            currentBaselineState <- Some(baseline, implementationFiles)
                             currentOutputFingerprint <- tryGetOutputFingerprint outputPath)
 
                         return Result.Ok ()
@@ -632,8 +626,8 @@ type FSharpChecker
 
                     lock hotReloadGate (fun () ->
                         if not FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
-                            match currentBaselineState with
-                            | Some(baseline, implementationFiles) ->
+                            match FSharpEditAndContinueLanguageService.Instance.TryRestoreSession() with
+                            | ValueSome restoredSession ->
                                 let compilerState = tcGlobals.CompilerGlobalState.Value
 
                                 let map =
@@ -641,17 +635,15 @@ type FSharpChecker
                                     | Some existing -> existing
                                     | None ->
                                         let created = FSharpSynthesizedTypeMaps()
-                                        baseline.SynthesizedNameSnapshot
-                                        |> Map.toSeq
-                                        |> created.LoadSnapshot
                                         currentSynthesizedTypeMaps <- Some created
                                         created
 
+                                restoredSession.Baseline.SynthesizedNameSnapshot
+                                |> Map.toSeq
+                                |> map.LoadSnapshot
                                 map.BeginSession()
                                 compilerState.SynthesizedTypeMaps <- Some map
-
-                                FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
-                            | None -> ())
+                            | ValueNone -> ())
 
                     if not FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
                         return Result.Error FSharpHotReloadError.NoActiveSession
@@ -712,14 +704,9 @@ type FSharpChecker
                                     )
                                 with
                                 | Ok result ->
-                                    // Update currentBaselineState with the updated baseline so that
-                                    // subsequent deltas chain correctly after session is restored
-                                    // (compilation clears the session, so we need to preserve the
-                                    // updated baseline for the next delta emission).
                                     match result.Delta.UpdatedBaseline with
-                                    | Some updatedBaseline ->
+                                    | Some _ ->
                                         lock hotReloadGate (fun () ->
-                                            currentBaselineState <- Some(updatedBaseline, optimizedImpls)
                                             currentOutputFingerprint <- outputFingerprint)
                                     | None -> ()
                                     return Result.Ok(toPublicDelta result.Delta)
@@ -729,9 +716,8 @@ type FSharpChecker
     member _.EndHotReloadSession() =
         lock hotReloadGate (fun () ->
             currentSynthesizedTypeMaps <- None
-            currentBaselineState <- None
             currentOutputFingerprint <- None
-            FSharpEditAndContinueLanguageService.Instance.EndSession())
+            FSharpEditAndContinueLanguageService.Instance.ResetSessionState())
 
     member _.HotReloadSessionActive = FSharpEditAndContinueLanguageService.Instance.IsSessionActive
 

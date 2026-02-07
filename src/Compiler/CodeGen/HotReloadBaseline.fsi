@@ -152,6 +152,15 @@ val readModuleMvid: bytes: byte[] -> System.Guid option
 /// Attach metadata handles from PE bytes without using SRM MetadataReader.
 val attachMetadataHandlesFromBytes: bytes: byte[] -> baseline: FSharpEmitBaseline -> FSharpEmitBaseline
 
+/// <summary>Create a baseline from emitted assembly bytes, shared by CLI/checker hot reload entry points.</summary>
+val createFromEmittedArtifacts:
+    ilModule: ILModuleDef ->
+    tokenMappings: ILTokenMappings ->
+    assemblyBytes: byte[] ->
+    portablePdbSnapshot: PortablePdbSnapshot option ->
+    ilxGenEnvironment: IlxGenEnvSnapshot option ->
+        FSharpEmitBaseline
+
 val applyDelta:
     baseline: FSharpEmitBaseline ->
     deltaTableCounts: int[] ->

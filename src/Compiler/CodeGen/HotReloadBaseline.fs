@@ -738,3 +738,40 @@ let attachMetadataHandlesFromBytes (bytes: byte[]) (baseline: FSharpEmitBaseline
             ModuleNameOffset = moduleNameOffset
             TypeReferenceTokens = typeReferenceTokens
             AssemblyReferenceTokens = assemblyReferenceTokens }
+
+/// <summary>
+/// Create a baseline directly from emitted assembly artifacts.
+/// Shared by CLI and checker entry points to keep token/heap capture behavior aligned.
+/// </summary>
+let createFromEmittedArtifacts
+    (ilModule: ILModuleDef)
+    (tokenMappings: ILTokenMappings)
+    (assemblyBytes: byte[])
+    (portablePdbSnapshot: PortablePdbSnapshot option)
+    (ilxGenEnvironment: IlxGenEnvSnapshot option)
+    : FSharpEmitBaseline
+    =
+    let moduleId = readModuleMvid assemblyBytes |> Option.defaultWith System.Guid.NewGuid
+    let metadataSnapshot =
+        metadataSnapshotFromBytes assemblyBytes
+        |> Option.defaultWith (fun () -> failwith "Failed to read metadata from assembly bytes")
+
+    let baselineCore =
+        match ilxGenEnvironment with
+        | Some snapshot ->
+            createWithEnvironment
+                ilModule
+                tokenMappings
+                metadataSnapshot
+                snapshot
+                moduleId
+                portablePdbSnapshot
+        | None ->
+            create
+                ilModule
+                tokenMappings
+                metadataSnapshot
+                moduleId
+                portablePdbSnapshot
+
+    attachMetadataHandlesFromBytes assemblyBytes baselineCore
