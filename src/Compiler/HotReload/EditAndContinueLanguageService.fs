@@ -196,12 +196,20 @@ type internal FSharpEditAndContinueLanguageService private () =
 
             if not (List.isEmpty symbolChanges.RudeEdits) then
                 Error(HotReloadError.UnsupportedEdit "Rude edits detected; full rebuild required.")
-            elif not (List.isEmpty symbolChanges.Added) || not (List.isEmpty symbolChanges.Deleted) then
-                Error(HotReloadError.UnsupportedEdit "Structural edits detected; full rebuild required.")
+            elif not (List.isEmpty symbolChanges.Deleted) then
+                Error(HotReloadError.UnsupportedEdit "Deleted symbols detected; full rebuild required.")
             else
                 let updatedTypes, updatedMethods, accessorUpdates = mapSymbolChangesToDelta session.Baseline symbolChanges
 
-                if List.isEmpty updatedMethods then
+                // Insert-only edits (for example, adding an allowed non-virtual method) may not produce
+                // method-body updates, but still need to flow to IlxDeltaEmitter so new MethodDef rows are emitted.
+                let hasUpdates =
+                    not (List.isEmpty updatedTypes)
+                    || not (List.isEmpty updatedMethods)
+                    || not (List.isEmpty accessorUpdates)
+                    || not (List.isEmpty symbolChanges.Added)
+
+                if not hasUpdates then
                     Error HotReloadError.NoChanges
                 else
                     let request : DeltaEmissionRequest =

@@ -79,6 +79,15 @@ type Type =
     static member GetValue() = 2
 """
 
+    let private insertedMethodSource =
+        """
+namespace Sample
+
+type Type =
+    static member GetValue() = 1
+    static member GetExtra() = 99
+"""
+
     let private compileProject (checker: FSharpChecker) (fsPath: string) (dllPath: string) (source: string) =
         File.WriteAllText(fsPath, source)
 
@@ -228,6 +237,64 @@ type Type =
 
                 Assert.Equal(2, session.CurrentGeneration)
                 Assert.True(session.PreviousGenerationId.IsSome)
+        finally
+            try checker.InvalidateAll() with _ -> ()
+            try Directory.Delete(projectDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``EmitDeltaForCompilation allows supported method insertion edits`` () =
+        let checker =
+            FSharpChecker.Create(
+                keepAssemblyContents = true,
+                enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                captureIdentifiersWhenParsing = false
+            )
+
+        let projectDir, fsPath, dllPath = createTempProject ()
+
+        try
+            let baselineResults = compileProject checker fsPath dllPath baselineSource
+            let tcGlobals, baselineImplementation = getTypedAssembly baselineResults
+            let baseline = createBaseline tcGlobals dllPath
+
+            let service = FSharpEditAndContinueLanguageService.Instance
+            service.EndSession()
+            service.StartSession(baseline, baselineImplementation)
+
+            let updatedResults = compileProject checker fsPath dllPath insertedMethodSource
+            let updatedTcGlobals, updatedImplementation = getTypedAssembly updatedResults
+            let updatedModule =
+                let options : ILReaderOptions =
+                    { pdbDirPath = None
+                      reduceMemoryUsage = ReduceMemoryFlag.Yes
+                      metadataOnly = MetadataOnlyFlag.No
+                      tryGetMetadataSnapshot = fun _ -> None }
+
+                use reader = OpenILModuleReader dllPath options
+                reader.ILModuleDef
+
+            // The build pipeline may clear session state during writes; restore the baseline snapshot before emit.
+            service.StartSession(baseline, baselineImplementation)
+
+            match service.EmitDeltaForCompilation(updatedTcGlobals, updatedImplementation, updatedModule) with
+            | Error error -> failwithf "EmitDeltaForCompilation failed for method insertion: %A" error
+            | Ok result ->
+                let hasMethodAdd =
+                    result.Delta.EncLog
+                    |> Array.exists (fun (table, _, op) ->
+                        table = FSharp.Compiler.AbstractIL.BinaryConstants.TableNames.Method
+                        && op = FSharp.Compiler.AbstractIL.ILDeltaHandles.EditAndContinueOperation.AddMethod)
+
+                Assert.True(hasMethodAdd, "Expected MethodDef add operation for inserted method.")
+
+                match result.Delta.UpdatedBaseline with
+                | Some updatedBaseline ->
+                    let containsInsertedMethod =
+                        updatedBaseline.MethodTokens
+                        |> Map.exists (fun key _ -> key.DeclaringType = "Sample.Type" && key.Name = "GetExtra")
+                    Assert.True(containsInsertedMethod, "Updated baseline missing inserted method token.")
+                | None ->
+                    Assert.True(false, "Updated baseline missing after method insertion delta.")
         finally
             try checker.InvalidateAll() with _ -> ()
             try Directory.Delete(projectDir, true) with _ -> ()
