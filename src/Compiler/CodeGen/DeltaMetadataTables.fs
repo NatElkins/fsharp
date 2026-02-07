@@ -259,6 +259,8 @@ type private UserStringHeapBuilder() =
             maxLength <- max maxLength neededLength
             bytesCache <- None
 
+    member _.NextOffset = maxLength
+
     member this.Bytes
         with get () =
             match buffer with
@@ -287,6 +289,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let blobs = ByteArrayHeapBuilder()
     let guids = ByteArrayHeapBuilder()
     let userStrings = UserStringHeapBuilder()
+    let userStringLookup = Dictionary<string, int>(StringComparer.Ordinal)
     let mutable stringHeapBytesCache: byte[] option = None
     let mutable blobHeapBytesCache: byte[] option = None
     let mutable guidHeapBytesCache: byte[] option = None
@@ -347,6 +350,22 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         rowElement (RowElementTags.CustomAttributeType tag) ctor.RowId
 
     let addStringValue (value: string) = if String.IsNullOrEmpty value then 0 else strings.AddSharedEntry value
+
+    let addUserStringValue (value: string) =
+        if String.IsNullOrEmpty value then
+            0
+        else
+            match userStringLookup.TryGetValue value with
+            | true, offset -> offset
+            | _ ->
+                // #US tokens store offsets, so allocate a new literal at the next free delta-local offset
+                // and translate it back to the absolute heap offset expected by IL operands.
+                let relativeOffset = userStrings.NextOffset
+                let absoluteOffset = heapOffsets.UserStringHeapStart + relativeOffset
+                userStrings.AddEntry(relativeOffset, value)
+                userStringLookup[value] <- absoluteOffset
+                userStringHeapBytesCache <- None
+                absoluteOffset
 
     let addExistingStringOffset (offsetOpt: StringOffset option) (value: string) : int * bool =
         match offsetOpt with
@@ -759,10 +778,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             member _.GetStringHeapIdx s = addStringValue s
             member _.GetBlobHeapIdx bytes = addBlobBytes bytes
             member _.GetGuidIdx info = guids.AddSharedEntry info
-            member _.GetUserStringHeapIdx s =
-                // For user strings, we need to track them differently
-                // since they're position-based in delta heaps
-                addStringValue s }
+            member _.GetUserStringHeapIdx s = addUserStringValue s }
 
     // =========================================================================
     // IEncLogWriter interface implementation

@@ -15,6 +15,7 @@ open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.AbstractIL.BinaryConstants
+open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open System.Diagnostics
 open System.IO
 open System.Reflection.Metadata
@@ -1622,21 +1623,18 @@ module DeltaEmitterTests =
         Assert.Equal(1, session0.CurrentGeneration)
         Assert.True(session0.PreviousGenerationId |> Option.isNone)
 
-        let moduleGen1 = createModule 43 |> TestHelpers.withDebuggableAttribute
-        let requestGen1 =
-            {
-                IlxDeltaRequest.Baseline = session0.Baseline
-                UpdatedTypes = [ "Sample.Type" ]
-                UpdatedMethods = [ methodKey baseline "GetValue" ]
-                UpdatedAccessors = []
-                Module = moduleGen1
-                SymbolChanges = None
-                CurrentGeneration = session0.CurrentGeneration
-                PreviousGenerationId = session0.PreviousGenerationId
-                SynthesizedNames = None
-            }
+        let requestGen1 : DeltaEmissionRequest =
+            { IlModule = createModule 43 |> TestHelpers.withDebuggableAttribute
+              UpdatedTypes = [ "Sample.Type" ]
+              UpdatedMethods = [ methodKey baseline "GetValue" ]
+              UpdatedAccessors = []
+              SymbolChanges = None }
 
-        let delta1 = emitDelta requestGen1
+        let delta1 =
+            match service.EmitDelta requestGen1 with
+            | Ok result -> result.Delta
+            | Error error -> failwithf "EmitDelta (generation 1) failed: %A" error
+
         Assert.Equal(System.Guid.Empty, delta1.BaseGenerationId)
         Assert.NotEqual(System.Guid.Empty, delta1.GenerationId)
 
@@ -1650,23 +1648,59 @@ module DeltaEmitterTests =
         Assert.Equal(2, session1.CurrentGeneration)
         Assert.Equal<Guid option>(Some delta1.GenerationId, session1.PreviousGenerationId)
 
-        let moduleGen2 = createModule 44 |> TestHelpers.withDebuggableAttribute
-        let requestGen2 =
-            {
-                IlxDeltaRequest.Baseline = session1.Baseline
-                UpdatedTypes = [ "Sample.Type" ]
-                UpdatedMethods = [ methodKey baseline "GetValue" ]
-                UpdatedAccessors = []
-                Module = moduleGen2
-                SymbolChanges = None
-                CurrentGeneration = session1.CurrentGeneration
-                PreviousGenerationId = session1.PreviousGenerationId
-                SynthesizedNames = None
-            }
+        let requestGen2 : DeltaEmissionRequest =
+            { IlModule = createModule 44 |> TestHelpers.withDebuggableAttribute
+              UpdatedTypes = [ "Sample.Type" ]
+              UpdatedMethods = [ methodKey baseline "GetValue" ]
+              UpdatedAccessors = []
+              SymbolChanges = None }
 
-        let delta2 = emitDelta requestGen2
+        let delta2 =
+            match service.EmitDelta requestGen2 with
+            | Ok result -> result.Delta
+            | Error error -> failwithf "EmitDelta (generation 2) failed: %A" error
+
         Assert.Equal(delta1.GenerationId, delta2.BaseGenerationId)
         Assert.NotEqual(System.Guid.Empty, delta2.GenerationId)
+
+        service.EndSession()
+
+    [<Fact>]
+    let ``DiscardPendingUpdate clears staged delta without advancing session`` () =
+        let service = FSharpEditAndContinueLanguageService.Instance
+        service.EndSession()
+        let _, baseline = createBaseline ()
+        service.StartSession baseline
+
+        let request : DeltaEmissionRequest =
+            { IlModule = createModule 85 |> TestHelpers.withDebuggableAttribute
+              UpdatedTypes = [ "Sample.Type" ]
+              UpdatedMethods = [ methodKey baseline "GetValue" ]
+              UpdatedAccessors = []
+              SymbolChanges = None }
+
+        let pendingDelta =
+            match service.EmitDelta request with
+            | Ok result -> result.Delta
+            | Error error -> failwithf "EmitDelta failed: %A" error
+
+        service.DiscardPendingUpdate()
+
+        let sessionAfterDiscard =
+            match service.TryGetSession() with
+            | ValueSome session -> session
+            | ValueNone -> failwith "Expected hot reload session to remain active after discarding pending update."
+
+        Assert.Equal(1, sessionAfterDiscard.CurrentGeneration)
+        Assert.True(sessionAfterDiscard.PreviousGenerationId |> Option.isNone)
+        Assert.Equal(baseline.NextGeneration, sessionAfterDiscard.Baseline.NextGeneration)
+        Assert.Equal(baseline.EncId, sessionAfterDiscard.Baseline.EncId)
+
+        let ex =
+            Assert.Throws<InvalidOperationException>(fun () ->
+                service.CommitPendingUpdate(pendingDelta.GenerationId))
+
+        Assert.Contains("no pending hot reload update", ex.Message, StringComparison.OrdinalIgnoreCase)
 
         service.EndSession()
 
@@ -1731,6 +1765,26 @@ module DeltaEmitterTests =
         let expected = 0x11000000 ||| standalone.RowId
         Assert.Equal(expected, token)
         Assert.Equal<byte[]>(signature, standalone.Blob)
+
+    [<Fact>]
+    let ``IMetadataHeaps.GetUserStringHeapIdx writes #US entries`` () =
+        let offsets =
+            MetadataHeapOffsets.OfHeapSizes
+                { StringHeapSize = 13
+                  UserStringHeapSize = 29
+                  BlobHeapSize = 7
+                  GuidHeapSize = 3 }
+
+        let tables = DeltaMetadataTables(offsets)
+        let heaps = tables.AsMetadataHeaps()
+
+        let token1 = heaps.GetUserStringHeapIdx "hello from us"
+        let token2 = heaps.GetUserStringHeapIdx "hello from us"
+
+        Assert.Equal(token1, token2)
+        Assert.True(token1 > offsets.UserStringHeapStart, "User-string token should point into the #US heap suffix.")
+        Assert.Equal(1, tables.StringHeapBytes.Length) // only null sentinel, no #Strings additions
+        Assert.True(tables.UserStringHeapBytes.Length > 1, "#US heap should contain the encoded literal payload.")
 
     [<Fact>]
     let ``IL delta fat header matches method body length`` () =

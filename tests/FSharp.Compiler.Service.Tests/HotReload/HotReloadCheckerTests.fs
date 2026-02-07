@@ -162,6 +162,42 @@ type Type =
             Directory.Delete(projectDir, true)
         with _ -> ()
 
+    [<Fact>]
+    let ``EmitHotReloadDelta rejects stale output assembly`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-stale-output", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        File.WriteAllText(fsPath, baselineSource)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baselineSource
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        File.WriteAllText(fsPath, updatedSource)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+
+        // Intentionally skip recompilation so the output assembly stays stale.
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Error (FSharpHotReloadError.DeltaEmissionFailed message) ->
+            Assert.Contains("stale build output", message, StringComparison.OrdinalIgnoreCase)
+        | Error other -> failwithf "Expected DeltaEmissionFailed for stale output, got %A" other
+        | Ok _ -> failwith "Expected stale output detection to reject delta emission."
+
+        checker.EndHotReloadSession()
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
     // -------------------------------------------------------------------------
     // Rude Edit Rejection Tests
     // -------------------------------------------------------------------------

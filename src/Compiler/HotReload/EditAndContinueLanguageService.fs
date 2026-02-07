@@ -70,7 +70,11 @@ type internal FSharpEditAndContinueLanguageService private () =
 
     /// <summary>Updates the stored EncId after a successful delta application.</summary>
     member _.OnDeltaApplied(generationId: Guid) =
-        FSharp.Compiler.HotReloadState.recordDeltaApplied generationId
+        lock stateLock (fun () ->
+            FSharp.Compiler.HotReloadState.recordDeltaApplied generationId
+            match FSharp.Compiler.HotReloadState.tryGetSession() with
+            | ValueSome session -> lastBaselineState <- Some(session.Baseline, session.ImplementationFiles)
+            | ValueNone -> ())
 
     /// <summary>Clears the session, typically when hot reload is disabled or the build finishes.</summary>
     member _.EndSession() =
@@ -131,13 +135,12 @@ type internal FSharpEditAndContinueLanguageService private () =
                 | Some updatedBaseline ->
                     if trace then
                         printfn
-                            "[fsharp-hotreload][service] updating baseline encId=%O baseId=%O newBaselineEncId=%O"
+                            "[fsharp-hotreload][service] staging pending baseline encId=%O baseId=%O newBaselineEncId=%O"
                             delta.GenerationId
                             delta.BaseGenerationId
                             updatedBaseline.EncId
                     lock stateLock (fun () ->
-                        FSharp.Compiler.HotReloadState.updateBaseline updatedBaseline
-                        lastBaselineState <- Some(updatedBaseline, session.ImplementationFiles))
+                        FSharp.Compiler.HotReloadState.updateBaseline updatedBaseline)
                 | None -> ()
                 Ok { Delta = delta }
             with
@@ -221,8 +224,15 @@ type internal FSharpEditAndContinueLanguageService private () =
 
                     match this.EmitDelta request with
                     | Ok result ->
-                        this.CommitPendingUpdate(result.Delta.GenerationId)
+                        if result.Delta.UpdatedBaseline.IsSome then
+                            this.CommitPendingUpdate(result.Delta.GenerationId)
+
                         FSharp.Compiler.HotReloadState.updateImplementationFiles updatedImplementation
+                        lock stateLock (fun () ->
+                            match FSharp.Compiler.HotReloadState.tryGetSession() with
+                            | ValueSome updatedSession ->
+                                lastBaselineState <- Some(updatedSession.Baseline, updatedImplementation)
+                            | ValueNone -> ())
                         Ok result
                     | Error error -> Error error
 
@@ -230,6 +240,6 @@ type internal FSharpEditAndContinueLanguageService private () =
     member this.CommitPendingUpdate(generationId: Guid) =
         this.OnDeltaApplied(generationId)
 
-    /// <summary>Explicit discard hook (no-op today, reserved for future bookkeeping).</summary>
+    /// <summary>Explicit discard hook mirroring Roslyn's pending-update semantics.</summary>
     member _.DiscardPendingUpdate() =
-        ()
+        FSharp.Compiler.HotReloadState.discardPendingUpdate()

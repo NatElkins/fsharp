@@ -148,7 +148,13 @@ let emitWithUserStrings
           BaseGenerationId = encBaseId }
     else
 
-        printfn "[emitWithUserStrings] generation=%d moduleId=%A encId=%A encBaseId=%A" generation moduleId encId encBaseId
+        if shouldTraceMetadata () then
+            printfn
+                "[fsharp-hotreload][metadata-writer] generation=%d moduleId=%A encId=%A encBaseId=%A"
+                generation
+                moduleId
+                encId
+                encBaseId
         let tableMirror = DeltaMetadataTables(heapOffsets)
         tableMirror.AddModuleRow(moduleName, moduleNameOffset, generation, moduleId, encId, encBaseId)
 

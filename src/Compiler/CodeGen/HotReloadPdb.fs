@@ -24,6 +24,16 @@ open FSharp.Compiler.HotReloadBaseline
 
 module ILBaselineReader = FSharp.Compiler.AbstractIL.ILBaselineReader
 
+let private shouldTracePdb () =
+    let isEnabled (name: string) =
+        match Environment.GetEnvironmentVariable(name) with
+        | null -> false
+        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+        | _ -> false
+
+    isEnabled "FSHARP_HOTRELOAD_TRACE_PDB" || isEnabled "FSHARP_HOTRELOAD_TRACE_METADATA"
+
 /// Create a PDB snapshot from Portable PDB bytes.
 /// Uses pure F# parsing instead of SRM for the reading path.
 let createSnapshot (pdbBytes: byte[]) : PortablePdbSnapshot =
@@ -68,7 +78,8 @@ let emitDelta
             |> List.filter (fun token -> token <> 0)
 
         if List.isEmpty distinctTokens then
-            printfn "[hotreload-pdb] distinct token list empty"
+            if shouldTracePdb () then
+                printfn "[hotreload-pdb] distinct token list empty"
             None
         else
             use provider = MetadataReaderProvider.FromPortablePdbImage(ImmutableArray.CreateRange updatedPdbBytes)
@@ -116,7 +127,8 @@ let emitDelta
                     with
                     | :? BadImageFormatException as ex ->
                         // Corrupted PDB metadata - skip this document gracefully
-                        printfn "[hotreload-pdb] warning: could not read document (handle=%A): %s" sourceHandle ex.Message
+                        if shouldTracePdb () then
+                            printfn "[hotreload-pdb] warning: could not read document (handle=%A): %s" sourceHandle ex.Message
                         DocumentHandle()
 
             for token in distinctTokens do
@@ -126,12 +138,14 @@ let emitDelta
                     | _ -> token
 
                 if sourceToken = 0 then
-                    printfn "[hotreload-pdb] method token missing for delta token 0x%08x" token
+                    if shouldTracePdb () then
+                        printfn "[hotreload-pdb] method token missing for delta token 0x%08x" token
                 else
                     let sourceHandle = MetadataTokens.MethodDefinitionHandle sourceToken
 
                     if sourceHandle.IsNil then
-                        printfn "[hotreload-pdb] source handle nil for delta token 0x%08x (source token=0x%08x)" token sourceToken
+                        if shouldTracePdb () then
+                            printfn "[hotreload-pdb] source handle nil for delta token 0x%08x (source token=0x%08x)" token sourceToken
                     else
                         let methodRow = MetadataTokens.GetRowNumber sourceHandle
 
@@ -157,12 +171,13 @@ let emitDelta
                             // exceeds the MethodDebugInformation table count. This is a known limitation -
                             // debuggers won't be able to step into newly added methods until a full rebuild.
                             // TODO: Emit empty MethodDebugInformation entries for new methods to enable debugging.
-                            printfn
-                                "[hotreload-pdb] skipping newly added method (row %d > count %d) - debugger stepping unavailable (delta=0x%08x, source=0x%08x)"
-                                methodRow
-                                reader.MethodDebugInformation.Count
-                                token
-                                sourceToken
+                            if shouldTracePdb () then
+                                printfn
+                                    "[hotreload-pdb] skipping newly added method (row %d > count %d) - debugger stepping unavailable (delta=0x%08x, source=0x%08x)"
+                                    methodRow
+                                    reader.MethodDebugInformation.Count
+                                    token
+                                    sourceToken
 
             // Per Roslyn DeltaMetadataWriter.cs: PDB delta EncMap should contain MethodDebugInformation
             // entries (which correspond 1:1 to MethodDef), not metadata table entries. The PDB EncLog
@@ -176,7 +191,8 @@ let emitDelta
                 metadata.AddEncMapEntry entityHandle
 
             if not emitted then
-                printfn "[hotreload-pdb] no method debug info emitted for tokens %A" distinctTokens
+                if shouldTracePdb () then
+                    printfn "[hotreload-pdb] no method debug info emitted for tokens %A" distinctTokens
                 None
             else
                 let entryPointHandle =

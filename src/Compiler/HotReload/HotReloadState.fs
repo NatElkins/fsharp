@@ -10,6 +10,13 @@ type HotReloadSession =
         ImplementationFiles: CheckedAssemblyAfterOptimization
         CurrentGeneration: int
         PreviousGenerationId: Guid option
+        PendingUpdate: PendingHotReloadUpdate option
+    }
+
+and PendingHotReloadUpdate =
+    {
+        GenerationId: Guid
+        Baseline: FSharpEmitBaseline
     }
 
 let private sessionLock = obj ()
@@ -30,6 +37,7 @@ let setBaseline (value: FSharpEmitBaseline) (implementationFiles: CheckedAssembl
                     ImplementationFiles = implementationFiles
                     CurrentGeneration = max 1 value.NextGeneration
                     PreviousGenerationId = previousGenerationId
+                    PendingUpdate = None
                 })
 
 let clearBaseline () =
@@ -57,6 +65,9 @@ let updateImplementationFiles (implementationFiles: CheckedAssemblyAfterOptimiza
         | ValueNone -> ())
 
 let updateBaseline (baseline: FSharpEmitBaseline) =
+    if baseline.EncId = Guid.Empty then
+        invalidArg (nameof baseline) "Pending baseline must carry a non-empty EncId."
+
     lock sessionLock (fun () ->
         match session with
         | ValueSome state ->
@@ -64,7 +75,12 @@ let updateBaseline (baseline: FSharpEmitBaseline) =
                 ValueSome
                     {
                         state with
-                            Baseline = baseline
+                            PendingUpdate =
+                                Some
+                                    {
+                                        GenerationId = baseline.EncId
+                                        Baseline = baseline
+                                    }
                     }
         | ValueNone -> ())
 
@@ -75,12 +91,35 @@ let recordDeltaApplied (generationId: Guid) =
     lock sessionLock (fun () ->
         match session with
         | ValueSome state ->
+            let pending =
+                match state.PendingUpdate with
+                | Some pending when pending.GenerationId = generationId -> pending
+                | Some _ ->
+                    invalidArg
+                        (nameof generationId)
+                        "Generation ID does not match the currently pending hot reload update."
+                | None -> invalidOp "Cannot commit delta: no pending hot reload update."
+
             session <-
                 ValueSome
                     {
                         state with
+                            Baseline = pending.Baseline
                             CurrentGeneration = state.CurrentGeneration + 1
                             PreviousGenerationId = Some generationId
+                            PendingUpdate = None
                     }
         | ValueNone ->
             invalidOp "Cannot record delta applied: no active hot reload session.")
+
+let discardPendingUpdate () =
+    lock sessionLock (fun () ->
+        match session with
+        | ValueSome state ->
+            session <-
+                ValueSome
+                    {
+                        state with
+                            PendingUpdate = None
+                    }
+        | ValueNone -> ())
