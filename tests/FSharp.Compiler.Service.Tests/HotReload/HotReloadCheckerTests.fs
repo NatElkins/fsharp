@@ -101,6 +101,16 @@ type Type =
         | errs, _ ->
             failwithf "Compilation failed: %A" (errs |> Array.map (fun d -> d.Message))
 
+    let private withShortOutputOption (projectOptions: FSharpProjectOptions) (dllPath: string) =
+        { projectOptions with
+            OtherOptions =
+                projectOptions.OtherOptions
+                |> Array.filter (fun opt ->
+                    not (opt.StartsWith("--out:", StringComparison.OrdinalIgnoreCase) ||
+                         opt.StartsWith("-o:", StringComparison.OrdinalIgnoreCase) ||
+                         String.Equals(opt, "-o", StringComparison.OrdinalIgnoreCase)))
+                |> Array.append [| $"-o:{dllPath}" |] }
+
     [<Fact>]
     let ``HotReloadCapabilities expose supported flags`` () =
         let checker = createChecker ()
@@ -157,6 +167,46 @@ type Type =
 
         checker.EndHotReloadSession()
         Assert.False(checker.HotReloadSessionActive)
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``StartHotReloadSession accepts short output option`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-short-output", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        File.WriteAllText(fsPath, baselineSource)
+
+        let checker = createChecker ()
+        let baselineOptions = prepareProjectOptions checker fsPath dllPath baselineSource
+        let projectOptions = withShortOutputOption baselineOptions dllPath
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start hot reload session with -o: output option: %A" error
+        | Ok () -> ()
+
+        File.WriteAllText(fsPath, updatedSource)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Ok delta ->
+            Assert.NotEmpty(delta.Metadata)
+            Assert.NotEmpty(delta.IL)
+        | Error FSharpHotReloadError.MissingOutputPath ->
+            failwith "Expected -o: output option to resolve to a valid output path."
+        | Error error ->
+            failwithf "EmitHotReloadDelta failed for -o: output option: %A" error
+
+        checker.EndHotReloadSession()
 
         try
             Directory.Delete(projectDir, true)

@@ -288,15 +288,17 @@ type FSharpChecker
 
                 Path.GetFullPath(combined)
 
-        let tryFromLongForm =
+        let tryFromInlineForm =
             options.OtherOptions
             |> Array.tryPick (fun opt ->
                 if opt.StartsWith("--out:", StringComparison.OrdinalIgnoreCase) then
                     opt.Substring("--out:".Length) |> resolveOutputPath |> Some
+                elif opt.StartsWith("-o:", StringComparison.OrdinalIgnoreCase) then
+                    opt.Substring("-o:".Length) |> resolveOutputPath |> Some
                 else
                     None)
 
-        match tryFromLongForm with
+        match tryFromInlineForm with
         | Some path -> Some path
         | None ->
             match
