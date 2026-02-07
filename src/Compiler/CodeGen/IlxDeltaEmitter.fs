@@ -1494,18 +1494,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                           IsAdded = true }
                 | _ -> None)
 
-        let missingPropertyMapTypes =
-            propertyMapRowsSnapshot
-            |> List.filter (fun row -> row.IsAdded)
-            |> List.map (fun row -> row.DeclaringType)
-            |> HashSet
-
-        let missingEventMapTypes =
-            eventMapRowsSnapshot
-            |> List.filter (fun row -> row.IsAdded)
-            |> List.map (fun row -> row.DeclaringType)
-            |> HashSet
-
         let tryGetPropertyAssociation typeName propertyName =
             match propertyRowsByName.TryGetValue(struct (typeName, propertyName)) with
             | true, rows ->
@@ -1563,9 +1551,11 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         let attrs = semanticsAttributeForMemberKind accessor.MemberKind
                         match accessor.MemberKind, accessorName accessor.MemberKind with
                         | (SymbolMemberKind.PropertyGet _
-                          | SymbolMemberKind.PropertySet _), Some propertyName when missingPropertyMapTypes.Contains typeName ->
+                          | SymbolMemberKind.PropertySet _), Some propertyName ->
                             match tryGetPropertyAssociation typeName propertyName with
-                            | Some(propertyRowId, propertyKey) ->
+                            // Emit MethodSemantics when the property itself is added, even if the declaring type
+                            // already has a PropertyMap row in the baseline metadata.
+                            | Some(propertyRowId, propertyKey) when propertyDefinitionIndex.IsAdded propertyKey ->
                                 nextMethodSemanticsRowId <- nextMethodSemanticsRowId + 1
                                 Some
                                     { MethodSemanticsMetadataUpdate.RowId = nextMethodSemanticsRowId
@@ -1575,11 +1565,14 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                                       AssociationInfo =
                                         MethodSemanticsAssociation.PropertyAssociation(propertyKey, propertyRowId) }
                             | None -> None
+                            | _ -> None
                         | (SymbolMemberKind.EventAdd _
                           | SymbolMemberKind.EventRemove _
-                          | SymbolMemberKind.EventInvoke _), Some eventName when missingEventMapTypes.Contains typeName ->
+                          | SymbolMemberKind.EventInvoke _), Some eventName ->
                             match tryGetEventAssociation typeName eventName with
-                            | Some(eventRowId, eventKey) ->
+                            // Emit MethodSemantics when the event itself is added, even if the declaring type
+                            // already has an EventMap row in the baseline metadata.
+                            | Some(eventRowId, eventKey) when eventDefinitionIndex.IsAdded eventKey ->
                                 nextMethodSemanticsRowId <- nextMethodSemanticsRowId + 1
                                 Some
                                     { MethodSemanticsMetadataUpdate.RowId = nextMethodSemanticsRowId
@@ -1589,6 +1582,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                                       AssociationInfo =
                                         MethodSemanticsAssociation.EventAssociation(eventKey, eventRowId) }
                             | None -> None
+                            | _ -> None
                         | _ -> None)
 
         let methodUpdates = methodUpdatesWithDefs |> List.map fst

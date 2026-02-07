@@ -313,6 +313,151 @@ module DeltaEmitterTests =
             (mkILExportedTypes [])
             "v4.0.30319"
 
+    let private createModuleWithProperties (propertyNames: string list) =
+        let ilg = PrimaryAssemblyILGlobals
+        let typeName = "Sample.PropertyDemo"
+        let typeRef = mkILTyRef(ILScopeRef.Local, typeName)
+        let stringType = ilg.typ_String
+
+        let getters, properties =
+            propertyNames
+            |> List.map (fun propertyName ->
+                let getterName = $"get_{propertyName}"
+                let getterBody =
+                    mkMethodBody(
+                        false,
+                        [],
+                        2,
+                        nonBranchingInstrsToCode [ I_ldstr $"Property {propertyName}"; I_ret ],
+                        None,
+                        None)
+
+                let getter =
+                    mkILNonGenericInstanceMethod(
+                        getterName,
+                        ILMemberAccess.Public,
+                        [],
+                        mkILReturn stringType,
+                        getterBody)
+                    |> fun methodDef -> methodDef.WithSpecialName.WithHideBySig(true)
+
+                let propertyDef =
+                    ILPropertyDef(
+                        propertyName,
+                        PropertyAttributes.None,
+                        None,
+                        Some(mkILMethRef(typeRef, ILCallingConv.Instance, getterName, 0, [], stringType)),
+                        ILThisConvention.Instance,
+                        stringType,
+                        None,
+                        [],
+                        emptyILCustomAttrs)
+
+                getter, propertyDef)
+            |> List.unzip
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    typeName,
+                    ILTypeDefAccess.Public,
+                    mkILMethods getters,
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties properties,
+                    mkILEvents [],
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField
+                )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
+    let private createModuleWithEvents (eventNames: string list) =
+        let ilg = PrimaryAssemblyILGlobals
+        let typeName = "Sample.EventDemo"
+        let typeRef = mkILTyRef(ILScopeRef.Local, typeName)
+        let handlerType = ilg.typ_Object
+        let voidType = ILType.Void
+
+        let methods, events =
+            eventNames
+            |> List.map (fun eventName ->
+                let addName = $"add_{eventName}"
+                let removeName = $"remove_{eventName}"
+                let param = mkILParamNamed("handler", handlerType)
+
+                let addMethod =
+                    mkILNonGenericInstanceMethod(
+                        addName,
+                        ILMemberAccess.Public,
+                        [ param ],
+                        mkILReturn voidType,
+                        mkMethodBody(false, [], 1, nonBranchingInstrsToCode [ I_ret ], None, None))
+                    |> fun methodDef -> methodDef.WithSpecialName.WithHideBySig(true)
+
+                let removeMethod =
+                    mkILNonGenericInstanceMethod(
+                        removeName,
+                        ILMemberAccess.Public,
+                        [ param ],
+                        mkILReturn voidType,
+                        mkMethodBody(false, [], 1, nonBranchingInstrsToCode [ I_ret ], None, None))
+                    |> fun methodDef -> methodDef.WithSpecialName.WithHideBySig(true)
+
+                let eventDef =
+                    ILEventDef(
+                        Some handlerType,
+                        eventName,
+                        EventAttributes.None,
+                        mkILMethRef(typeRef, ILCallingConv.Instance, addName, 0, [ handlerType ], voidType),
+                        mkILMethRef(typeRef, ILCallingConv.Instance, removeName, 0, [ handlerType ], voidType),
+                        None,
+                        [],
+                        emptyILCustomAttrs)
+
+                [ addMethod; removeMethod ], eventDef)
+            |> List.unzip
+
+        let typeDef =
+            mkILSimpleClass
+                ilg
+                (
+                    typeName,
+                    ILTypeDefAccess.Public,
+                    mkILMethods (methods |> List.collect id),
+                    mkILFields [],
+                    emptyILTypeDefs,
+                    mkILProperties [],
+                    mkILEvents events,
+                    emptyILCustomAttrs,
+                    ILTypeInit.BeforeField
+                )
+
+        mkILSimpleModule
+            "SampleAssembly"
+            "SampleModule"
+            true
+            (4, 0)
+            false
+            (mkILTypeDefs [ typeDef ])
+            None
+            None
+            0
+            (mkILExportedTypes [])
+            "v4.0.30319"
+
     let private createStringModule (message: string) =
         let ilg = PrimaryAssemblyILGlobals
         let methodBody =
@@ -1071,6 +1216,94 @@ module DeltaEmitterTests =
             Assert.True(updatedBaseline.EventMapEntries.ContainsKey "Sample.EventDemo", "Updated baseline missing event map entry.")
         | None ->
             Assert.True(false, "Updated baseline missing.")
+
+    [<Fact>]
+    let ``emitDelta adds property method semantics when PropertyMap already exists`` () =
+        let baselineArtifacts =
+            TestHelpers.createBaselineFromModule (createModuleWithProperties [ "Message" ])
+
+        let updatedModule =
+            createModuleWithProperties [ "Message"; "Secondary" ]
+            |> TestHelpers.withDebuggableAttribute
+
+        let getterKey =
+            TestHelpers.methodKey "Sample.PropertyDemo" "get_Secondary" [] PrimaryAssemblyILGlobals.typ_String
+
+        let accessorUpdate =
+            TestHelpers.mkAccessorUpdate "Sample.PropertyDemo" (SymbolMemberKind.PropertyGet "Secondary") getterKey
+
+        let request =
+            { IlxDeltaRequest.Baseline = baselineArtifacts.Baseline
+              UpdatedTypes = [ "Sample.PropertyDemo" ]
+              UpdatedMethods = []
+              UpdatedAccessors = [ accessorUpdate ]
+              Module = updatedModule
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta = emitDelta request
+
+        let propertyAdds =
+            delta.EncLog
+            |> Array.filter (fun (table, _, op) -> table = TableNames.Property && op = EditAndContinueOperation.AddProperty)
+
+        let propertyMapAdds =
+            delta.EncLog
+            |> Array.filter (fun (table, _, op) -> table = TableNames.PropertyMap && op = EditAndContinueOperation.AddProperty)
+
+        let semanticsAdds =
+            delta.EncLog
+            |> Array.filter (fun (table, _, op) -> table = TableNames.MethodSemantics && op = EditAndContinueOperation.AddMethod)
+
+        Assert.Single propertyAdds |> ignore
+        Assert.Empty propertyMapAdds
+        Assert.Single semanticsAdds |> ignore
+
+    [<Fact>]
+    let ``emitDelta adds event method semantics when EventMap already exists`` () =
+        let baselineArtifacts =
+            TestHelpers.createBaselineFromModule (createModuleWithEvents [ "OnChanged" ])
+
+        let updatedModule =
+            createModuleWithEvents [ "OnChanged"; "OnUpdated" ]
+            |> TestHelpers.withDebuggableAttribute
+
+        let addKey =
+            TestHelpers.methodKey "Sample.EventDemo" "add_OnUpdated" [ PrimaryAssemblyILGlobals.typ_Object ] ILType.Void
+
+        let accessorUpdate =
+            TestHelpers.mkAccessorUpdate "Sample.EventDemo" (SymbolMemberKind.EventAdd "OnUpdated") addKey
+
+        let request =
+            { IlxDeltaRequest.Baseline = baselineArtifacts.Baseline
+              UpdatedTypes = [ "Sample.EventDemo" ]
+              UpdatedMethods = []
+              UpdatedAccessors = [ accessorUpdate ]
+              Module = updatedModule
+              SymbolChanges = None
+              CurrentGeneration = 1
+              PreviousGenerationId = None
+              SynthesizedNames = None }
+
+        let delta = emitDelta request
+
+        let eventAdds =
+            delta.EncLog
+            |> Array.filter (fun (table, _, op) -> table = TableNames.Event && op = EditAndContinueOperation.AddEvent)
+
+        let eventMapAdds =
+            delta.EncLog
+            |> Array.filter (fun (table, _, op) -> table = TableNames.EventMap && op = EditAndContinueOperation.AddEvent)
+
+        let semanticsAdds =
+            delta.EncLog
+            |> Array.filter (fun (table, _, op) -> table = TableNames.MethodSemantics && op = EditAndContinueOperation.AddMethod)
+
+        Assert.Single eventAdds |> ignore
+        Assert.Empty eventMapAdds
+        Assert.Single semanticsAdds |> ignore
 
     [<Fact>]
     let ``metadata validator tool is available`` () =
