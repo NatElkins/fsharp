@@ -593,6 +593,10 @@ type FSharpChecker
                         return Result.Ok ()
         }
 
+    member this.StartHotReloadSession(projectSnapshot: FSharpProjectSnapshot, ?userOpName: string) =
+        // Keep hot-reload session entrypoints consistent with other checker APIs that accept snapshots.
+        this.StartHotReloadSession(ProjectSnapshot.Extensions.ToOptions(projectSnapshot), ?userOpName = userOpName)
+
     member this.EmitHotReloadDelta(projectOptions: FSharpProjectOptions, ?userOpName: string) =
         async {
             ensureKeepAssemblyContents ()
@@ -714,6 +718,10 @@ type FSharpChecker
                                     return Result.Ok(toPublicDelta result.Delta)
                                 | Error error -> return Result.Error(mapHotReloadError error)
         }
+
+    member this.EmitHotReloadDelta(projectSnapshot: FSharpProjectSnapshot, ?userOpName: string) =
+        // Reuse the options-based implementation so commit/discard semantics stay identical.
+        this.EmitHotReloadDelta(ProjectSnapshot.Extensions.ToOptions(projectSnapshot), ?userOpName = userOpName)
 
     member _.EndHotReloadSession() =
         lock hotReloadGate (fun () ->

@@ -102,8 +102,24 @@ type public FSharpChecker =
     member StartHotReloadSession:
         projectOptions: FSharpProjectOptions * ?userOpName: string -> Async<Result<unit, FSharpHotReloadError>>
 
+    /// <summary>
+    /// Starts a hot reload session using a workspace project snapshot.
+    /// </summary>
+    [<Experimental("This FCS API is experimental and subject to change.")>]
+    member StartHotReloadSession:
+        projectSnapshot: FSharpProjectSnapshot * ?userOpName: string ->
+            Async<Result<unit, FSharpHotReloadError>>
+
     member EmitHotReloadDelta:
         projectOptions: FSharpProjectOptions * ?userOpName: string ->
+            Async<Result<FSharpHotReloadDelta, FSharpHotReloadError>>
+
+    /// <summary>
+    /// Emits a hot reload delta using a workspace project snapshot.
+    /// </summary>
+    [<Experimental("This FCS API is experimental and subject to change.")>]
+    member EmitHotReloadDelta:
+        projectSnapshot: FSharpProjectSnapshot * ?userOpName: string ->
             Async<Result<FSharpHotReloadDelta, FSharpHotReloadError>>
 
     member EndHotReloadSession: unit -> unit

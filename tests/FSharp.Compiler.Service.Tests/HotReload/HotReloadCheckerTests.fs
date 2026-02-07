@@ -111,6 +111,10 @@ type Type =
                          String.Equals(opt, "-o", StringComparison.OrdinalIgnoreCase)))
                 |> Array.append [| $"-o:{dllPath}" |] }
 
+    let private createProjectSnapshot (projectOptions: FSharpProjectOptions) =
+        FSharpProjectSnapshot.FromOptions(projectOptions, DocumentSource.FileSystem)
+        |> Async.RunImmediate
+
     [<Fact>]
     let ``HotReloadCapabilities expose supported flags`` () =
         let checker = createChecker ()
@@ -160,6 +164,47 @@ type Type =
 
         match emitResult with
         | Error error -> failwithf "EmitHotReloadDelta failed: %A" error
+        | Ok delta ->
+            Assert.NotEmpty(delta.Metadata)
+            Assert.NotEmpty(delta.IL)
+            Assert.NotEmpty(delta.UpdatedMethods)
+
+        checker.EndHotReloadSession()
+        Assert.False(checker.HotReloadSessionActive)
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``StartHotReloadSession and EmitHotReloadDelta accept project snapshots`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-checker-snapshot", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        File.WriteAllText(fsPath, baselineSource)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baselineSource
+        let baselineSnapshot = createProjectSnapshot projectOptions
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(baselineSnapshot) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start hot reload session from snapshot: %A" error
+        | Ok () -> ()
+
+        File.WriteAllText(fsPath, updatedSource)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        let updatedSnapshot = createProjectSnapshot projectOptions
+
+        match checker.EmitHotReloadDelta(updatedSnapshot) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitHotReloadDelta failed for snapshot input: %A" error
         | Ok delta ->
             Assert.NotEmpty(delta.Metadata)
             Assert.NotEmpty(delta.IL)
