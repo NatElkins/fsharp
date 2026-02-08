@@ -4,6 +4,9 @@ namespace FSharp.Compiler.Service.Tests.HotReload
 
 open System
 open System.IO
+open System.Reflection.Metadata
+open System.Reflection.Metadata.Ecma335
+open System.Reflection.PortableExecutable
 open Xunit
 
 open FSharp.Compiler.CodeAnalysis
@@ -112,12 +115,60 @@ type Type =
                          String.Equals(opt, "-o", StringComparison.OrdinalIgnoreCase)))
                 |> Array.append [| $"-o:{dllPath}" |] }
 
+    let private withExecutableTarget (projectOptions: FSharpProjectOptions) =
+        { projectOptions with
+            OtherOptions =
+                projectOptions.OtherOptions
+                |> Array.map (fun opt ->
+                    if String.Equals(opt, "--target:library", StringComparison.OrdinalIgnoreCase) then
+                        "--target:exe"
+                    else
+                        opt) }
+
     let private toWorkspaceCompilerArgs (projectOptions: FSharpProjectOptions) =
         Array.append projectOptions.OtherOptions projectOptions.SourceFiles
 
     let private createProjectSnapshot (projectOptions: FSharpProjectOptions) =
         FSharpProjectSnapshot.FromOptions(projectOptions, DocumentSource.FileSystem)
         |> Async.RunImmediate
+
+    let private getMethodTokenInfos (dllPath: string) =
+        use stream = File.OpenRead(dllPath)
+        use peReader = new PEReader(stream)
+        let metadataReader = peReader.GetMetadataReader()
+
+        metadataReader.MethodDefinitions
+        |> Seq.map (fun handle ->
+            let methodDef = metadataReader.GetMethodDefinition(handle)
+            let declaringType = metadataReader.GetTypeDefinition(methodDef.GetDeclaringType())
+            let declaringTypeName = metadataReader.GetString(declaringType.Name)
+            let methodName = metadataReader.GetString(methodDef.Name)
+            let token = MetadataTokens.GetToken(EntityHandle.op_Implicit handle)
+            declaringTypeName, methodName, token)
+        |> Seq.toList
+
+    let private getMethodToken (dllPath: string) (declaringType: string) (methodName: string) =
+        getMethodTokenInfos dllPath
+        |> List.tryFind (fun (typeName, name, _) -> typeName = declaringType && name = methodName)
+        |> Option.map (fun (_, _, token) -> token)
+        |> Option.defaultWith (fun () ->
+            let available =
+                getMethodTokenInfos dllPath
+                |> List.map (fun (typeName, name, token) -> sprintf "%s::%s (0x%08X)" typeName name token)
+                |> String.concat "; "
+
+            failwithf
+                "Failed to find method token for %s::%s in '%s'. Available methods: %s"
+                declaringType
+                methodName
+                dllPath
+                available)
+
+    let private getMethodDisplayByToken (dllPath: string) (token: int) =
+        getMethodTokenInfos dllPath
+        |> List.tryFind (fun (_, _, methodToken) -> methodToken = token)
+        |> Option.map (fun (typeName, methodName, _) -> $"{typeName}::{methodName}")
+        |> Option.defaultWith (fun () -> $"<unknown:0x{token:X8}>")
 
     [<Fact>]
     let ``HotReloadCapabilities expose supported flags`` () =
@@ -345,6 +396,213 @@ type Type =
             Assert.Contains("stale build output", message, StringComparison.OrdinalIgnoreCase)
         | Error other -> failwithf "Expected DeltaEmissionFailed for stale output, got %A" other
         | Ok _ -> failwith "Expected stale output detection to reject delta emission."
+
+        checker.EndHotReloadSession()
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``Method body edit on module function updates message token and not main`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-module-loop", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        let baseline =
+            """
+module LoopDemo
+
+let message () = "generation 0"
+
+[<EntryPoint>]
+let main _ =
+    while true do
+        printfn "%s" (message ())
+        System.Threading.Thread.Sleep(2000)
+
+    0
+"""
+
+        let updated =
+            """
+module LoopDemo
+
+let message () = "generation 1"
+
+[<EntryPoint>]
+let main _ =
+    while true do
+        printfn "%s" (message ())
+        System.Threading.Thread.Sleep(2000)
+
+    0
+"""
+
+        File.WriteAllText(fsPath, baseline)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baseline |> withExecutableTarget
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let messageToken = getMethodToken dllPath "LoopDemo" "message"
+        File.WriteAllText(fsPath, updated)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitHotReloadDelta failed for module loop method edit: %A" error
+        | Ok delta ->
+            Assert.Contains(messageToken, delta.UpdatedMethods)
+            let mainToken = getMethodToken dllPath "LoopDemo" "main"
+            Assert.DoesNotContain(mainToken, delta.UpdatedMethods)
+
+        checker.EndHotReloadSession()
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``Property getter edit updates Greeter get_Message token and not main`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-property-loop", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        let baseline =
+            """
+module LoopProperties
+
+type Greeter() =
+    member _.Message = "generation 0"
+
+let greeter = Greeter()
+
+[<EntryPoint>]
+let main _ =
+    while true do
+        printfn "%s" greeter.Message
+        System.Threading.Thread.Sleep(2000)
+
+    0
+"""
+
+        let updated =
+            """
+module LoopProperties
+
+type Greeter() =
+    member _.Message = "generation 1"
+
+let greeter = Greeter()
+
+[<EntryPoint>]
+let main _ =
+    while true do
+        printfn "%s" greeter.Message
+        System.Threading.Thread.Sleep(2000)
+
+    0
+"""
+
+        File.WriteAllText(fsPath, baseline)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baseline |> withExecutableTarget
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let getterToken = getMethodToken dllPath "Greeter" "get_Message"
+        File.WriteAllText(fsPath, updated)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitHotReloadDelta failed for property loop edit: %A" error
+        | Ok delta ->
+            Assert.Contains(getterToken, delta.UpdatedMethods)
+            let mainToken = getMethodToken dllPath "LoopProperties" "main"
+            Assert.DoesNotContain(mainToken, delta.UpdatedMethods)
+
+        checker.EndHotReloadSession()
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``Async method-body edit keeps updated methods user-authored`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-async-methods", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        let baseline =
+            """
+namespace AsyncMethods
+
+module Demo =
+    let GetMessage () =
+        async {
+            do! Async.Sleep 1
+            return "generation 0"
+        }
+"""
+
+        let updated =
+            """
+namespace AsyncMethods
+
+module Demo =
+    let GetMessage () =
+        async {
+            do! Async.Sleep 1
+            let suffix = "1"
+            return "generation " + suffix
+        }
+"""
+
+        File.WriteAllText(fsPath, baseline)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baseline
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let getMessageToken = getMethodToken dllPath "Demo" "GetMessage"
+        File.WriteAllText(fsPath, updated)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitHotReloadDelta failed for async method edit: %A" error
+        | Ok delta ->
+            Assert.Contains(getMessageToken, delta.UpdatedMethods)
+            let updatedMethodDisplays =
+                delta.UpdatedMethods
+                |> List.map (getMethodDisplayByToken dllPath)
+            Assert.All(updatedMethodDisplays, fun methodDisplay -> Assert.DoesNotContain("@hotreload", methodDisplay))
 
         checker.EndHotReloadSession()
 

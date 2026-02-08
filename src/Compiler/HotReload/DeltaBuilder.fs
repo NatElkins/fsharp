@@ -11,6 +11,15 @@ open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.TypedTree
 open FSharp.Compiler.TypedTreeDiff
 
+let private isEnvVarTruthy (name: string) =
+    match Environment.GetEnvironmentVariable(name) with
+    | null -> false
+    | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+    | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+    | _ -> false
+
+let private traceMethodResolution = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_METHODS"
+
 let private checkedFiles (CheckedAssemblyAfterOptimization impls) =
     impls
     |> List.map (fun afterOpt -> afterOpt.ImplFile)
@@ -73,6 +82,44 @@ let mapSymbolChangesToDelta
     (changes: FSharpSymbolChanges)
     : string list * MethodDefinitionKey list * AccessorUpdate list =
 
+    if traceMethodResolution then
+        let formatSymbol (symbol: SymbolId) =
+            sprintf
+                "name=%s path=%A kind=%A memberKind=%A synthesized=%b"
+                symbol.LogicalName
+                symbol.Path
+                symbol.Kind
+                symbol.MemberKind
+                symbol.IsSynthesized
+
+        let formatUpdated (change: UpdatedSymbolChange) =
+            sprintf
+                "%s semanticEdit=%A containingEntity=%A"
+                (formatSymbol change.Symbol)
+                change.Kind
+                change.ContainingEntity
+
+        let addedText =
+            changes.Added
+            |> List.map formatSymbol
+            |> String.concat " | "
+
+        let deletedText =
+            changes.Deleted
+            |> List.map formatSymbol
+            |> String.concat " | "
+
+        let updatedText =
+            changes.Updated
+            |> List.map formatUpdated
+            |> String.concat " | "
+
+        printfn
+            "[fsharp-hotreload][delta-builder] changes summary: added=[%s] deleted=[%s] updated=[%s]"
+            addedText
+            deletedText
+            updatedText
+
     let candidateEntityNames (symbol: SymbolId) =
         let segments = symbol.Path @ [ symbol.LogicalName ]
 
@@ -126,9 +173,19 @@ let mapSymbolChangesToDelta
         |> List.choose (fun change ->
             match change.Kind with
             | SemanticEditKind.MethodBody when change.Symbol.Kind = SymbolKind.Value && not change.Symbol.IsSynthesized ->
-                change
-                |> candidateContainingTypeNames
-                |> List.tryPick (fun typeName -> tryResolveMethodKey change.Symbol typeName)
+                let candidates = candidateContainingTypeNames change
+                let resolved = candidates |> List.tryPick (fun typeName -> tryResolveMethodKey change.Symbol typeName)
+
+                if traceMethodResolution then
+                    printfn
+                        "[fsharp-hotreload][delta-builder] symbol=%s path=%A containingEntity=%A candidates=%A resolved=%A"
+                        change.Symbol.LogicalName
+                        change.Symbol.Path
+                        change.ContainingEntity
+                        candidates
+                        (resolved |> Option.map (fun key -> sprintf "%s::%s" key.DeclaringType key.Name))
+
+                resolved
             | _ -> None)
         |> deduplicate
 

@@ -108,6 +108,13 @@ let private hashList (items: seq<int>) =
 
     acc
 
+let private traceHotReloadMethodDiff =
+    match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METHODS") with
+    | null -> false
+    | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+    | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+    | _ -> false
+
 let private propertyDisplayName (vref: ValRef) =
     let name = vref.PropertyName
     if String.IsNullOrWhiteSpace name then vref.DisplayName else name
@@ -291,7 +298,28 @@ let rec private exprDigest (denv: DisplayEnv) (expr: Expr) =
           stableHash (tyToString denv ty) ]
         |> hashList
     | Expr.Val (vref, _, _) ->
-        hashCombine 2 (int vref.Stamp)
+        // Member references should hash by stable authored identity, not compiler stamps.
+        // Stamp churn on edited callees can otherwise cascade into false caller method-body edits.
+        let referenceHash =
+            match vref.MemberInfo with
+            | Some memberInfo ->
+                let compiledName =
+                    try
+                        vref.CompiledName None
+                    with _ ->
+                        vref.LogicalName
+
+                let declaringTypeName =
+                    try
+                        memberInfo.ApparentEnclosingEntity.CompiledRepresentationForNamedType.FullName
+                    with _ ->
+                        ""
+
+                stableHash (declaringTypeName + "::" + compiledName)
+            | None ->
+                int vref.Stamp
+
+        hashCombine 2 referenceHash
     | Expr.App (funcExpr, _, _, args, _) ->
         let funcHash = recurse funcExpr
         let argHash = args |> List.map recurse |> hashList
@@ -630,7 +658,21 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
                 )
             elif baselineBinding.BodyHash <> updatedBinding.BodyHash then
                 if not baselineBinding.IsSynthesized then
+                    if traceHotReloadMethodDiff then
+                        printfn
+                            "[fsharp-hotreload][typed-diff] body change symbol=%s synthesized=%b baselineHash=%d updatedHash=%d"
+                            baselineBinding.Symbol.LogicalName
+                            baselineBinding.IsSynthesized
+                            baselineBinding.BodyHash
+                            updatedBinding.BodyHash
+
                     handleEdit baselineBinding SemanticEditKind.MethodBody (Some baselineBinding.BodyHash) (Some updatedBinding.BodyHash)
+                elif traceHotReloadMethodDiff then
+                    printfn
+                        "[fsharp-hotreload][typed-diff] skipping synthesized body change symbol=%s baselineHash=%d updatedHash=%d"
+                        baselineBinding.Symbol.LogicalName
+                        baselineBinding.BodyHash
+                        updatedBinding.BodyHash
         | None ->
             rude.Add(
                 { Symbol = Some baselineBinding.Symbol
