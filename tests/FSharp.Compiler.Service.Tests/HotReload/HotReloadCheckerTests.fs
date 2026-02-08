@@ -7,6 +7,7 @@ open System.IO
 open Xunit
 
 open FSharp.Compiler.CodeAnalysis
+open FSharp.Compiler.CodeAnalysis.Workspace
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.Text
 open FSharp.Test
@@ -111,6 +112,9 @@ type Type =
                          String.Equals(opt, "-o", StringComparison.OrdinalIgnoreCase)))
                 |> Array.append [| $"-o:{dllPath}" |] }
 
+    let private toWorkspaceCompilerArgs (projectOptions: FSharpProjectOptions) =
+        Array.append projectOptions.OtherOptions projectOptions.SourceFiles
+
     let private createProjectSnapshot (projectOptions: FSharpProjectOptions) =
         FSharpProjectSnapshot.FromOptions(projectOptions, DocumentSource.FileSystem)
         |> Async.RunImmediate
@@ -205,6 +209,61 @@ type Type =
 
         match checker.EmitHotReloadDelta(updatedSnapshot) |> Async.RunImmediate with
         | Error error -> failwithf "EmitHotReloadDelta failed for snapshot input: %A" error
+        | Ok delta ->
+            Assert.NotEmpty(delta.Metadata)
+            Assert.NotEmpty(delta.IL)
+            Assert.NotEmpty(delta.UpdatedMethods)
+
+        checker.EndHotReloadSession()
+        Assert.False(checker.HotReloadSessionActive)
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``Workspace project snapshots drive hot reload session lifecycle`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-checker-workspace", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+        let projectPath = Path.Combine(projectDir, "Library.fsproj")
+        File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>")
+        File.WriteAllText(fsPath, baselineSource)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baselineSource
+        let workspace = FSharpWorkspace(checker)
+        let fileUri = Uri(fsPath)
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        let projectIdentifier =
+            workspace.Projects.AddOrUpdate(projectPath, dllPath, toWorkspaceCompilerArgs projectOptions)
+
+        let baselineSnapshot =
+            workspace.Query.GetProjectSnapshot(projectIdentifier)
+            |> Option.defaultWith (fun () -> failwith "Expected workspace baseline snapshot.")
+
+        match checker.StartHotReloadSession(baselineSnapshot) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start hot reload session from workspace snapshot: %A" error
+        | Ok () -> ()
+
+        File.WriteAllText(fsPath, updatedSource)
+        workspace.Files.Close(fileUri)
+        compileProject checker projectOptions false
+
+        workspace.Projects.AddOrUpdate(projectPath, dllPath, toWorkspaceCompilerArgs projectOptions)
+        |> ignore
+
+        let updatedSnapshot =
+            workspace.Query.GetProjectSnapshot(projectIdentifier)
+            |> Option.defaultWith (fun () -> failwith "Expected workspace updated snapshot.")
+
+        match checker.EmitHotReloadDelta(updatedSnapshot) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitHotReloadDelta failed for workspace snapshot input: %A" error
         | Ok delta ->
             Assert.NotEmpty(delta.Metadata)
             Assert.NotEmpty(delta.IL)

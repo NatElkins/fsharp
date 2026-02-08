@@ -247,7 +247,7 @@ type FSharpChecker
     let trimQuotes (text: string) =
         text.Trim().Trim('"')
 
-    let tryGetOutputPath (options: FSharpProjectOptions) =
+    let tryGetOutputPathFromCommandLineOptions (projectFileName: string) (otherOptions: string array) =
         let projectDirectory =
             let resolveDirectory (path: string) =
                 if String.IsNullOrWhiteSpace(path) then
@@ -264,7 +264,7 @@ type FSharpChecker
                     | "" -> Directory.GetCurrentDirectory()
                     | value -> value
 
-            match options.ProjectFileName with
+            match projectFileName with
             | null
             | "" -> Directory.GetCurrentDirectory()
             | fileName -> resolveDirectory fileName
@@ -289,7 +289,7 @@ type FSharpChecker
                 Path.GetFullPath(combined)
 
         let tryFromInlineForm =
-            options.OtherOptions
+            otherOptions
             |> Array.tryPick (fun opt ->
                 if opt.StartsWith("--out:", StringComparison.OrdinalIgnoreCase) then
                     opt.Substring("--out:".Length) |> resolveOutputPath |> Some
@@ -302,12 +302,20 @@ type FSharpChecker
         | Some path -> Some path
         | None ->
             match
-                options.OtherOptions
+                otherOptions
                 |> Array.tryFindIndex (fun opt -> String.Equals(opt, "-o", StringComparison.OrdinalIgnoreCase))
             with
-            | Some idx when idx + 1 < options.OtherOptions.Length ->
-                options.OtherOptions[idx + 1] |> resolveOutputPath |> Some
+            | Some idx when idx + 1 < otherOptions.Length ->
+                otherOptions[idx + 1] |> resolveOutputPath |> Some
             | _ -> None
+
+    let tryGetOutputPathFromProjectOptions (options: FSharpProjectOptions) =
+        tryGetOutputPathFromCommandLineOptions options.ProjectFileName options.OtherOptions
+
+    let tryGetOutputPathFromProjectSnapshot (projectSnapshot: FSharpProjectSnapshot) =
+        tryGetOutputPathFromCommandLineOptions
+            projectSnapshot.ProjectFileName
+            (projectSnapshot.OtherOptions |> List.toArray)
 
     let getErrorDiagnostics (diagnostics: FSharpDiagnostic[]) =
         diagnostics
@@ -521,22 +529,15 @@ type FSharpChecker
             ?transparentCompilerCacheSizes = transparentCompilerCacheSizes
         )
 
-    member this.StartHotReloadSession(projectOptions: FSharpProjectOptions, ?userOpName: string) =
+    member private _.StartHotReloadSessionCore
+        (parseAndCheckProject: unit -> Async<FSharpCheckProjectResults>)
+        (outputPath: string option)
+        =
         async {
-            ensureKeepAssemblyContents ()
-
-            let opName = defaultArg userOpName "Unknown"
-
-            use _ = Activity.start "FSharpChecker.StartHotReloadSession" [|
-                Activity.Tags.userOpName, opName
-                Activity.Tags.project, projectOptions.ProjectFileName
-            |]
-
-            match tryGetOutputPath projectOptions with
+            match outputPath with
             | None -> return Result.Error FSharpHotReloadError.MissingOutputPath
             | Some outputPath ->
-                let! projectResults : FSharpCheckProjectResults =
-                    this.ParseAndCheckProject(projectOptions, userOpName = opName)
+                let! projectResults = parseAndCheckProject ()
                 let errors = getErrorDiagnostics projectResults.Diagnostics
 
                 if projectResults.HasCriticalErrors || errors.Length > 0 then
@@ -593,26 +594,15 @@ type FSharpChecker
                         return Result.Ok ()
         }
 
-    member this.StartHotReloadSession(projectSnapshot: FSharpProjectSnapshot, ?userOpName: string) =
-        // Keep hot-reload session entrypoints consistent with other checker APIs that accept snapshots.
-        this.StartHotReloadSession(ProjectSnapshot.Extensions.ToOptions(projectSnapshot), ?userOpName = userOpName)
-
-    member this.EmitHotReloadDelta(projectOptions: FSharpProjectOptions, ?userOpName: string) =
+    member private _.EmitHotReloadDeltaCore
+        (parseAndCheckProject: unit -> Async<FSharpCheckProjectResults>)
+        (outputPath: string option)
+        =
         async {
-            ensureKeepAssemblyContents ()
-
-            let opName = defaultArg userOpName "Unknown"
-
-            use _ = Activity.start "FSharpChecker.EmitHotReloadDelta" [|
-                Activity.Tags.userOpName, opName
-                Activity.Tags.project, projectOptions.ProjectFileName
-            |]
-
-            match tryGetOutputPath projectOptions with
+            match outputPath with
             | None -> return Result.Error FSharpHotReloadError.MissingOutputPath
             | Some outputPath ->
-                let! projectResults : FSharpCheckProjectResults =
-                    this.ParseAndCheckProject(projectOptions, userOpName = opName)
+                let! projectResults = parseAndCheckProject ()
 
                 let errors = getErrorDiagnostics projectResults.Diagnostics
 
@@ -719,9 +709,73 @@ type FSharpChecker
                                 | Error error -> return Result.Error(mapHotReloadError error)
         }
 
+    member this.StartHotReloadSession(projectOptions: FSharpProjectOptions, ?userOpName: string) =
+        async {
+            ensureKeepAssemblyContents ()
+
+            let opName = defaultArg userOpName "Unknown"
+
+            use _ = Activity.start "FSharpChecker.StartHotReloadSession" [|
+                Activity.Tags.userOpName, opName
+                Activity.Tags.project, projectOptions.ProjectFileName
+            |]
+
+            return!
+                this.StartHotReloadSessionCore
+                    (fun () -> this.ParseAndCheckProject(projectOptions, userOpName = opName))
+                    (tryGetOutputPathFromProjectOptions projectOptions)
+        }
+
+    member this.StartHotReloadSession(projectSnapshot: FSharpProjectSnapshot, ?userOpName: string) =
+        async {
+            ensureKeepAssemblyContents ()
+
+            let opName = defaultArg userOpName "Unknown"
+
+            use _ = Activity.start "FSharpChecker.StartHotReloadSession" [|
+                Activity.Tags.userOpName, opName
+                Activity.Tags.project, projectSnapshot.ProjectFileName
+            |]
+
+            return!
+                this.StartHotReloadSessionCore
+                    (fun () -> this.ParseAndCheckProject(projectSnapshot, userOpName = opName))
+                    (tryGetOutputPathFromProjectSnapshot projectSnapshot)
+        }
+
+    member this.EmitHotReloadDelta(projectOptions: FSharpProjectOptions, ?userOpName: string) =
+        async {
+            ensureKeepAssemblyContents ()
+
+            let opName = defaultArg userOpName "Unknown"
+
+            use _ = Activity.start "FSharpChecker.EmitHotReloadDelta" [|
+                Activity.Tags.userOpName, opName
+                Activity.Tags.project, projectOptions.ProjectFileName
+            |]
+
+            return!
+                this.EmitHotReloadDeltaCore
+                    (fun () -> this.ParseAndCheckProject(projectOptions, userOpName = opName))
+                    (tryGetOutputPathFromProjectOptions projectOptions)
+        }
+
     member this.EmitHotReloadDelta(projectSnapshot: FSharpProjectSnapshot, ?userOpName: string) =
-        // Reuse the options-based implementation so commit/discard semantics stay identical.
-        this.EmitHotReloadDelta(ProjectSnapshot.Extensions.ToOptions(projectSnapshot), ?userOpName = userOpName)
+        async {
+            ensureKeepAssemblyContents ()
+
+            let opName = defaultArg userOpName "Unknown"
+
+            use _ = Activity.start "FSharpChecker.EmitHotReloadDelta" [|
+                Activity.Tags.userOpName, opName
+                Activity.Tags.project, projectSnapshot.ProjectFileName
+            |]
+
+            return!
+                this.EmitHotReloadDeltaCore
+                    (fun () -> this.ParseAndCheckProject(projectSnapshot, userOpName = opName))
+                    (tryGetOutputPathFromProjectSnapshot projectSnapshot)
+        }
 
     member _.EndHotReloadSession() =
         lock hotReloadGate (fun () ->
