@@ -77,6 +77,24 @@ let private deduplicateSymbols symbols =
         []
     |> List.rev
 
+let private methodNameOfSymbol (symbol: SymbolId) =
+    symbol.CompiledName |> Option.defaultValue symbol.LogicalName
+
+let private methodKeyMatchesSymbol (symbol: SymbolId) (key: MethodDefinitionKey) =
+    let nameMatches = String.Equals(key.Name, methodNameOfSymbol symbol, StringComparison.Ordinal)
+
+    let argCountMatches =
+        match symbol.TotalArgCount with
+        | Some count -> key.ParameterTypes.Length = count
+        | None -> true
+
+    let genericArityMatches =
+        match symbol.GenericArity with
+        | Some arity -> key.GenericArity = arity
+        | None -> true
+
+    nameMatches && argCountMatches && genericArityMatches
+
 let mapSymbolChangesToDelta
     (baseline: FSharpEmitBaseline)
     (changes: FSharpSymbolChanges)
@@ -161,12 +179,19 @@ let mapSymbolChangesToDelta
         deduplicate (explicitEntity @ pathSuffixes)
 
     let tryResolveMethodKey symbol typeName =
-        baseline.MethodTokens
-        |> Map.toSeq
-        |> Seq.tryFind (fun (key, _) ->
-            key.DeclaringType = typeName
-            && String.Equals(key.Name, symbol.LogicalName, StringComparison.Ordinal))
-        |> Option.map fst
+        let candidates =
+            baseline.MethodTokens
+            |> Map.toSeq
+            |> Seq.choose (fun (key, _) ->
+                if key.DeclaringType = typeName && methodKeyMatchesSymbol symbol key then
+                    Some key
+                else
+                    None)
+            |> Seq.toList
+
+        match candidates with
+        | [ candidate ] -> Some candidate
+        | _ -> None
 
     let updatedMethods =
         changes.Updated
@@ -178,8 +203,11 @@ let mapSymbolChangesToDelta
 
                 if traceMethodResolution then
                     printfn
-                        "[fsharp-hotreload][delta-builder] symbol=%s path=%A containingEntity=%A candidates=%A resolved=%A"
+                        "[fsharp-hotreload][delta-builder] symbol=%s compiledName=%A args=%A genericArity=%A path=%A containingEntity=%A candidates=%A resolved=%A"
                         change.Symbol.LogicalName
+                        change.Symbol.CompiledName
+                        change.Symbol.TotalArgCount
+                        change.Symbol.GenericArity
                         change.Symbol.Path
                         change.ContainingEntity
                         candidates

@@ -12,7 +12,10 @@ module DefinitionMapTests =
           Stamp = stamp
           Kind = kind
           MemberKind = None
-          IsSynthesized = isSynthesized }
+          IsSynthesized = isSynthesized
+          CompiledName = None
+          TotalArgCount = None
+          GenericArity = None }
 
     let private diffResult edits rude =
         { TypedTreeDiffResult.SemanticEdits = edits

@@ -160,19 +160,11 @@ type internal FSharpEditAndContinueLanguageService private () =
     member this.EmitDeltaForCompilation(
         tcGlobals: TcGlobals,
         updatedImplementation: CheckedAssemblyAfterOptimization,
-        ilModule: ILModuleDef,
-        ?additionalUpdatedMethods: MethodDefinitionKey list,
-        ?symbolMethodBodyEvidence: MethodDefinitionKey list
+        ilModule: ILModuleDef
     ) : Result<DeltaEmissionResult, HotReloadError> =
         // Session ownership is centralized in HotReloadState. If an active session was cleared
         // by an overlapping build, restore from the last committed snapshot before emitting.
         let sessionOpt = FSharp.Compiler.HotReloadState.tryRestoreSession ()
-        let deduplicateMethodKeys keys =
-            keys
-            |> List.fold (fun acc key -> if List.contains key acc then acc else key :: acc) []
-            |> List.rev
-        let additionalUpdatedMethods = defaultArg additionalUpdatedMethods []
-        let symbolMethodBodyEvidence = defaultArg symbolMethodBodyEvidence []
 
         match sessionOpt with
         | ValueNone -> Error HotReloadError.NoActiveSession
@@ -189,32 +181,7 @@ type internal FSharpEditAndContinueLanguageService private () =
             elif not (List.isEmpty symbolChanges.Deleted) then
                 Error(HotReloadError.UnsupportedEdit "Deleted symbols detected; full rebuild required.")
             else
-                let updatedTypes, symbolUpdatedMethods, accessorUpdates = mapSymbolChangesToDelta session.Baseline symbolChanges
-                let symbolUpdatedMethods =
-                    if List.isEmpty symbolUpdatedMethods || List.isEmpty symbolMethodBodyEvidence then
-                        symbolUpdatedMethods
-                    else
-                        let isCompilerGeneratedMethodKey (key: MethodDefinitionKey) =
-                            key.Name.IndexOf('@') >= 0
-                            || key.DeclaringType.IndexOf('@') >= 0
-
-                        let matchedSymbolMethods =
-                            symbolUpdatedMethods
-                            |> List.filter (fun key -> List.contains key symbolMethodBodyEvidence)
-
-                        let nonGeneratedEvidenceMethods =
-                            symbolMethodBodyEvidence
-                            |> List.filter (fun key -> not (isCompilerGeneratedMethodKey key))
-
-                        if List.isEmpty matchedSymbolMethods then
-                            if List.isEmpty nonGeneratedEvidenceMethods then
-                                symbolUpdatedMethods
-                            else
-                                nonGeneratedEvidenceMethods
-                        else
-                            matchedSymbolMethods
-
-                let updatedMethods = deduplicateMethodKeys (symbolUpdatedMethods @ additionalUpdatedMethods)
+                let updatedTypes, updatedMethods, accessorUpdates = mapSymbolChangesToDelta session.Baseline symbolChanges
 
                 // Insert-only edits (for example, adding an allowed non-virtual method) may not produce
                 // method-body updates, but still need to flow to IlxDeltaEmitter so new MethodDef rows are emitted.

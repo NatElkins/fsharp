@@ -35,7 +35,10 @@ type SymbolId =
       Stamp: Stamp
       Kind: SymbolKind
       MemberKind: SymbolMemberKind option
-      IsSynthesized: bool }
+      IsSynthesized: bool
+      CompiledName: string option
+      TotalArgCount: int option
+      GenericArity: int option }
 
     member x.QualifiedName =
         match x.Path with
@@ -143,6 +146,42 @@ let private memberKindOfVal (var: Val) =
         | Some accessor -> Some accessor
         | None when vref.MemberInfo.IsSome -> Some SymbolMemberKind.Method
         | _ -> None
+
+let private tryGetDeclaringEntityCompiledName (vref: ValRef) =
+    match vref.TryDeclaringEntity with
+    | Parent parent ->
+        try
+            Some(parent.CompiledRepresentationForNamedType.FullName)
+        with _ ->
+            try
+                Some(parent.CompiledName)
+            with _ ->
+                None
+    | ParentNone -> None
+
+let private tryStableValReferenceIdentity (vref: ValRef) =
+    let compiledName =
+        try
+            vref.CompiledName None
+        with _ ->
+            vref.LogicalName
+
+    let totalArgCount =
+        vref.ValReprInfo
+        |> Option.map (fun info -> info.TotalArgCount)
+        |> Option.defaultValue 0
+
+    let genericArity =
+        vref.ValReprInfo
+        |> Option.map (fun info -> info.NumTypars)
+        |> Option.defaultValue 0
+
+    let baseIdentity = $"{compiledName}|args={totalArgCount}|gen={genericArity}"
+
+    match tryGetDeclaringEntityCompiledName vref with
+    | Some declaringType -> Some($"{declaringType}::{baseIdentity}")
+    | None when vref.IsCompiledAsTopLevel -> Some(baseIdentity)
+    | _ -> None
 
 let private normalizeTypeString (text: string) =
     let sb = StringBuilder(text.Length)
@@ -298,26 +337,15 @@ let rec private exprDigest (denv: DisplayEnv) (expr: Expr) =
           stableHash (tyToString denv ty) ]
         |> hashList
     | Expr.Val (vref, _, _) ->
-        // Member references should hash by stable authored identity, not compiler stamps.
-        // Stamp churn on edited callees can otherwise cascade into false caller method-body edits.
+        // References to top-level values/members hash by compiled identity rather than stamps.
+        // This keeps caller hashes stable when callees are recompiled with new stamps.
         let referenceHash =
-            match vref.MemberInfo with
-            | Some memberInfo ->
-                let compiledName =
-                    try
-                        vref.CompiledName None
-                    with _ ->
-                        vref.LogicalName
-
-                let declaringTypeName =
-                    try
-                        memberInfo.ApparentEnclosingEntity.CompiledRepresentationForNamedType.FullName
-                    with _ ->
-                        ""
-
-                stableHash (declaringTypeName + "::" + compiledName)
+            match tryStableValReferenceIdentity vref with
+            | Some identity -> stableHash identity
             | None ->
-                int vref.Stamp
+                // Local/parameter stamps are reallocated each compilation.
+                // Hash by logical identity so unchanged method bodies stay stable across generations.
+                stableHash $"local:{vref.LogicalName}|ty={tyToString denv vref.Type}"
 
         hashCombine 2 referenceHash
     | Expr.App (funcExpr, _, _, args, _) ->
@@ -452,13 +480,16 @@ type private EntitySnapshot =
       RepresentationText: string
       IsSynthesized: bool }
 
-let private symbolId path logicalName stamp kind memberKind isSynthesized =
+let private symbolId path logicalName stamp kind memberKind isSynthesized compiledName totalArgCount genericArity =
     { Path = path
       LogicalName = logicalName
       Stamp = stamp
       Kind = kind
       MemberKind = memberKind
-      IsSynthesized = isSynthesized }
+      IsSynthesized = isSynthesized
+      CompiledName = compiledName
+      TotalArgCount = totalArgCount
+      GenericArity = genericArity }
 
 let private bindingKey (snapshot: BindingSnapshot) =
     let entityKey = snapshot.ContainingEntity |> Option.defaultValue ""
@@ -509,7 +540,41 @@ and private snapshotBinding denv path (TBind (var, expr, _)) =
     let bodyHash = exprDigest denv expr
     let containingEntity = tryGetContainingEntityFullName var
     let memberKind = memberKindOfVal var
-    let symbol = symbolId path var.LogicalName var.Stamp SymbolKind.Value memberKind var.IsCompilerGenerated
+    let vref = mkLocalValRef var
+    let compiledName =
+        try
+            Some(vref.CompiledName None)
+        with _ ->
+            None
+    let totalArgCount =
+        var.ValReprInfo
+        |> Option.map (fun info ->
+            let isInstanceMember =
+                match var.MemberInfo with
+                | Some memberInfo -> memberInfo.MemberFlags.IsInstance
+                | None -> false
+
+            // ValReprInfo.TotalArgCount includes the implicit 'this' argument for instance members.
+            // MethodDefinitionKey.ParameterTypes only includes emitted IL parameters, so subtract it.
+            if isInstanceMember then
+                max 0 (info.TotalArgCount - 1)
+            else
+                info.TotalArgCount)
+
+    // Keep generic arity optional until we can reliably project method-only generic parameters
+    // (excluding enclosing type parameters) from typed-tree symbols.
+    let genericArity = None
+    let symbol =
+        symbolId
+            path
+            var.LogicalName
+            var.Stamp
+            SymbolKind.Value
+            memberKind
+            var.IsCompilerGenerated
+            compiledName
+            totalArgCount
+            genericArity
 
     // Determine addition info for hot reload restrictions
     let additionInfo =
@@ -607,7 +672,7 @@ and private snapshotTycon denv path (tycon: Tycon) =
 
         sb.ToString()
 
-    { Symbol = symbolId path tycon.LogicalName tycon.Stamp SymbolKind.Entity None false
+    { Symbol = symbolId path tycon.LogicalName tycon.Stamp SymbolKind.Entity None false None None None
       RepresentationHash = stableHash reprText
       RepresentationText = reprText
       IsSynthesized = false }: EntitySnapshot

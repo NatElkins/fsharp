@@ -1061,7 +1061,10 @@ module internal TestHelpers =
               Stamp = 0L
               Kind = SymbolKind.Value
               MemberKind = Some memberKind
-              IsSynthesized = false }
+              IsSynthesized = false
+              CompiledName = None
+              TotalArgCount = None
+              GenericArity = None }
 
         { AccessorUpdate.Symbol = symbol
           ContainingType = typeName

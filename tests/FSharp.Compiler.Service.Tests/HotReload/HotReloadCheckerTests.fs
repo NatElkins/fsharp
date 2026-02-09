@@ -164,6 +164,63 @@ type Type =
                 dllPath
                 available)
 
+    let private getMethodTokenByParameterCount (dllPath: string) (declaringType: string) (methodName: string) (parameterCount: int) =
+        use stream = File.OpenRead(dllPath)
+        use peReader = new PEReader(stream)
+        let metadataReader = peReader.GetMetadataReader()
+
+        let tryReadParameterCount (methodDef: MethodDefinition) =
+            try
+                let blobReader = metadataReader.GetBlobReader(methodDef.Signature)
+                let header = blobReader.ReadByte()
+                let hasGenericArity = (header &&& 0x10uy) <> 0uy
+
+                if hasGenericArity then
+                    ignore (blobReader.ReadCompressedInteger())
+
+                blobReader.ReadCompressedInteger()
+            with _ ->
+                -1
+
+        metadataReader.MethodDefinitions
+        |> Seq.choose (fun handle ->
+            let methodDef = metadataReader.GetMethodDefinition(handle)
+            let typeDef = metadataReader.GetTypeDefinition(methodDef.GetDeclaringType())
+            let typeName = metadataReader.GetString(typeDef.Name)
+            let name = metadataReader.GetString(methodDef.Name)
+
+            if typeName = declaringType && name = methodName then
+                let token = MetadataTokens.GetToken(EntityHandle.op_Implicit handle)
+                let count = tryReadParameterCount methodDef
+                Some(count, token)
+            else
+                None)
+        |> Seq.tryFind (fun (count, _) -> count = parameterCount)
+        |> Option.map snd
+        |> Option.defaultWith (fun () ->
+            let available =
+                metadataReader.MethodDefinitions
+                |> Seq.choose (fun handle ->
+                    let methodDef = metadataReader.GetMethodDefinition(handle)
+                    let typeDef = metadataReader.GetTypeDefinition(methodDef.GetDeclaringType())
+                    let typeName = metadataReader.GetString(typeDef.Name)
+                    let name = metadataReader.GetString(methodDef.Name)
+                    if typeName = declaringType && name = methodName then
+                        let token = MetadataTokens.GetToken(EntityHandle.op_Implicit handle)
+                        let count = tryReadParameterCount methodDef
+                        Some(sprintf "%s::%s/%d (0x%08X)" typeName name count token)
+                    else
+                        None)
+                |> String.concat "; "
+
+            failwithf
+                "Failed to find method token for %s::%s/%d in '%s'. Available overloads: %s"
+                declaringType
+                methodName
+                parameterCount
+                dllPath
+                available)
+
     let private getMethodDisplayByToken (dllPath: string) (token: int) =
         getMethodTokenInfos dllPath
         |> List.tryFind (fun (_, _, methodToken) -> methodToken = token)
@@ -538,6 +595,62 @@ let main _ =
             Assert.Contains(getterToken, delta.UpdatedMethods)
             let mainToken = getMethodToken dllPath "LoopProperties" "main"
             Assert.DoesNotContain(mainToken, delta.UpdatedMethods)
+
+        checker.EndHotReloadSession()
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``Overloaded method-body edit updates matching overload token`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-overload-edit", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        let baseline =
+            """
+module OverloadDemo
+
+type Calculator() =
+    member _.Compute(value: int) = value + 1
+    member _.Compute(value: int, extra: int) = value + extra + 1
+"""
+
+        let updated =
+            """
+module OverloadDemo
+
+type Calculator() =
+    member _.Compute(value: int) = value + 1
+    member _.Compute(value: int, extra: int) = value + extra + 2
+"""
+
+        File.WriteAllText(fsPath, baseline)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baseline
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let oneArgToken = getMethodTokenByParameterCount dllPath "Calculator" "Compute" 1
+        let twoArgToken = getMethodTokenByParameterCount dllPath "Calculator" "Compute" 2
+        File.WriteAllText(fsPath, updated)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitHotReloadDelta failed for overload edit: %A" error
+        | Ok delta ->
+            Assert.Contains(twoArgToken, delta.UpdatedMethods)
+            Assert.DoesNotContain(oneArgToken, delta.UpdatedMethods)
 
         checker.EndHotReloadSession()
 

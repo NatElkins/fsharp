@@ -7,9 +7,6 @@ open System.Collections
 open System.Diagnostics
 open System.IO
 open System.Reflection
-open System.Reflection.Metadata
-open System.Reflection.Metadata.Ecma335
-open System.Reflection.PortableExecutable
 open System.Security.Cryptography
 open System.Threading
 open Internal.Utilities.Collections
@@ -36,12 +33,10 @@ open FSharp.Compiler.Text.Range
 open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.BuildGraph
 open FSharp.Compiler.HotReload
-open FSharp.Compiler.HotReload.SymbolChanges
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.HotReload.DeltaBuilder
 open FSharp.Compiler.IlxDeltaEmitter
 open FSharp.Compiler.TypedTree
-open FSharp.Compiler.TypedTreeDiff
 open FSharp.Compiler.SynthesizedTypeMaps
 
 [<RequireQualifiedAccess>]
@@ -228,14 +223,6 @@ type FSharpChecker
     // Snapshot of the last committed output assembly. If semantic edits are detected while this
     // fingerprint remains unchanged, we refuse to emit deltas from stale binaries.
     let mutable currentOutputFingerprint: (DateTime * byte[] option) option = None
-    let mutable currentOutputAssemblyBytes: byte[] option = None
-
-    let hotReloadTraceMethodsEnabled =
-        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METHODS") with
-        | null -> false
-        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
-        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
-        | _ -> false
 
     static let inferParallelReferenceResolution (parallelReferenceResolution: bool option) =
         let explicitValue =
@@ -391,254 +378,6 @@ type FSharpChecker
         | None, Some _ -> true
         | Some _, None -> true
         | None, None -> false
-
-    let tryReadOutputAssemblyBytes (path: string) =
-        try
-            if File.Exists path then
-                Some(File.ReadAllBytes path)
-            else
-                None
-        with _ ->
-            None
-
-    let tryExtractUserStringLiterals (metadataReader: MetadataReader) (ilBytes: byte[]) =
-        if isNull ilBytes || ilBytes.Length < 5 then
-            []
-        else
-            let literals = ResizeArray<string>()
-            let mutable index = 0
-
-            // Heuristic scan for ldstr (0x72) + user-string token (0x70xxxxxx). This keeps
-            // method diffing sensitive to literal edits even when IL bytes remain token-stable.
-            while index <= ilBytes.Length - 5 do
-                if ilBytes[index] = 0x72uy then
-                    let token = BitConverter.ToInt32(ilBytes, index + 1)
-
-                    if (token >>> 24) = 0x70 then
-                        try
-                            let handle = MetadataTokens.UserStringHandle(token)
-                            literals.Add(metadataReader.GetUserString(handle))
-                        with _ ->
-                            ()
-
-                    index <- index + 5
-                else
-                    index <- index + 1
-
-            List.ofSeq literals
-
-    let tryReadMethodBodyDigest (peReader: PEReader) (metadataReader: MetadataReader) (rowId: int) =
-        try
-            let handle = MetadataTokens.MethodDefinitionHandle rowId
-            let definition = metadataReader.GetMethodDefinition handle
-            let rva = definition.RelativeVirtualAddress
-
-            if rva = 0 then
-                Some(Array.empty<byte>, [])
-            else
-                let ilBytes = peReader.GetMethodBody(rva).GetILBytes()
-                if isNull ilBytes then
-                    Some(Array.empty<byte>, [])
-                else
-                    Some(ilBytes, tryExtractUserStringLiterals metadataReader ilBytes)
-        with _ ->
-            None
-
-    let getChangedMethodTokensFromAssemblies (previousAssemblyBytes: byte[]) (currentAssemblyBytes: byte[]) =
-        try
-            use previousStream = new MemoryStream(previousAssemblyBytes, writable = false)
-            use currentStream = new MemoryStream(currentAssemblyBytes, writable = false)
-            use previousPeReader = new PEReader(previousStream)
-            use currentPeReader = new PEReader(currentStream)
-
-            let previousMetadata = previousPeReader.GetMetadataReader()
-            let currentMetadata = currentPeReader.GetMetadataReader()
-            let rowCount = min (previousMetadata.GetTableRowCount(TableIndex.MethodDef)) (currentMetadata.GetTableRowCount(TableIndex.MethodDef))
-
-            [ for rowId in 1 .. rowCount do
-                  let previousBody = tryReadMethodBodyDigest previousPeReader previousMetadata rowId
-                  let currentBody = tryReadMethodBodyDigest currentPeReader currentMetadata rowId
-
-                  if previousBody <> currentBody then
-                      yield (0x06000000 ||| rowId) ]
-        with _ ->
-            []
-
-    let deduplicateMethodKeys (keys: MethodDefinitionKey list) =
-        keys
-        |> List.fold (fun acc key -> if List.contains key acc then acc else key :: acc) []
-        |> List.rev
-
-    let mapChangedMethodTokensToMethodKeys (baseline: FSharpEmitBaseline) (methodTokens: int list) =
-        let methodKeyByToken =
-            baseline.MethodTokens
-            |> Map.toList
-            |> List.map (fun (key, token) -> token, key)
-            |> Map.ofList
-
-        let methodKeys =
-            methodTokens
-            |> List.choose (fun token -> methodKeyByToken |> Map.tryFind token)
-            |> deduplicateMethodKeys
-
-        if hotReloadTraceMethodsEnabled && not (List.isEmpty methodTokens) then
-            let tokenText =
-                methodTokens
-                |> List.map (fun token -> sprintf "0x%08X" token)
-                |> String.concat ", "
-
-            let methodText =
-                methodKeys
-                |> List.map (fun key -> sprintf "%s::%s" key.DeclaringType key.Name)
-                |> String.concat ", "
-
-            printfn
-                "[fsharp-hotreload][service] output body changes tokens=[%s] resolvedMethods=[%s]"
-                tokenText
-                methodText
-
-        methodKeys
-
-    let tryExpectedMethodNameFromSymbolChange (change: UpdatedSymbolChange) =
-        if change.Kind <> SemanticEditKind.MethodBody then
-            None
-        else
-            match change.Symbol.MemberKind with
-            | Some(SymbolMemberKind.PropertyGet propertyName) -> Some($"get_{propertyName}")
-            | Some(SymbolMemberKind.PropertySet propertyName) -> Some($"set_{propertyName}")
-            | Some(SymbolMemberKind.EventAdd eventName) -> Some($"add_{eventName}")
-            | Some(SymbolMemberKind.EventRemove eventName) -> Some($"remove_{eventName}")
-            | Some(SymbolMemberKind.EventInvoke eventName) -> Some($"raise_{eventName}")
-            | Some SymbolMemberKind.Method
-            | None -> Some change.Symbol.LogicalName
-
-    let selectOutputMethodDiffFallbackKeys
-        (symbolChanges: FSharpSymbolChanges)
-        (symbolUpdatedMethods: MethodDefinitionKey list)
-        (methodBodyUpdatedKeys: MethodDefinitionKey list)
-        =
-        if List.isEmpty methodBodyUpdatedKeys then
-            []
-        elif not (List.isEmpty symbolUpdatedMethods) then
-            if hotReloadTraceMethodsEnabled then
-                printfn
-                    "[fsharp-hotreload][service] output diff fallback suppressed; symbol mapping resolved %d method(s)."
-                    symbolUpdatedMethods.Length
-
-            []
-        else
-            let expectedMethodNames =
-                symbolChanges.Updated
-                |> List.choose tryExpectedMethodNameFromSymbolChange
-                |> Set.ofList
-
-            let filteredMethodBodyUpdatedKeys =
-                if Set.isEmpty expectedMethodNames then
-                    methodBodyUpdatedKeys
-                else
-                    methodBodyUpdatedKeys
-                    |> List.filter (fun key -> Set.contains key.Name expectedMethodNames)
-
-            if hotReloadTraceMethodsEnabled then
-                let expectedNamesText =
-                    expectedMethodNames |> Seq.toList |> String.concat ", "
-
-                let filteredText =
-                    filteredMethodBodyUpdatedKeys
-                    |> List.map (fun key -> sprintf "%s::%s" key.DeclaringType key.Name)
-                    |> String.concat ", "
-
-                printfn
-                    "[fsharp-hotreload][service] output diff fallback selected expectedNames=[%s] methods=[%s]"
-                    expectedNamesText
-                    filteredText
-
-            filteredMethodBodyUpdatedKeys
-
-    let selectSymbolUpdatedMethodsWithOutputEvidence
-        (symbolUpdatedMethods: MethodDefinitionKey list)
-        (methodBodyUpdatedKeys: MethodDefinitionKey list)
-        =
-        if List.isEmpty symbolUpdatedMethods || List.isEmpty methodBodyUpdatedKeys then
-            symbolUpdatedMethods
-        else
-            let isCompilerGeneratedMethodKey (key: MethodDefinitionKey) =
-                key.Name.IndexOf('@') >= 0
-                || key.DeclaringType.IndexOf('@') >= 0
-
-            let matchedSymbolMethods =
-                symbolUpdatedMethods
-                |> List.filter (fun key -> List.contains key methodBodyUpdatedKeys)
-
-            let nonGeneratedEvidenceMethods =
-                methodBodyUpdatedKeys
-                |> List.filter (fun key -> not (isCompilerGeneratedMethodKey key))
-
-            let selected =
-                if List.isEmpty matchedSymbolMethods then
-                    if List.isEmpty nonGeneratedEvidenceMethods then
-                        symbolUpdatedMethods
-                    else
-                        nonGeneratedEvidenceMethods
-                else
-                    matchedSymbolMethods
-
-            if hotReloadTraceMethodsEnabled then
-                let symbolText =
-                    symbolUpdatedMethods
-                    |> List.map (fun key -> sprintf "%s::%s" key.DeclaringType key.Name)
-                    |> String.concat ", "
-
-                let evidenceText =
-                    methodBodyUpdatedKeys
-                    |> List.map (fun key -> sprintf "%s::%s" key.DeclaringType key.Name)
-                    |> String.concat ", "
-
-                let nonGeneratedEvidenceText =
-                    nonGeneratedEvidenceMethods
-                    |> List.map (fun key -> sprintf "%s::%s" key.DeclaringType key.Name)
-                    |> String.concat ", "
-
-                let selectedText =
-                    selected
-                    |> List.map (fun key -> sprintf "%s::%s" key.DeclaringType key.Name)
-                    |> String.concat ", "
-
-                printfn
-                    "[fsharp-hotreload][service] symbol method selection symbol=[%s] evidence=[%s] nonGeneratedEvidence=[%s] selected=[%s]"
-                    symbolText
-                    evidenceText
-                    nonGeneratedEvidenceText
-                    selectedText
-
-            selected
-
-    let getMethodBodyUpdatedKeysFromOutputDiff
-        (baseline: FSharpEmitBaseline)
-        (previousAssemblyBytes: byte[] option)
-        (currentAssemblyBytes: byte[] option)
-        =
-        match previousAssemblyBytes, currentAssemblyBytes with
-        | Some previousBytes, Some currentBytes ->
-            let methodTokens = getChangedMethodTokensFromAssemblies previousBytes currentBytes
-
-            if hotReloadTraceMethodsEnabled then
-                printfn
-                    "[fsharp-hotreload][service] output diff byte-lengths previous=%d current=%d changedMethodTokenCount=%d"
-                    previousBytes.Length
-                    currentBytes.Length
-                    methodTokens.Length
-
-            methodTokens
-            |> mapChangedMethodTokensToMethodKeys baseline
-        | _ ->
-            if hotReloadTraceMethodsEnabled then
-                printfn
-                    "[fsharp-hotreload][service] output diff unavailable previousBytes=%b currentBytes=%b"
-                    previousAssemblyBytes.IsSome
-                    currentAssemblyBytes.IsSome
-
-            []
 
     let readIlModule path =
         waitForStableFile path
@@ -863,8 +602,7 @@ type FSharpChecker
 
                             FSharpEditAndContinueLanguageService.Instance.EndSession()
                             FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
-                            currentOutputFingerprint <- tryGetOutputFingerprint outputPath
-                            currentOutputAssemblyBytes <- tryReadOutputAssemblyBytes outputPath)
+                            currentOutputFingerprint <- tryGetOutputFingerprint outputPath)
 
                         return Result.Ok ()
         }
@@ -894,7 +632,6 @@ type FSharpChecker
                     let tcGlobals, implementationFiles = getHotReloadDiffInputs projectResults
                     waitForStableFile outputPath
                     let outputFingerprint = tryGetOutputFingerprint outputPath
-                    let outputAssemblyBytes = tryReadOutputAssemblyBytes outputPath
 
                     lock hotReloadGate (fun () ->
                         if not FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
@@ -920,33 +657,15 @@ type FSharpChecker
                     if not FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
                         return Result.Error FSharpHotReloadError.NoActiveSession
                     else
-                        let staleOutputErrorOpt, additionalUpdatedMethods, symbolMethodBodyEvidence =
+                        let staleOutputErrorOpt =
                             lock hotReloadGate (fun () ->
                                 match FSharpEditAndContinueLanguageService.Instance.TryGetSession() with
-                                | ValueNone -> None, [], []
+                                | ValueNone -> None
                                 | ValueSome session ->
-                                    let methodBodyUpdatedKeys =
-                                        getMethodBodyUpdatedKeysFromOutputDiff
-                                            session.Baseline
-                                            currentOutputAssemblyBytes
-                                            outputAssemblyBytes
-
                                     let symbolChanges = computeSymbolChanges tcGlobals session.ImplementationFiles implementationFiles
 
-                                    let updatedTypes, symbolUpdatedMethods, accessorUpdates =
+                                    let updatedTypes, updatedMethods, accessorUpdates =
                                         mapSymbolChangesToDelta session.Baseline symbolChanges
-
-                                    let symbolUpdatedMethods =
-                                        selectSymbolUpdatedMethodsWithOutputEvidence symbolUpdatedMethods methodBodyUpdatedKeys
-
-                                    let additionalUpdatedMethods =
-                                        selectOutputMethodDiffFallbackKeys
-                                            symbolChanges
-                                            symbolUpdatedMethods
-                                            methodBodyUpdatedKeys
-
-                                    let updatedMethods =
-                                        deduplicateMethodKeys (symbolUpdatedMethods @ additionalUpdatedMethods)
 
                                     let hasUpdates =
                                         not (List.isEmpty updatedTypes)
@@ -959,13 +678,9 @@ type FSharpChecker
                                             FSharpHotReloadError.DeltaEmissionFailed(
                                                 $"Output assembly '{outputPath}' did not change after compilation; refusing to emit a delta from stale build output."
                                             )
-                                        ),
-                                        additionalUpdatedMethods,
-                                        methodBodyUpdatedKeys
+                                        )
                                     else
-                                        None,
-                                        additionalUpdatedMethods,
-                                        methodBodyUpdatedKeys)
+                                        None)
 
                         match staleOutputErrorOpt with
                         | Some staleError -> return Result.Error staleError
@@ -994,17 +709,14 @@ type FSharpChecker
                                     FSharpEditAndContinueLanguageService.Instance.EmitDeltaForCompilation(
                                         tcGlobals,
                                         implementationFiles,
-                                        ilModule,
-                                        additionalUpdatedMethods = additionalUpdatedMethods,
-                                        symbolMethodBodyEvidence = symbolMethodBodyEvidence
+                                        ilModule
                                     )
                                 with
                                 | Ok result ->
                                     match result.Delta.UpdatedBaseline with
                                     | Some _ ->
                                         lock hotReloadGate (fun () ->
-                                            currentOutputFingerprint <- outputFingerprint
-                                            currentOutputAssemblyBytes <- outputAssemblyBytes)
+                                            currentOutputFingerprint <- outputFingerprint)
                                     | None -> ()
                                     return Result.Ok(toPublicDelta result.Delta)
                                 | Error error -> return Result.Error(mapHotReloadError error)
@@ -1082,7 +794,6 @@ type FSharpChecker
         lock hotReloadGate (fun () ->
             currentSynthesizedTypeMaps <- None
             currentOutputFingerprint <- None
-            currentOutputAssemblyBytes <- None
             FSharpEditAndContinueLanguageService.Instance.ResetSessionState())
 
     member _.HotReloadSessionActive = FSharpEditAndContinueLanguageService.Instance.IsSessionActive

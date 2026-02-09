@@ -13,7 +13,10 @@ module SymbolChangesTests =
           Stamp = stamp
           Kind = kind
           MemberKind = None
-          IsSynthesized = isSynthesized }
+          IsSynthesized = isSynthesized
+          CompiledName = None
+          TotalArgCount = None
+          GenericArity = None }
 
     let private diff edits rude =
         { TypedTreeDiffResult.SemanticEdits = edits

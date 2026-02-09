@@ -27,7 +27,10 @@ type SymbolId =
       Stamp: Stamp
       Kind: SymbolKind
       MemberKind: SymbolMemberKind option
-      IsSynthesized: bool }
+      IsSynthesized: bool
+      CompiledName: string option
+      TotalArgCount: int option
+      GenericArity: int option }
 
     member QualifiedName: string
 
