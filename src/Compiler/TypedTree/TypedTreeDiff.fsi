@@ -31,7 +31,8 @@ type SymbolId =
       CompiledName: string option
       TotalArgCount: int option
       GenericArity: int option
-      ParameterTypeIdentities: string list option }
+      ParameterTypeIdentities: string list option
+      ReturnTypeIdentity: string option }
 
     member QualifiedName: string
 

@@ -39,7 +39,8 @@ type SymbolId =
       CompiledName: string option
       TotalArgCount: int option
       GenericArity: int option
-      ParameterTypeIdentities: string list option }
+      ParameterTypeIdentities: string list option
+      ReturnTypeIdentity: string option }
 
     member x.QualifiedName =
         match x.Path with
@@ -224,11 +225,11 @@ let private formatGenericTypeIdentity (typeName: string) (args: string list) =
 
 /// Encodes typed-tree parameter types using the same generic argument shape as ILType.QualifiedName.
 /// This lets DeltaBuilder compare source-level method symbols to baseline MethodDefinitionKey signatures.
-let rec private tryTypeIdentityFromTType (g: TcGlobals) (ty: TType) : string option =
+let rec private tryTypeIdentityFromTType (g: TcGlobals) (typarOrdinals: Map<Stamp, int>) (ty: TType) : string option =
     let ty = stripTyEqnsAndMeasureEqns g ty
 
     let tryEncodeGenericArgs (args: TType list) =
-        let encoded = args |> List.map (tryTypeIdentityFromTType g)
+        let encoded = args |> List.map (tryTypeIdentityFromTType g typarOrdinals)
 
         if encoded |> List.exists Option.isNone then
             None
@@ -236,7 +237,7 @@ let rec private tryTypeIdentityFromTType (g: TcGlobals) (ty: TType) : string opt
             Some(encoded |> List.choose id)
 
     match ty with
-    | TType_forall(_, bodyTy) -> tryTypeIdentityFromTType g bodyTy
+    | TType_forall(_, bodyTy) -> tryTypeIdentityFromTType g typarOrdinals bodyTy
     | TType_app(tcref, tinst, _) ->
         let fullName =
             try
@@ -259,7 +260,7 @@ let rec private tryTypeIdentityFromTType (g: TcGlobals) (ty: TType) : string opt
         tryEncodeGenericArgs tys
         |> Option.map (formatGenericTypeIdentity tupleName)
     | TType_fun(domainTy, rangeTy, _) ->
-        match tryTypeIdentityFromTType g domainTy, tryTypeIdentityFromTType g rangeTy with
+        match tryTypeIdentityFromTType g typarOrdinals domainTy, tryTypeIdentityFromTType g typarOrdinals rangeTy with
         | Some domainIdentity, Some rangeIdentity ->
             Some(formatGenericTypeIdentity "Microsoft.FSharp.Core.FSharpFunc`2" [ domainIdentity; rangeIdentity ])
         | _ -> None
@@ -272,13 +273,36 @@ let rec private tryTypeIdentityFromTType (g: TcGlobals) (ty: TType) : string opt
 
         tryEncodeGenericArgs tinst
         |> Option.map (formatGenericTypeIdentity fullName)
-    | TType_var _ ->
-        // We intentionally skip unresolved generic variable identity for now.
-        // Failing closed keeps hot reload behavior conservative (restart fallback) instead of targeting the wrong token.
-        None
+    | TType_var (typar, _) ->
+        Map.tryFind typar.Stamp typarOrdinals
+        |> Option.map (fun ordinal -> "!" + string ordinal)
     | TType_measure _ -> None
 
-let private tryGetParameterTypeIdentities (g: TcGlobals) (var: Val) =
+let private tryGetMethodTyparOrdinalsAndGenericArity (g: TcGlobals) (var: Val) =
+    match var.ValReprInfo with
+    | None -> None
+    | Some valReprInfo ->
+        let numEnclosingTypars = CountEnclosingTyparsOfActualParentOfVal var
+        let tps, _, _, _, _ = GetValReprTypeInCompiledForm g valReprInfo numEnclosingTypars var.Type var.Range
+        let nonErasedTypars = tps |> List.filter (fun typar -> not typar.IsErased)
+
+        // Keep typar ordinals aligned with IL generation (TypeReprEnv.Add drops erased typars).
+        let typarOrdinals =
+            nonErasedTypars
+            |> List.mapi (fun ordinal typar -> typar.Stamp, ordinal)
+            |> Map.ofList
+
+        // Split method typars using the compiled-form enclosing count (same partition used by IlxGen).
+        let methodTypars =
+            if numEnclosingTypars <= tps.Length then
+                tps |> List.skip numEnclosingTypars
+            else
+                []
+
+        let methodGenericArity = methodTypars |> List.filter (fun typar -> not typar.IsErased) |> List.length
+        Some(typarOrdinals, methodGenericArity)
+
+let private tryGetParameterTypeIdentities (g: TcGlobals) (typarOrdinals: Map<Stamp, int>) (var: Val) =
     let parameterTypes =
         match var.MemberInfo, var.ValReprInfo with
         | Some _, _ ->
@@ -292,12 +316,23 @@ let private tryGetParameterTypeIdentities (g: TcGlobals) (var: Val) =
             |> List.map fst
         | None, None -> []
 
-    let encoded = parameterTypes |> List.map (tryTypeIdentityFromTType g)
+    let encoded = parameterTypes |> List.map (tryTypeIdentityFromTType g typarOrdinals)
 
     if encoded |> List.forall Option.isSome then
         Some(encoded |> List.choose id)
     else
         None
+
+let private tryGetReturnTypeIdentity (g: TcGlobals) (typarOrdinals: Map<Stamp, int>) (var: Val) =
+    match var.ValReprInfo with
+    | Some valReprInfo ->
+        let numEnclosingTypars = CountEnclosingTyparsOfActualParentOfVal var
+        let _, _, _, returnTy, _ = GetValReprTypeInCompiledForm g valReprInfo numEnclosingTypars var.Type var.Range
+
+        match returnTy with
+        | None -> Some "System.Void"
+        | Some ty -> tryTypeIdentityFromTType g typarOrdinals ty
+    | None -> None
 
 /// Generates a stable digest of type parameter constraints for change detection.
 let private constraintDigest (denv: DisplayEnv) (constraint_: TyparConstraint) =
@@ -576,6 +611,7 @@ let private symbolId
     totalArgCount
     genericArity
     parameterTypeIdentities
+    returnTypeIdentity
     =
     { Path = path
       LogicalName = logicalName
@@ -586,7 +622,8 @@ let private symbolId
       CompiledName = compiledName
       TotalArgCount = totalArgCount
       GenericArity = genericArity
-      ParameterTypeIdentities = parameterTypeIdentities }
+      ParameterTypeIdentities = parameterTypeIdentities
+      ReturnTypeIdentity = returnTypeIdentity }
 
 let private bindingKey (snapshot: BindingSnapshot) =
     let entityKey = snapshot.ContainingEntity |> Option.defaultValue ""
@@ -658,10 +695,11 @@ and private snapshotBinding g denv path (TBind (var, expr, _)) =
             else
                 info.TotalArgCount)
 
-    // Keep generic arity optional until we can reliably project method-only generic parameters
-    // (excluding enclosing type parameters) from typed-tree symbols.
-    let genericArity = None
-    let parameterTypeIdentities = tryGetParameterTypeIdentities g var
+    let methodTypeInfo = tryGetMethodTyparOrdinalsAndGenericArity g var
+    let typarOrdinals = methodTypeInfo |> Option.map fst |> Option.defaultValue Map.empty
+    let genericArity = methodTypeInfo |> Option.map snd
+    let parameterTypeIdentities = tryGetParameterTypeIdentities g typarOrdinals var
+    let returnTypeIdentity = tryGetReturnTypeIdentity g typarOrdinals var
 
     let symbol =
         symbolId
@@ -675,6 +713,7 @@ and private snapshotBinding g denv path (TBind (var, expr, _)) =
             totalArgCount
             genericArity
             parameterTypeIdentities
+            returnTypeIdentity
 
     // Determine addition info for hot reload restrictions
     let additionInfo =
@@ -772,7 +811,7 @@ and private snapshotTycon denv path (tycon: Tycon) =
 
         sb.ToString()
 
-    { Symbol = symbolId path tycon.LogicalName tycon.Stamp SymbolKind.Entity None false None None None None
+    { Symbol = symbolId path tycon.LogicalName tycon.Stamp SymbolKind.Entity None false None None None None None
       RepresentationHash = stableHash reprText
       RepresentationText = reprText
       IsSynthesized = false }: EntitySnapshot

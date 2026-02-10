@@ -136,6 +136,11 @@ let private methodParameterTypesMatchSymbol (symbol: SymbolId) (key: MethodDefin
         methodParameterTypes = parameterTypeIdentities
     | None -> false
 
+let private methodReturnTypeMatchesSymbol (symbol: SymbolId) (key: MethodDefinitionKey) =
+    match symbol.ReturnTypeIdentity with
+    | Some returnTypeIdentity -> ilTypeIdentity key.ReturnType = returnTypeIdentity
+    | None -> false
+
 let mapSymbolChangesToDelta
     (baseline: FSharpEmitBaseline)
     (changes: FSharpSymbolChanges)
@@ -231,14 +236,29 @@ let mapSymbolChangesToDelta
             |> Seq.toList
 
         match candidates with
+        | [] -> None
         | [ candidate ] -> Some candidate
-        | _ when not (List.isEmpty candidates) ->
-            let typedCandidates = candidates |> List.filter (methodParameterTypesMatchSymbol symbol)
+        | _ ->
+            let parameterMatchedCandidates =
+                if symbol.ParameterTypeIdentities.IsSome then
+                    candidates |> List.filter (methodParameterTypesMatchSymbol symbol)
+                else
+                    candidates
 
-            match typedCandidates with
+            match parameterMatchedCandidates with
             | [ candidate ] -> Some candidate
-            | _ -> None
-        | _ -> None
+            | [] -> None
+            | _ ->
+                // Return type disambiguation mirrors Roslyn's signature equality only after parameter matching.
+                let returnMatchedCandidates =
+                    if symbol.ReturnTypeIdentity.IsSome then
+                        parameterMatchedCandidates |> List.filter (methodReturnTypeMatchesSymbol symbol)
+                    else
+                        parameterMatchedCandidates
+
+                match returnMatchedCandidates with
+                | [ candidate ] -> Some candidate
+                | _ -> None
 
     let updatedMethods =
         changes.Updated
@@ -250,12 +270,13 @@ let mapSymbolChangesToDelta
 
                 if traceMethodResolution then
                     printfn
-                        "[fsharp-hotreload][delta-builder] symbol=%s compiledName=%A args=%A genericArity=%A parameterTypes=%A path=%A containingEntity=%A candidates=%A resolved=%A"
+                        "[fsharp-hotreload][delta-builder] symbol=%s compiledName=%A args=%A genericArity=%A parameterTypes=%A returnType=%A path=%A containingEntity=%A candidates=%A resolved=%A"
                         change.Symbol.LogicalName
                         change.Symbol.CompiledName
                         change.Symbol.TotalArgCount
                         change.Symbol.GenericArity
                         change.Symbol.ParameterTypeIdentities
+                        change.Symbol.ReturnTypeIdentity
                         change.Symbol.Path
                         change.ContainingEntity
                         candidates

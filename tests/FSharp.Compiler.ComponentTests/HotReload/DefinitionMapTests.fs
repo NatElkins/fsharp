@@ -16,7 +16,8 @@ module DefinitionMapTests =
           CompiledName = None
           TotalArgCount = None
           GenericArity = None
-          ParameterTypeIdentities = None }
+          ParameterTypeIdentities = None
+          ReturnTypeIdentity = None }
 
     let private diffResult edits rude =
         { TypedTreeDiffResult.SemanticEdits = edits

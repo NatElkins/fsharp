@@ -292,6 +292,75 @@ type Type =
         finally
             loadContext.Unload()
 
+    let private getMethodTokenBySignature
+        (dllPath: string)
+        (declaringType: string)
+        (methodName: string)
+        (genericArity: int)
+        (parameterTypeNames: string list)
+        =
+        let contextId = Guid.NewGuid().ToString("N")
+        let loadContext = new AssemblyLoadContext($"fcs-hotreload-sig-{contextId}", isCollectible = true)
+
+        try
+            let assembly = loadContext.LoadFromAssemblyPath(Path.GetFullPath(dllPath))
+
+            let declaringTypeInfo =
+                assembly.GetTypes()
+                |> Array.tryFind (fun typeInfo -> typeInfo.Name = declaringType)
+                |> Option.defaultWith (fun () ->
+                    let availableTypes =
+                        assembly.GetTypes()
+                        |> Array.map (fun typeInfo -> typeInfo.FullName)
+                        |> String.concat "; "
+
+                    failwithf
+                        "Failed to find type '%s' in '%s'. Available types: %s"
+                        declaringType
+                        dllPath
+                        availableTypes)
+
+            let matchingMethod =
+                declaringTypeInfo.GetMethods(BindingFlags.Instance ||| BindingFlags.Static ||| BindingFlags.Public ||| BindingFlags.NonPublic)
+                |> Array.filter (fun methodInfo -> methodInfo.Name = methodName)
+                |> Array.tryFind (fun methodInfo ->
+                    let methodGenericArity = methodInfo.GetGenericArguments().Length
+
+                    let methodParameterTypes =
+                        methodInfo.GetParameters()
+                        |> Array.map (fun parameter -> parameter.ParameterType.FullName)
+                        |> Array.toList
+
+                    methodGenericArity = genericArity && methodParameterTypes = parameterTypeNames)
+
+            match matchingMethod with
+            | Some methodInfo -> methodInfo.MetadataToken
+            | None ->
+                let availableOverloads =
+                    declaringTypeInfo.GetMethods(BindingFlags.Instance ||| BindingFlags.Static ||| BindingFlags.Public ||| BindingFlags.NonPublic)
+                    |> Array.filter (fun methodInfo -> methodInfo.Name = methodName)
+                    |> Array.map (fun methodInfo ->
+                        let methodGenericArity = methodInfo.GetGenericArguments().Length
+
+                        let methodParameterTypes =
+                            methodInfo.GetParameters()
+                            |> Array.map (fun parameter -> parameter.ParameterType.FullName)
+                            |> String.concat ", "
+
+                        $"{methodInfo.Name}`{methodGenericArity}({methodParameterTypes})")
+                    |> String.concat "; "
+
+                failwithf
+                    "Failed to find method token for %s::%s`%d(%s) in '%s'. Available overloads: %s"
+                    declaringType
+                    methodName
+                    genericArity
+                    (String.concat ", " parameterTypeNames)
+                    dllPath
+                    availableOverloads
+        finally
+            loadContext.Unload()
+
     [<Fact>]
     let ``HotReloadCapabilities expose supported flags`` () =
         let checker = createChecker ()
@@ -772,6 +841,122 @@ type Calculator() =
         | Ok delta ->
             Assert.Contains(stringOverloadToken, delta.UpdatedMethods)
             Assert.DoesNotContain(intOverloadToken, delta.UpdatedMethods)
+
+        checker.EndHotReloadSession()
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``Same-arity overload with typar parameter edits generic overload token`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-overload-typar-edit", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        let baseline =
+            """
+module GenericOverloadDemo
+
+type Calculator<'T>() =
+    member _.Compute(value: 'T) = sprintf "generic:%A" value
+    member _.Compute(value: string) = "string:" + value
+"""
+
+        let updated =
+            """
+module GenericOverloadDemo
+
+type Calculator<'T>() =
+    member _.Compute(value: 'T) = sprintf "updated:%A" value
+    member _.Compute(value: string) = "string:" + value
+"""
+
+        File.WriteAllText(fsPath, baseline)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baseline
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let genericOverloadToken = getMethodTokenByParameterTypes dllPath "Calculator`1" "Compute" [ null ]
+        let stringOverloadToken = getMethodTokenByParameterTypes dllPath "Calculator`1" "Compute" [ "System.String" ]
+        File.WriteAllText(fsPath, updated)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitHotReloadDelta failed for typar overload edit: %A" error
+        | Ok delta ->
+            Assert.Contains(genericOverloadToken, delta.UpdatedMethods)
+            Assert.DoesNotContain(stringOverloadToken, delta.UpdatedMethods)
+
+        checker.EndHotReloadSession()
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``Same-arity overload with generic arity difference edits generic overload token`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-overload-generic-arity-edit", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        let baseline =
+            """
+module GenericArityOverloadDemo
+
+type Calculator() =
+    member _.Compute(value: int) = value + 1
+    member _.Compute<'T>(value: int) = value + typeof<'T>.Name.Length + 2
+"""
+
+        let updated =
+            """
+module GenericArityOverloadDemo
+
+type Calculator() =
+    member _.Compute(value: int) = value + 1
+    member _.Compute<'T>(value: int) = value + typeof<'T>.Name.Length + 3
+"""
+
+        File.WriteAllText(fsPath, baseline)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baseline
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let nonGenericOverloadToken =
+            getMethodTokenBySignature dllPath "Calculator" "Compute" 0 [ "System.Int32" ]
+
+        let genericOverloadToken =
+            getMethodTokenBySignature dllPath "Calculator" "Compute" 1 [ "System.Int32" ]
+
+        File.WriteAllText(fsPath, updated)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitHotReloadDelta failed for generic arity overload edit: %A" error
+        | Ok delta ->
+            Assert.Contains(genericOverloadToken, delta.UpdatedMethods)
+            Assert.DoesNotContain(nonGenericOverloadToken, delta.UpdatedMethods)
 
         checker.EndHotReloadSession()
 

@@ -17,7 +17,8 @@ module SymbolChangesTests =
           CompiledName = None
           TotalArgCount = None
           GenericArity = None
-          ParameterTypeIdentities = None }
+          ParameterTypeIdentities = None
+          ReturnTypeIdentity = None }
 
     let private diff edits rude =
         { TypedTreeDiffResult.SemanticEdits = edits
