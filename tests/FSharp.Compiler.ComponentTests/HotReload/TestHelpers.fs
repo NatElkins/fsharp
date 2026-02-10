@@ -1064,7 +1064,8 @@ module internal TestHelpers =
               IsSynthesized = false
               CompiledName = None
               TotalArgCount = None
-              GenericArity = None }
+              GenericArity = None
+              ParameterTypeIdentities = None }
 
         { AccessorUpdate.Symbol = symbol
           ContainingType = typeName

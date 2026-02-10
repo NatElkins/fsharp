@@ -15,7 +15,8 @@ module DefinitionMapTests =
           IsSynthesized = isSynthesized
           CompiledName = None
           TotalArgCount = None
-          GenericArity = None }
+          GenericArity = None
+          ParameterTypeIdentities = None }
 
     let private diffResult edits rude =
         { TypedTreeDiffResult.SemanticEdits = edits

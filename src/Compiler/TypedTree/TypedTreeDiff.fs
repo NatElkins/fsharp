@@ -38,7 +38,8 @@ type SymbolId =
       IsSynthesized: bool
       CompiledName: string option
       TotalArgCount: int option
-      GenericArity: int option }
+      GenericArity: int option
+      ParameterTypeIdentities: string list option }
 
     member x.QualifiedName =
         match x.Path with
@@ -213,6 +214,90 @@ let private normalizeTypeString (text: string) =
 
 let private tyToString (_: DisplayEnv) (ty: TType) =
     normalizeTypeString (ty.ToString())
+
+let private formatGenericTypeIdentity (typeName: string) (args: string list) =
+    if List.isEmpty args then
+        typeName
+    else
+        let encodedArgs = args |> List.map (fun arg -> $"[{arg}]") |> String.concat ","
+        $"{typeName}[{encodedArgs}]"
+
+/// Encodes typed-tree parameter types using the same generic argument shape as ILType.QualifiedName.
+/// This lets DeltaBuilder compare source-level method symbols to baseline MethodDefinitionKey signatures.
+let rec private tryTypeIdentityFromTType (g: TcGlobals) (ty: TType) : string option =
+    let ty = stripTyEqnsAndMeasureEqns g ty
+
+    let tryEncodeGenericArgs (args: TType list) =
+        let encoded = args |> List.map (tryTypeIdentityFromTType g)
+
+        if encoded |> List.exists Option.isNone then
+            None
+        else
+            Some(encoded |> List.choose id)
+
+    match ty with
+    | TType_forall(_, bodyTy) -> tryTypeIdentityFromTType g bodyTy
+    | TType_app(tcref, tinst, _) ->
+        let fullName =
+            try
+                tcref.CompiledRepresentationForNamedType.FullName
+            with _ ->
+                tcref.CompiledName
+
+        tryEncodeGenericArgs tinst
+        |> Option.map (formatGenericTypeIdentity fullName)
+    | TType_anon(anonInfo, tys) ->
+        tryEncodeGenericArgs tys
+        |> Option.map (formatGenericTypeIdentity anonInfo.ILTypeRef.FullName)
+    | TType_tuple(tupInfo, tys) ->
+        let tupleName =
+            if evalTupInfoIsStruct tupInfo then
+                $"System.ValueTuple`{List.length tys}"
+            else
+                $"System.Tuple`{List.length tys}"
+
+        tryEncodeGenericArgs tys
+        |> Option.map (formatGenericTypeIdentity tupleName)
+    | TType_fun(domainTy, rangeTy, _) ->
+        match tryTypeIdentityFromTType g domainTy, tryTypeIdentityFromTType g rangeTy with
+        | Some domainIdentity, Some rangeIdentity ->
+            Some(formatGenericTypeIdentity "Microsoft.FSharp.Core.FSharpFunc`2" [ domainIdentity; rangeIdentity ])
+        | _ -> None
+    | TType_ucase(ucref, tinst) ->
+        let fullName =
+            try
+                ucref.TyconRef.CompiledRepresentationForNamedType.FullName
+            with _ ->
+                ucref.TyconRef.CompiledName
+
+        tryEncodeGenericArgs tinst
+        |> Option.map (formatGenericTypeIdentity fullName)
+    | TType_var _ ->
+        // We intentionally skip unresolved generic variable identity for now.
+        // Failing closed keeps hot reload behavior conservative (restart fallback) instead of targeting the wrong token.
+        None
+    | TType_measure _ -> None
+
+let private tryGetParameterTypeIdentities (g: TcGlobals) (var: Val) =
+    let parameterTypes =
+        match var.MemberInfo, var.ValReprInfo with
+        | Some _, _ ->
+            ArgInfosOfMember g (mkLocalValRef var)
+            |> List.concat
+            |> List.map fst
+        | None, Some valReprInfo ->
+            let _, argInfos, _, _ = GetValReprTypeInFSharpForm g valReprInfo var.Type var.Range
+            argInfos
+            |> List.concat
+            |> List.map fst
+        | None, None -> []
+
+    let encoded = parameterTypes |> List.map (tryTypeIdentityFromTType g)
+
+    if encoded |> List.forall Option.isSome then
+        Some(encoded |> List.choose id)
+    else
+        None
 
 /// Generates a stable digest of type parameter constraints for change detection.
 let private constraintDigest (denv: DisplayEnv) (constraint_: TyparConstraint) =
@@ -480,7 +565,18 @@ type private EntitySnapshot =
       RepresentationText: string
       IsSynthesized: bool }
 
-let private symbolId path logicalName stamp kind memberKind isSynthesized compiledName totalArgCount genericArity =
+let private symbolId
+    path
+    logicalName
+    stamp
+    kind
+    memberKind
+    isSynthesized
+    compiledName
+    totalArgCount
+    genericArity
+    parameterTypeIdentities
+    =
     { Path = path
       LogicalName = logicalName
       Stamp = stamp
@@ -489,7 +585,8 @@ let private symbolId path logicalName stamp kind memberKind isSynthesized compil
       IsSynthesized = isSynthesized
       CompiledName = compiledName
       TotalArgCount = totalArgCount
-      GenericArity = genericArity }
+      GenericArity = genericArity
+      ParameterTypeIdentities = parameterTypeIdentities }
 
 let private bindingKey (snapshot: BindingSnapshot) =
     let entityKey = snapshot.ContainingEntity |> Option.defaultValue ""
@@ -497,21 +594,21 @@ let private bindingKey (snapshot: BindingSnapshot) =
 
 let private entityKey (snapshot: EntitySnapshot) = snapshot.Symbol.QualifiedName
 
-let rec private snapshotModuleBinding denv (path: string list) (map, entities) binding =
+let rec private snapshotModuleBinding g denv (path: string list) (map, entities) binding =
     match binding with
     | ModuleOrNamespaceBinding.Binding b ->
-        let snapshot = snapshotBinding denv path b
+        let snapshot = snapshotBinding g denv path b
         (Map.add (bindingKey snapshot) snapshot map, entities)
     | ModuleOrNamespaceBinding.Module (moduleEntity, contents) ->
-        snapshotModuleContents denv (path @ [ moduleEntity.LogicalName ]) (map, entities) contents
+        snapshotModuleContents g denv (path @ [ moduleEntity.LogicalName ]) (map, entities) contents
 
-and private snapshotModuleContents denv path (map, entities) contents =
+and private snapshotModuleContents g denv path (map, entities) contents =
     match contents with
     | ModuleOrNamespaceContents.TMDefs defs ->
         ((map, entities), defs)
-        ||> List.fold (snapshotModuleContents denv path)
+        ||> List.fold (snapshotModuleContents g denv path)
     | ModuleOrNamespaceContents.TMDefLet (binding, _) ->
-        let snapshot = snapshotBinding denv path binding
+        let snapshot = snapshotBinding g denv path binding
         (Map.add (bindingKey snapshot) snapshot map, entities)
     | ModuleOrNamespaceContents.TMDefRec (_, _, tycons, bindings, _) ->
         let entitiesWithTypes =
@@ -520,7 +617,7 @@ and private snapshotModuleContents denv path (map, entities) contents =
                 let snapshot = snapshotTycon denv path tycon
                 Map.add (entityKey snapshot) snapshot acc)
 
-        List.fold (snapshotModuleBinding denv path) (map, entitiesWithTypes) bindings
+        List.fold (snapshotModuleBinding g denv path) (map, entitiesWithTypes) bindings
     | ModuleOrNamespaceContents.TMDefDo _ -> (map, entities)
     | ModuleOrNamespaceContents.TMDefOpens _ -> (map, entities)
 
@@ -534,7 +631,7 @@ and private tryGetContainingEntityFullName (var: Val) =
         with _ -> None
     | None -> None
 
-and private snapshotBinding denv path (TBind (var, expr, _)) =
+and private snapshotBinding g denv path (TBind (var, expr, _)) =
     let signature = tyToString denv var.Type
     let constraints = typarConstraintsDigest denv var.Typars
     let bodyHash = exprDigest denv expr
@@ -564,6 +661,8 @@ and private snapshotBinding denv path (TBind (var, expr, _)) =
     // Keep generic arity optional until we can reliably project method-only generic parameters
     // (excluding enclosing type parameters) from typed-tree symbols.
     let genericArity = None
+    let parameterTypeIdentities = tryGetParameterTypeIdentities g var
+
     let symbol =
         symbolId
             path
@@ -575,6 +674,7 @@ and private snapshotBinding denv path (TBind (var, expr, _)) =
             compiledName
             totalArgCount
             genericArity
+            parameterTypeIdentities
 
     // Determine addition info for hot reload restrictions
     let additionInfo =
@@ -672,16 +772,16 @@ and private snapshotTycon denv path (tycon: Tycon) =
 
         sb.ToString()
 
-    { Symbol = symbolId path tycon.LogicalName tycon.Stamp SymbolKind.Entity None false None None None
+    { Symbol = symbolId path tycon.LogicalName tycon.Stamp SymbolKind.Entity None false None None None None
       RepresentationHash = stableHash reprText
       RepresentationText = reprText
       IsSynthesized = false }: EntitySnapshot
 
-let private collectSnapshots denv (CheckedImplFile (qualifiedNameOfFile = qual; contents = contents)) =
+let private collectSnapshots g denv (CheckedImplFile (qualifiedNameOfFile = qual; contents = contents)) =
     let initialPath = [ qual.Text ]
     let initialBindings: Map<string, BindingSnapshot> = Map.empty
     let initialEntities: Map<string, EntitySnapshot> = Map.empty
-    snapshotModuleContents denv initialPath (initialBindings, initialEntities) contents
+    snapshotModuleContents g denv initialPath (initialBindings, initialEntities) contents
 
 let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: Map<string, BindingSnapshot>) =
     let edits = ResizeArray()
@@ -830,8 +930,8 @@ let private compareEntities (baseline: Map<string, EntitySnapshot>) (updated: Ma
 /// Computes semantic edits between two checked implementation files.
 let diffImplementationFile (g: TcGlobals) baseline updated =
     let denv = DisplayEnv.Empty g
-    let baselineBindings, baselineEntities = collectSnapshots denv baseline
-    let updatedBindings, updatedEntities = collectSnapshots denv updated
+    let baselineBindings, baselineEntities = collectSnapshots g denv baseline
+    let updatedBindings, updatedEntities = collectSnapshots g denv updated
 
     let semanticEdits, bindingRudeEdits = compareBindings baselineBindings updatedBindings
     let entityRudeEdits = compareEntities baselineEntities updatedEntities

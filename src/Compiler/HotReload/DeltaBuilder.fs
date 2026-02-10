@@ -80,6 +80,40 @@ let private deduplicateSymbols symbols =
 let private methodNameOfSymbol (symbol: SymbolId) =
     symbol.CompiledName |> Option.defaultValue symbol.LogicalName
 
+let rec private ilTypeIdentity (ilType: ILType) =
+    match ilType with
+    | ILType.Void -> "System.Void"
+    | ILType.Array(ILArrayShape shape, elementType) ->
+        let rankSuffix =
+            if shape.Length <= 1 then
+                "[]"
+            else
+                "[" + String(',', shape.Length - 1) + "]"
+
+        ilTypeIdentity elementType + rankSuffix
+    | ILType.Value typeSpec
+    | ILType.Boxed typeSpec -> ilTypeSpecIdentity typeSpec
+    | ILType.Ptr elementType -> ilTypeIdentity elementType + "*"
+    | ILType.Byref elementType -> ilTypeIdentity elementType + "&"
+    | ILType.FunctionPointer signature ->
+        let args = signature.ArgTypes |> List.map ilTypeIdentity |> String.concat ","
+        $"{ilTypeIdentity signature.ReturnType} ({args})"
+    | ILType.TypeVar index -> "!" + string index
+    | ILType.Modified(_, _, innerType) -> ilTypeIdentity innerType
+
+and private ilTypeSpecIdentity (typeSpec: ILTypeSpec) =
+    let fullName = typeSpec.TypeRef.FullName
+
+    if List.isEmpty typeSpec.GenericArgs then
+        fullName
+    else
+        let encodedArgs =
+            typeSpec.GenericArgs
+            |> List.map (fun arg -> $"[{ilTypeIdentity arg}]")
+            |> String.concat ","
+
+        $"{fullName}[{encodedArgs}]"
+
 let private methodKeyMatchesSymbol (symbol: SymbolId) (key: MethodDefinitionKey) =
     let nameMatches = String.Equals(key.Name, methodNameOfSymbol symbol, StringComparison.Ordinal)
 
@@ -94,6 +128,13 @@ let private methodKeyMatchesSymbol (symbol: SymbolId) (key: MethodDefinitionKey)
         | None -> true
 
     nameMatches && argCountMatches && genericArityMatches
+
+let private methodParameterTypesMatchSymbol (symbol: SymbolId) (key: MethodDefinitionKey) =
+    match symbol.ParameterTypeIdentities with
+    | Some parameterTypeIdentities ->
+        let methodParameterTypes = key.ParameterTypes |> List.map ilTypeIdentity
+        methodParameterTypes = parameterTypeIdentities
+    | None -> false
 
 let mapSymbolChangesToDelta
     (baseline: FSharpEmitBaseline)
@@ -191,6 +232,12 @@ let mapSymbolChangesToDelta
 
         match candidates with
         | [ candidate ] -> Some candidate
+        | _ when not (List.isEmpty candidates) ->
+            let typedCandidates = candidates |> List.filter (methodParameterTypesMatchSymbol symbol)
+
+            match typedCandidates with
+            | [ candidate ] -> Some candidate
+            | _ -> None
         | _ -> None
 
     let updatedMethods =
@@ -203,11 +250,12 @@ let mapSymbolChangesToDelta
 
                 if traceMethodResolution then
                     printfn
-                        "[fsharp-hotreload][delta-builder] symbol=%s compiledName=%A args=%A genericArity=%A path=%A containingEntity=%A candidates=%A resolved=%A"
+                        "[fsharp-hotreload][delta-builder] symbol=%s compiledName=%A args=%A genericArity=%A parameterTypes=%A path=%A containingEntity=%A candidates=%A resolved=%A"
                         change.Symbol.LogicalName
                         change.Symbol.CompiledName
                         change.Symbol.TotalArgCount
                         change.Symbol.GenericArity
+                        change.Symbol.ParameterTypeIdentities
                         change.Symbol.Path
                         change.ContainingEntity
                         candidates

@@ -4,9 +4,11 @@ namespace FSharp.Compiler.Service.Tests.HotReload
 
 open System
 open System.IO
+open System.Reflection
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
+open System.Runtime.Loader
 open Xunit
 
 open FSharp.Compiler.CodeAnalysis
@@ -226,6 +228,69 @@ type Type =
         |> List.tryFind (fun (_, _, methodToken) -> methodToken = token)
         |> Option.map (fun (typeName, methodName, _) -> $"{typeName}::{methodName}")
         |> Option.defaultWith (fun () -> $"<unknown:0x{token:X8}>")
+
+    let private getMethodTokenByParameterTypes
+        (dllPath: string)
+        (declaringType: string)
+        (methodName: string)
+        (parameterTypeNames: string list)
+        =
+        let contextId = Guid.NewGuid().ToString("N")
+        let loadContext = new AssemblyLoadContext($"fcs-hotreload-{contextId}", isCollectible = true)
+
+        try
+            let assembly = loadContext.LoadFromAssemblyPath(Path.GetFullPath(dllPath))
+
+            let declaringTypeInfo =
+                assembly.GetTypes()
+                |> Array.tryFind (fun typeInfo -> typeInfo.Name = declaringType)
+                |> Option.defaultWith (fun () ->
+                    let availableTypes =
+                        assembly.GetTypes()
+                        |> Array.map (fun typeInfo -> typeInfo.FullName)
+                        |> String.concat "; "
+
+                    failwithf
+                        "Failed to find type '%s' in '%s'. Available types: %s"
+                        declaringType
+                        dllPath
+                        availableTypes)
+
+            let matchingMethod =
+                declaringTypeInfo.GetMethods(BindingFlags.Instance ||| BindingFlags.Static ||| BindingFlags.Public ||| BindingFlags.NonPublic)
+                |> Array.filter (fun methodInfo -> methodInfo.Name = methodName)
+                |> Array.tryFind (fun methodInfo ->
+                    let methodParameterTypes =
+                        methodInfo.GetParameters()
+                        |> Array.map (fun parameter -> parameter.ParameterType.FullName)
+                        |> Array.toList
+
+                    methodParameterTypes = parameterTypeNames)
+
+            match matchingMethod with
+            | Some methodInfo -> methodInfo.MetadataToken
+            | None ->
+                let availableOverloads =
+                    declaringTypeInfo.GetMethods(BindingFlags.Instance ||| BindingFlags.Static ||| BindingFlags.Public ||| BindingFlags.NonPublic)
+                    |> Array.filter (fun methodInfo -> methodInfo.Name = methodName)
+                    |> Array.map (fun methodInfo ->
+                        let methodParameterTypes =
+                            methodInfo.GetParameters()
+                            |> Array.map (fun parameter -> parameter.ParameterType.FullName)
+                            |> String.concat ", "
+
+                        $"{methodInfo.Name}({methodParameterTypes})")
+                    |> String.concat "; "
+
+                failwithf
+                    "Failed to find method token for %s::%s(%s) in '%s'. Available overloads: %s"
+                    declaringType
+                    methodName
+                    (String.concat ", " parameterTypeNames)
+                    dllPath
+                    availableOverloads
+        finally
+            loadContext.Unload()
 
     [<Fact>]
     let ``HotReloadCapabilities expose supported flags`` () =
@@ -651,6 +716,62 @@ type Calculator() =
         | Ok delta ->
             Assert.Contains(twoArgToken, delta.UpdatedMethods)
             Assert.DoesNotContain(oneArgToken, delta.UpdatedMethods)
+
+        checker.EndHotReloadSession()
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``Same-arity overloaded method-body edit updates matching overload token`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-overload-type-edit", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        let baseline =
+            """
+module OverloadTypeDemo
+
+type Calculator() =
+    member _.Compute(value: int) = value + 1
+    member _.Compute(value: string) = value.Length + 1
+"""
+
+        let updated =
+            """
+module OverloadTypeDemo
+
+type Calculator() =
+    member _.Compute(value: int) = value + 1
+    member _.Compute(value: string) = value.Length + 2
+"""
+
+        File.WriteAllText(fsPath, baseline)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baseline
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let intOverloadToken = getMethodTokenByParameterTypes dllPath "Calculator" "Compute" [ "System.Int32" ]
+        let stringOverloadToken = getMethodTokenByParameterTypes dllPath "Calculator" "Compute" [ "System.String" ]
+        File.WriteAllText(fsPath, updated)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitHotReloadDelta failed for same-arity overload edit: %A" error
+        | Ok delta ->
+            Assert.Contains(stringOverloadToken, delta.UpdatedMethods)
+            Assert.DoesNotContain(intOverloadToken, delta.UpdatedMethods)
 
         checker.EndHotReloadSession()
 

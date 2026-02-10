@@ -30,7 +30,8 @@ type SymbolId =
       IsSynthesized: bool
       CompiledName: string option
       TotalArgCount: int option
-      GenericArity: int option }
+      GenericArity: int option
+      ParameterTypeIdentities: string list option }
 
     member QualifiedName: string
 
