@@ -401,6 +401,74 @@ and [<Experimental("This FCS API is experimental and subject to change.")>] Proj
         projectId: string option
     ) =
 
+    let projectDirectory =
+        projectFileName
+        |> Path.GetDirectoryName
+        |> Option.ofObj
+        |> Option.defaultValue ""
+
+    let trimEnclosingQuotes (value: string) =
+        if String.IsNullOrWhiteSpace value then
+            value
+        else
+            value.Trim().Trim('"')
+
+    let tryNormalizeTrackedInputPath (path: string) =
+        if String.IsNullOrWhiteSpace path then
+            None
+        else
+            let candidatePath =
+                let path = trimEnclosingQuotes path
+
+                if Path.IsPathRooted path then
+                    path
+                elif String.IsNullOrWhiteSpace projectDirectory then
+                    path
+                else
+                    Path.Combine(projectDirectory, path)
+
+            let fullPath =
+                try
+                    Path.GetFullPath candidatePath
+                with _ ->
+                    candidatePath
+
+            if FileSystem.FileExistsShim fullPath then
+                Some fullPath
+            else
+                None
+
+    let tryGetTrackedInputPath (option: string) =
+        let startsWith (prefix: string) =
+            option.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+
+        let valueFromPrefix prefixes =
+            prefixes
+            |> Seq.tryPick (fun prefix ->
+                if startsWith prefix && option.Length > prefix.Length then
+                    Some(option.Substring(prefix.Length))
+                else
+                    None)
+
+        if String.IsNullOrWhiteSpace option then
+            None
+        elif startsWith "-r:" || startsWith "--reference:" || startsWith "--out:" || startsWith "-o:" then
+            None
+        elif option.StartsWith("-", StringComparison.Ordinal) then
+            valueFromPrefix [ "--resource:"; "-resource:"; "--res:"; "-res:"; "--win32res:"; "--keyfile:"; "--load:"; "--use:" ]
+            |> Option.bind tryNormalizeTrackedInputPath
+        else
+            tryNormalizeTrackedInputPath option
+
+    let trackedInputsOnDisk =
+        otherOptions
+        |> Seq.choose tryGetTrackedInputPath
+        |> Seq.distinct
+        |> Seq.map (fun path ->
+            { Path = path
+              LastModified = FileSystem.GetLastWriteTimeShim path })
+        |> Seq.toList
+
     let hashForParsing =
         lazy
             (Md5Hasher.empty
@@ -413,7 +481,9 @@ and [<Experimental("This FCS API is experimental and subject to change.")>] Proj
         lazy
             (hashForParsing.Value
              |> Md5Hasher.addStrings (referencesOnDisk |> Seq.map (fun r -> r.Path))
-             |> Md5Hasher.addDateTimes (referencesOnDisk |> Seq.map (fun r -> r.LastModified)))
+             |> Md5Hasher.addDateTimes (referencesOnDisk |> Seq.map (fun r -> r.LastModified))
+             |> Md5Hasher.addStrings (trackedInputsOnDisk |> Seq.map (fun i -> i.Path))
+             |> Md5Hasher.addDateTimes (trackedInputsOnDisk |> Seq.map (fun i -> i.LastModified)))
 
     let commandLineOptions =
         lazy
@@ -483,6 +553,7 @@ and [<Experimental("This FCS API is experimental and subject to change.")>] Proj
     member _.ProjectFileName = projectFileName
     member _.ProjectId = projectId
     member _.ReferencesOnDisk = referencesOnDisk
+    member _.TrackedInputsOnDisk = trackedInputsOnDisk
     member _.OtherOptions = otherOptions
 
     member _.IsIncompleteTypeCheckEnvironment = isIncompleteTypeCheckEnvironment
