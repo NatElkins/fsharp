@@ -50,6 +50,8 @@ type PropertyDefinitionRowInfo = DeltaMetadataTypes.PropertyDefinitionRowInfo
 
 type EventDefinitionRowInfo = DeltaMetadataTypes.EventDefinitionRowInfo
 
+type MethodSpecificationRowInfo = DeltaMetadataTypes.MethodSpecificationRowInfo
+
 type PropertyMapRowInfo = DeltaMetadataTypes.PropertyMapRowInfo
 
 type EventMapRowInfo = DeltaMetadataTypes.EventMapRowInfo
@@ -93,6 +95,7 @@ let emitWithUserStrings
     (parameterDefinitionRows: ParameterDefinitionRowInfo list)
     (typeReferenceRows: TypeReferenceRowInfo list)
     (memberReferenceRows: MemberReferenceRowInfo list)
+    (methodSpecificationRows: MethodSpecificationRowInfo list)
     (assemblyReferenceRows: AssemblyReferenceRowInfo list)
     (propertyDefinitionRows: PropertyDefinitionRowInfo list)
     (eventDefinitionRows: EventDefinitionRowInfo list)
@@ -209,6 +212,12 @@ let emitWithUserStrings
             encLog.Add(struct (TableNames.MemberRef, row.RowId, EditAndContinueOperation.Default))
             encMap.Add(struct (TableNames.MemberRef, row.RowId))
 
+        for row in methodSpecificationRows do
+            tableMirror.AddMethodSpecificationRow row
+
+            encLog.Add(struct (TableNames.MethodSpec, row.RowId, EditAndContinueOperation.Default))
+            encMap.Add(struct (TableNames.MethodSpec, row.RowId))
+
         for row in assemblyReferenceRows do
             tableMirror.AddAssemblyReferenceRow row
 
@@ -277,6 +286,7 @@ let emitWithUserStrings
                    TableNames.Param
                    TableNames.TypeRef
                    TableNames.MemberRef
+                   TableNames.MethodSpec
                    TableNames.AssemblyRef
                    TableNames.StandAloneSig
                    TableNames.CustomAttribute
@@ -407,6 +417,7 @@ let emitWithReferences
     (parameterDefinitionRows: ParameterDefinitionRowInfo list)
     (typeReferenceRows: TypeReferenceRowInfo list)
     (memberReferenceRows: MemberReferenceRowInfo list)
+    (methodSpecificationRows: MethodSpecificationRowInfo list)
     (assemblyReferenceRows: AssemblyReferenceRowInfo list)
     (propertyDefinitionRows: PropertyDefinitionRowInfo list)
     (eventDefinitionRows: EventDefinitionRowInfo list)
@@ -431,6 +442,7 @@ let emitWithReferences
         parameterDefinitionRows
         typeReferenceRows
         memberReferenceRows
+        methodSpecificationRows
         assemblyReferenceRows
         propertyDefinitionRows
         eventDefinitionRows
@@ -473,6 +485,7 @@ let emit
         moduleId
         methodDefinitionRows
         parameterDefinitionRows
+        []
         []
         []
         []

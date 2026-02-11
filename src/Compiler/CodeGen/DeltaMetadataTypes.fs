@@ -50,6 +50,12 @@ type MemberReferenceRowInfo =
       Signature: byte[]
       SignatureOffset: BlobOffset option }
 
+type MethodSpecificationRowInfo =
+    { RowId: int
+      Method: MethodDefOrRef
+      Signature: byte[]
+      SignatureOffset: BlobOffset option }
+
 type AssemblyReferenceRowInfo =
     { RowId: int
       Version: Version
@@ -117,6 +123,7 @@ type TableRows =
       Param: RowElementData[][]
       TypeRef: RowElementData[][]
       MemberRef: RowElementData[][]
+      MethodSpec: RowElementData[][]
       AssemblyRef: RowElementData[][]
       StandAloneSig: RowElementData[][]
       CustomAttribute: RowElementData[][]

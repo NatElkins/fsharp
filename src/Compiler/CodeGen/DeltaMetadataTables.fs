@@ -300,6 +300,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let paramRows = RowTableBuilder()
     let typeRefRows = RowTableBuilder()
     let memberRefRows = RowTableBuilder()
+    let methodSpecRows = RowTableBuilder()
     let assemblyRefRows = RowTableBuilder()
     let standAloneSigRows = RowTableBuilder()
     let customAttributeRows = RowTableBuilder()
@@ -332,6 +333,9 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
     let rowElementSimpleIndex table value = rowElement (RowElementTags.SimpleIndex table) value
     let rowElementTypeDefOrRef tag value = rowElement (RowElementTags.TypeDefOrRefOrSpec tag) value
     let rowElementHasSemantics tag value = rowElement (RowElementTags.HasSemantics tag) value
+    let rowElementMethodDefOrRef (methodRef: MethodDefOrRef) =
+        rowElement (RowElementTags.MethodDefOrRef (mkMethodDefOrRefTag methodRef.CodedTag)) methodRef.RowId
+
     let rowElementResolutionScope (scope: ResolutionScope) =
         rowElement (RowElementTags.ResolutionScopeMin + scope.CodedTag) scope.RowId
 
@@ -538,6 +542,15 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             |]
         memberRefRows.Add rowElements
 
+    member _.AddMethodSpecificationRow(row: MethodSpecificationRowInfo) =
+        let signatureToken = addExistingBlobOffset row.SignatureOffset row.Signature
+        let rowElements =
+            [|
+                rowElementMethodDefOrRef row.Method
+                blobElement signatureToken
+            |]
+        methodSpecRows.Add rowElements
+
     member _.AddAssemblyReferenceRow(row: AssemblyReferenceRowInfo) =
         let publicKeyToken = addExistingBlobOffset row.PublicKeyOrTokenOffset row.PublicKeyOrToken
         let nameToken = addExistingStringOffset row.NameOffset row.Name
@@ -715,6 +728,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
           Param = paramRows.Entries
           TypeRef = typeRefRows.Entries
           MemberRef = memberRefRows.Entries
+          MethodSpec = methodSpecRows.Entries
           AssemblyRef = assemblyRefRows.Entries
           StandAloneSig = standAloneSigRows.Entries
           CustomAttribute = customAttributeRows.Entries
@@ -737,6 +751,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
         counts[TableNames.Param.Index] <- paramRows.Count
         counts[TableNames.TypeRef.Index] <- typeRefRows.Count
         counts[TableNames.MemberRef.Index] <- memberRefRows.Count
+        counts[TableNames.MethodSpec.Index] <- methodSpecRows.Count
         counts[TableNames.AssemblyRef.Index] <- assemblyRefRows.Count
         counts[TableNames.StandAloneSig.Index] <- standAloneSigRows.Count
         counts[TableNames.CustomAttribute.Index] <- customAttributeRows.Count

@@ -205,6 +205,7 @@ let private dedupeMethodKeys (keys: MethodDefinitionKey list) =
 let private rewriteMethodBody (remapUserString: int -> int) (remapEntityToken: int -> int) (body: MethodBodyBlock) =
     let ilBytes = body.GetILBytes().ToArray()
     let rewritten = Array.copy ilBytes
+    let referencedMethodSpecs = HashSet<int>()
     let mutable offset = 0
     let length = ilBytes.Length
 
@@ -273,6 +274,8 @@ let private rewriteMethodBody (remapUserString: int -> int) (remapEntityToken: i
             if original <> updated then
                 let tokenBytes = BitConverter.GetBytes(updated : int)
                 Buffer.BlockCopy(tokenBytes, 0, rewritten, operandStart, 4)
+            if (updated &&& 0xFF000000) = 0x2B000000 then
+                referencedMethodSpecs.Add(updated) |> ignore
         | OperandType.InlineSwitch ->
             let count = readInt32 ()
             advance (count * 4)
@@ -281,7 +284,7 @@ let private rewriteMethodBody (remapUserString: int -> int) (remapEntityToken: i
             advance (count * 2)
         | _ -> ()
 
-    rewritten
+    rewritten, (referencedMethodSpecs |> Seq.toList)
 
 /// Emits the delta artifacts for a request. The current implementation populates token projections
 /// while leaving the raw metadata/IL/PDB payload empty; future work will replace the placeholders
@@ -684,10 +687,14 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let baselineTableRowCounts = request.Baseline.Metadata.TableRowCounts
     let baselinePropertyMapRowCount = baselineTableRowCounts.[TableNames.PropertyMap.Index]
     let baselineEventMapRowCount = baselineTableRowCounts.[TableNames.EventMap.Index]
+    let baselineTypeRefRowCount = baselineTableRowCounts.[TableNames.TypeRef.Index]
+    let baselineMemberRefRowCount = baselineTableRowCounts.[TableNames.MemberRef.Index]
+    let baselineAssemblyRefRowCount = baselineTableRowCounts.[TableNames.AssemblyRef.Index]
+    let baselineMethodSpecRowCount = baselineTableRowCounts.[TableNames.MethodSpec.Index]
     let lastMethodRowId = baselineTableRowCounts.[TableNames.Method.Index]
-    let mutable nextTypeRefRowId = 0
-    let mutable nextMemberRefRowId = 0
-    let mutable nextAssemblyRefRowId = 0
+    let mutable nextTypeRefRowId = baselineTypeRefRowCount
+    let mutable nextMemberRefRowId = baselineMemberRefRowCount
+    let mutable nextAssemblyRefRowId = baselineAssemblyRefRowCount
     let typeReferenceRows = ResizeArray<TypeReferenceRowInfo>()
     let memberReferenceRows = ResizeArray<MemberReferenceRowInfo>()
     let assemblyReferenceRows = ResizeArray<AssemblyReferenceRowInfo>()
@@ -707,9 +714,13 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let typeRefTokenMap = Dictionary<int, int>()
     let assemblyRefTokenMap = Dictionary<int, int>()
+    let memberRefTokenMap = Dictionary<int, int>()
     let methodDefinitionIndex = DefinitionIndex<MethodDefinitionKey>(methodRowLookup, lastMethodRowId)
     let processedMethodKeys = HashSet<MethodDefinitionKey>()
     let addedMethodDeltaTokens = Dictionary<MethodDefinitionKey, int>(HashIdentity.Structural)
+    let methodSpecTokenMap = Dictionary<int, int>()
+    let methodSpecRowsByToken = Dictionary<int, MethodSpecificationRowInfo>()
+    let mutable nextMethodSpecRowId = baselineMethodSpecRowCount
 
     for KeyValue(key, newToken) in addedMethodTokens do
         if not (methodDefinitionIndex.IsAdded key) then
@@ -807,9 +818,124 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 let deltaToken = 0x01000000 ||| nextRowId
                 typeRefTokenMap[token] <- deltaToken
                 deltaToken
-            
 
-    and remapMemberRefToken token = token
+    and remapMemberRefToken token =
+        let rowId = token &&& 0x00FFFFFF
+
+        if rowId > 0 && rowId <= baselineMemberRefRowCount then
+            token
+        else
+            match memberRefTokenMap.TryGetValue token with
+            | true, mapped -> mapped
+            | _ ->
+                let handle = MetadataTokens.MemberReferenceHandle token
+                let row = metadataReader.GetMemberReference handle
+
+                let parent =
+                    if row.Parent.IsNil then
+                        MRP_TypeRef(TypeRefHandle 1)
+                    else
+                        let parentToken = MetadataTokens.GetToken(row.Parent)
+                        match row.Parent.Kind with
+                        | HandleKind.TypeDefinition ->
+                            let mapped = remapWith typeTokenMap parentToken
+                            MRP_TypeDef(TypeDefHandle(mapped &&& 0x00FFFFFF))
+                        | HandleKind.TypeReference ->
+                            let mapped = remapTypeRefToken parentToken
+                            MRP_TypeRef(TypeRefHandle(mapped &&& 0x00FFFFFF))
+                        | HandleKind.TypeSpecification ->
+                            let rowId = parentToken &&& 0x00FFFFFF
+                            MRP_TypeSpec(TypeSpecHandle rowId)
+                        | HandleKind.MethodDefinition ->
+                            let mapped = remapWith methodTokenMap parentToken
+                            MRP_MethodDef(MethodDefHandle(mapped &&& 0x00FFFFFF))
+                        | HandleKind.ModuleReference ->
+                            let rowId = parentToken &&& 0x00FFFFFF
+                            MRP_ModuleRef(ModuleRefHandle rowId)
+                        | _ ->
+                            MRP_TypeRef(TypeRefHandle 1)
+
+                let nextRowId = nextMemberRefRowId + 1
+                nextMemberRefRowId <- nextRowId
+                let mapped = 0x0A000000 ||| nextRowId
+                memberRefTokenMap[token] <- mapped
+
+                let signature =
+                    if row.Signature.IsNil then
+                        Array.empty
+                    else
+                        metadataReader.GetBlobBytes row.Signature
+
+                memberReferenceRows.Add(
+                    { RowId = nextRowId
+                      Parent = parent
+                      Name = if row.Name.IsNil then "" else metadataReader.GetString row.Name
+                      NameOffset = None
+                      Signature = signature
+                      SignatureOffset = None })
+
+                if traceMetadata.Value then
+                    printfn
+                        "[fsharp-hotreload][metadata] remap memberref token=0x%08X -> 0x%08X"
+                        token
+                        mapped
+
+                mapped
+
+    and remapMethodSpecToken token =
+        match methodSpecTokenMap.TryGetValue token with
+        | true, mapped -> mapped
+        | _ ->
+            let methodSpecHandle = MetadataTokens.MethodSpecificationHandle token
+
+            if methodSpecHandle.IsNil then
+                token
+            else
+                let methodSpec = metadataReader.GetMethodSpecification methodSpecHandle
+                let originalMethodToken = MetadataTokens.GetToken(methodSpec.Method)
+                let remappedMethodToken = remapEntityToken originalMethodToken
+                let methodDefOrRef =
+                    let rowId = remappedMethodToken &&& 0x00FFFFFF
+                    match remappedMethodToken &&& 0xFF000000 with
+                    | 0x06000000 -> Some(MDOR_MethodDef(MethodDefHandle rowId))
+                    | 0x0A000000 -> Some(MDOR_MemberRef(MemberRefHandle rowId))
+                    | _ -> None
+
+                match methodDefOrRef with
+                | None ->
+                    if traceMetadata.Value then
+                        printfn
+                            "[fsharp-hotreload][metadata] keeping methodspec token=0x%08X (unsupported remapped method token=0x%08X)"
+                            token
+                            remappedMethodToken
+
+                    token
+                | Some method ->
+                    nextMethodSpecRowId <- nextMethodSpecRowId + 1
+                    let rowId = nextMethodSpecRowId
+                    let signature =
+                        if methodSpec.Signature.IsNil then
+                            Array.empty
+                        else
+                            metadataReader.GetBlobBytes methodSpec.Signature
+
+                    let row =
+                        { MethodSpecificationRowInfo.RowId = rowId
+                          Method = method
+                          Signature = signature
+                          SignatureOffset = None }
+
+                    let mapped = 0x2B000000 ||| rowId
+                    methodSpecTokenMap[token] <- mapped
+                    methodSpecRowsByToken[mapped] <- row
+
+                    if traceMetadata.Value then
+                        printfn
+                            "[fsharp-hotreload][metadata] remap methodspec token=0x%08X -> 0x%08X"
+                            token
+                            mapped
+
+                    mapped
 
     and remapEntityToken token =
         match token &&& 0xFF000000 with
@@ -817,6 +943,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         | 0x04000000 -> remapWith fieldTokenMap token
         | 0x06000000 -> remapWith methodTokenMap token
         | 0x0A000000 -> remapMemberRefToken token
+        | 0x2B000000 -> remapMethodSpecToken token
         | 0x01000000 -> remapTypeRefToken token
         | 0x14000000 -> remapWith eventTokenMap token
         | 0x17000000 -> remapWith propertyTokenMap token
@@ -1184,7 +1311,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         let methodUpdatesWithDefs =
             orderedMethodInputs
             |> List.map (fun struct (key, methodToken, methodHandle, methodDef, body) ->
-                let ilBytes = rewriteMethodBody remapUserString remapEntityToken body
+                let ilBytes, referencedMethodSpecs = rewriteMethodBody remapUserString remapEntityToken body
                 let localSigToken =
                     if body.LocalSignature.IsNil then
                         0
@@ -1210,12 +1337,12 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 ({ MethodKey = key
                    MethodToken = methodToken
                    MethodHandle = MethodDefHandle methodRowId
-                   Body = bodyUpdate }, methodDef))
+                   Body = bodyUpdate }, methodDef, referencedMethodSpecs))
 
         let methodMetadataLookup =
             let dict : Dictionary<MethodDefinitionKey, struct (MethodAttributes * MethodImplAttributes * string * byte[] * StringOffset option * BlobOffset option)> =
                 Dictionary(HashIdentity.Structural)
-            for update, methodDef in methodUpdatesWithDefs do
+            for update, methodDef, _ in methodUpdatesWithDefs do
                 let name = metadataReader.GetString methodDef.Name
                 let signature = metadataReader.GetBlobBytes methodDef.Signature
                 let nameOffset = if methodDef.Name.IsNil then None else Some (StringOffset (MetadataTokens.GetHeapOffset methodDef.Name))
@@ -1325,7 +1452,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
             let missingRows =
                 methodUpdatesWithDefs
-                |> List.choose (fun (update, _) ->
+                |> List.choose (fun (update, _, _) ->
                     if existingKeys.Contains update.MethodKey then
                         None
                     else
@@ -1349,6 +1476,32 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     printfn "  method=%s::%s rowId=%d firstParam=%d isAdded=%b" row.Key.DeclaringType row.Key.Name row.RowId fp row.IsAdded
 
             rows
+
+        let methodSpecificationRowsSnapshot =
+            let referencedMethodSpecTokens =
+                methodUpdatesWithDefs
+                |> List.collect (fun (_, _, methodSpecs) -> methodSpecs)
+                |> List.distinct
+
+            if traceMetadata.Value then
+                printfn
+                    "[fsharp-hotreload][metadata] methodspec candidates=%d baselineRows=%d tokens=%s"
+                    referencedMethodSpecTokens.Length
+                    baselineMethodSpecRowCount
+                    (referencedMethodSpecTokens |> List.map (fun token -> sprintf "0x%08X" token) |> String.concat ",")
+
+            referencedMethodSpecTokens
+            |> List.choose (fun methodSpecToken ->
+                match methodSpecRowsByToken.TryGetValue methodSpecToken with
+                | true, row -> Some row
+                | _ ->
+                    if traceMetadata.Value then
+                        printfn
+                            "[fsharp-hotreload][metadata] missing mapped methodspec token=0x%08X"
+                            methodSpecToken
+
+                    None)
+            |> List.sortBy (fun row -> row.RowId)
 
         let propertyDefinitionRowsSnapshot =
             propertyDefinitionIndex.Rows
@@ -1587,7 +1740,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                             | _ -> None
                         | _ -> None)
 
-        let methodUpdates = methodUpdatesWithDefs |> List.map fst
+        let methodUpdates = methodUpdatesWithDefs |> List.map (fun (update, _, _) -> update)
 
         let baselineHeapOffsets =
             request.Baseline.Metadata.HeapSizes
@@ -1994,7 +2147,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                               Value = valueBytes
                               ValueOffset = if attribute.Value.IsNil then None else Some (BlobOffset (MetadataTokens.GetHeapOffset attribute.Value)) })
 
-            for (update, _) in methodUpdatesWithDefs do
+            for (update, _, _) in methodUpdatesWithDefs do
                 let methodKey = update.MethodKey
                 if methodsWithCustomAttribute.Contains methodKey |> not then
                     match tryFindStateMachineType methodKey with
@@ -2052,9 +2205,10 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
         if traceMetadata.Value then
             printfn
-                "[fsharp-hotreload][metadata] row-counts typeRef=%d memberRef=%d assemblyRef=%d customAttr=%d"
+                "[fsharp-hotreload][metadata] row-counts typeRef=%d memberRef=%d methodSpec=%d assemblyRef=%d customAttr=%d"
                 typeReferenceRowList.Length
                 memberReferenceRowList.Length
+                methodSpecificationRowsSnapshot.Length
                 assemblyReferenceRowList.Length
                 customAttributeRowList.Length
             for row in typeReferenceRowList do
@@ -2071,6 +2225,12 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     row.Name
                     row.Parent
                     row.Parent.RowId
+            for row in methodSpecificationRowsSnapshot do
+                printfn
+                    "[fsharp-hotreload][metadata] methodspec rowId=%d methodTag=%d methodRow=%d"
+                    row.RowId
+                    row.Method.CodedTag
+                    row.Method.RowId
             for row in assemblyReferenceRowList do
                 printfn "[fsharp-hotreload][metadata] assemblyref rowId=%d name=%s" row.RowId row.Name
 
@@ -2088,6 +2248,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 parameterDefinitionRowsSnapshot
                 typeReferenceRowList
                 memberReferenceRowList
+                methodSpecificationRowsSnapshot
                 assemblyReferenceRowList
                 propertyDefinitionRowsSnapshot
                 eventDefinitionRowsSnapshot
@@ -2104,12 +2265,13 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         if traceMetadata.Value then
             let count idx = metadataDelta.TableRowCounts.[idx]
             printfn
-                "[fsharp-hotreload][metadata] table-counts module=%d method=%d param=%d typeRef=%d memberRef=%d assemblyRef=%d customAttr=%d standAloneSig=%d"
+                "[fsharp-hotreload][metadata] table-counts module=%d method=%d param=%d typeRef=%d memberRef=%d methodSpec=%d assemblyRef=%d customAttr=%d standAloneSig=%d"
                 (count TableNames.Module.Index)
                 (count TableNames.Method.Index)
                 (count TableNames.Param.Index)
                 (count TableNames.TypeRef.Index)
                 (count TableNames.MemberRef.Index)
+                (count TableNames.MethodSpec.Index)
                 (count TableNames.AssemblyRef.Index)
                 (count TableNames.CustomAttribute.Index)
                 (count TableNames.StandAloneSig.Index)

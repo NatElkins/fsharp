@@ -1379,6 +1379,7 @@ module internal MetadataDeltaTestHelpers =
                 [] // parameter rows
                 (typeReferenceRows |> Seq.toList)
                 (memberReferenceRows |> Seq.toList)
+                [] // method spec rows
                 (assemblyReferenceRows |> Seq.toList)
                 [] // property rows
                 [] // event rows
