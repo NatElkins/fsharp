@@ -1029,6 +1029,82 @@ module Demo =
             Directory.Delete(projectDir, true)
         with _ -> ()
 
+    [<Fact>]
+    let ``Computation-expression usage edit updates user-authored view method token`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-ce-usage", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        let baseline =
+            """
+module UiDslDemo
+
+type HtmlBuilder() =
+    member _.Yield(text: string) = text
+    member _.Combine(a: string, b: string) = a + b
+    member _.Delay(f: unit -> string) = f()
+
+let html = HtmlBuilder()
+
+let view name =
+    html {
+        "Hello, "
+        name
+    }
+"""
+
+        let updated =
+            """
+module UiDslDemo
+
+type HtmlBuilder() =
+    member _.Yield(text: string) = text
+    member _.Combine(a: string, b: string) = a + b
+    member _.Delay(f: unit -> string) = f()
+
+let html = HtmlBuilder()
+
+let view name =
+    html {
+        "Welcome, "
+        name
+    }
+"""
+
+        File.WriteAllText(fsPath, baseline)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baseline
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let viewToken = getMethodToken dllPath "UiDslDemo" "view"
+        File.WriteAllText(fsPath, updated)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitHotReloadDelta failed for computation-expression usage edit: %A" error
+        | Ok delta ->
+            Assert.Contains(viewToken, delta.UpdatedMethods)
+            let updatedMethodDisplays =
+                delta.UpdatedMethods
+                |> List.map (getMethodDisplayByToken dllPath)
+            Assert.All(updatedMethodDisplays, fun methodDisplay -> Assert.DoesNotContain("@hotreload", methodDisplay))
+
+        checker.EndHotReloadSession()
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
     // -------------------------------------------------------------------------
     // Rude Edit Rejection Tests
     // -------------------------------------------------------------------------
