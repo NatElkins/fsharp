@@ -349,6 +349,44 @@ type MyNumber(value: int) =
         Assert.True(hasOperatorRudeEdit, "Expected InsertOperator rude edit for adding operator")
 
     [<Fact>]
+    let ``adding explicit interface implementation produces explicit-interface rude edit`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+
+type IFoo =
+    abstract member Compute : unit -> int
+
+type MyClass() =
+    member _.Existing() = 1
+"""
+        let updated_source = """
+module Library
+
+type IFoo =
+    abstract member Compute : unit -> int
+
+type MyClass() =
+    member _.Existing() = 1
+    interface IFoo with
+        member _.Compute() = 42
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        Assert.NotEmpty(result.RudeEdits)
+        let hasExplicitInterfaceRudeEdit =
+            result.RudeEdits |> List.exists (fun e -> e.Kind = RudeEditKind.InsertExplicitInterface)
+        Assert.True(
+            hasExplicitInterfaceRudeEdit,
+            "Expected InsertExplicitInterface rude edit for adding explicit interface implementation"
+        )
+
+    [<Fact>]
     let ``adding module-level value produces rude edit`` () =
         use harness = new DiffTestHarness()
         let baseline_source = """

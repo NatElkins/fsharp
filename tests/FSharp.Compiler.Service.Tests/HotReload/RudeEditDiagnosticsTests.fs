@@ -43,6 +43,12 @@ module RudeEditDiagnosticsTests =
         Assert.Contains("Removing", diag.Message, StringComparison.OrdinalIgnoreCase)
 
     [<Fact>]
+    let ``explicit interface insertion diagnostic id`` () =
+        let diag = RudeEditDiagnostics.ofRudeEdit (rude RudeEditKind.InsertExplicitInterface "fallback")
+        Assert.Equal("FSHRDL009", diag.Id)
+        Assert.Contains("explicit interface", diag.Message, StringComparison.OrdinalIgnoreCase)
+
+    [<Fact>]
     let ``unsupported diagnostic id`` () =
         let diag = RudeEditDiagnostics.ofRudeEdit (rude RudeEditKind.Unsupported "custom")
         Assert.Equal("FSHRDL099", diag.Id)

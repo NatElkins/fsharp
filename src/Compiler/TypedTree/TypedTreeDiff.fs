@@ -570,6 +570,7 @@ type private MethodAdditionInfo =
     { IsMethod: bool                    // True if this is a method (vs module value/field)
       IsDispatchSlot: bool              // Virtual or abstract
       IsOverrideOrExplicitImpl: bool    // Override or explicit interface impl
+      IsExplicitInterfaceImplementation: bool // Explicit interface implementation
       IsConstructor: bool               // .ctor or .cctor
       IsOperator: bool                  // User-defined operator
       IsInInterface: bool               // Member of an interface type
@@ -579,6 +580,7 @@ type private MethodAdditionInfo =
         { IsMethod = false
           IsDispatchSlot = false
           IsOverrideOrExplicitImpl = false
+          IsExplicitInterfaceImplementation = false
           IsConstructor = false
           IsOperator = false
           IsInInterface = false
@@ -726,6 +728,11 @@ and private snapshotBinding g denv path (TBind (var, expr, _)) =
             match var.MemberInfo with
             | Some memberInfo -> memberInfo.MemberFlags.IsOverrideOrExplicitImpl
             | None -> false
+        let isExplicitInterfaceImplementation =
+            try
+                ValRefIsExplicitImpl g vref
+            with _ ->
+                false
         let isConstructor = var.IsConstructor || var.IsClassConstructor
         // Operators have logical names starting with "op_"
         let isOperator = var.LogicalName.StartsWith("op_", StringComparison.Ordinal)
@@ -740,6 +747,7 @@ and private snapshotBinding g denv path (TBind (var, expr, _)) =
         { IsMethod = isMethod
           IsDispatchSlot = isDispatchSlot
           IsOverrideOrExplicitImpl = isOverrideOrExplicitImpl
+          IsExplicitInterfaceImplementation = isExplicitInterfaceImplementation
           IsConstructor = isConstructor
           IsOperator = isOperator
           IsInInterface = isInInterface
@@ -894,6 +902,12 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
                     { Symbol = Some updatedBinding.Symbol
                       Kind = RudeEditKind.FieldAdded
                       Message = "Adding fields is not supported. Fields change type layout." }
+                )
+            elif info.IsExplicitInterfaceImplementation then
+                rude.Add(
+                    { Symbol = Some updatedBinding.Symbol
+                      Kind = RudeEditKind.InsertExplicitInterface
+                      Message = "Adding explicit interface implementations is not supported." }
                 )
             elif info.IsDispatchSlot || info.IsOverrideOrExplicitImpl then
                 // Virtual, abstract, or override methods cannot be added
