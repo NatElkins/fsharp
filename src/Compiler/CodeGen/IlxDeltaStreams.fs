@@ -17,7 +17,9 @@ open FSharp.Compiler.IO
 /// Token format: 0x70000000 | heap_offset
 type UserStringTokenCalculator(heapStartOffset: int) =
     let cache = Dictionary<string, int>(StringComparer.Ordinal)
-    let mutable currentOffset = 0
+    // #US heaps reserve offset 0 for the null/empty entry.
+    // First emitted delta literal must start at relative offset 1.
+    let mutable currentOffset = 1
 
     /// Encode a user string per ECMA-335 II.24.2.4:
     /// - Compressed length prefix (1-4 bytes)

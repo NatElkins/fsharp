@@ -264,7 +264,7 @@ let mapSymbolChangesToDelta
         changes.Updated
         |> List.choose (fun change ->
             match change.Kind with
-            | SemanticEditKind.MethodBody when change.Symbol.Kind = SymbolKind.Value && not change.Symbol.IsSynthesized ->
+            | SemanticEditKind.MethodBody when change.Symbol.Kind = SymbolKind.Value ->
                 let candidates = candidateContainingTypeNames change
                 let resolved = candidates |> List.tryPick (fun typeName -> tryResolveMethodKey change.Symbol typeName)
 

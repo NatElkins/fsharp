@@ -399,7 +399,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             match buckets.TryGetValue basicName with
             | true, aliases when aliases.Length > 0 ->
                 if aliases |> Array.exists (fun alias -> alias = typeName) then
-                    aliases
+                    Array.append
+                        [| typeName |]
+                        (aliases |> Array.filter (fun alias -> not (String.Equals(alias, typeName, StringComparison.Ordinal))))
                 else
                     Array.append [| typeName |] aliases
             | _ -> [| typeName |]

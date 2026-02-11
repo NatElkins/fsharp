@@ -25,6 +25,103 @@ type internal FSharpEditAndContinueLanguageService private () =
         | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
         | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
         | _ -> false
+    static let shouldTraceMethods () =
+        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METHODS") with
+        | null -> false
+        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+        | _ -> false
+
+    static let dedupeMethodKeys (keys: MethodDefinitionKey list) =
+        let seen = Collections.Generic.HashSet<MethodDefinitionKey>(HashIdentity.Structural)
+        keys
+        |> List.fold (fun acc key -> if seen.Add key then key :: acc else acc) []
+        |> List.rev
+
+    static let tryGetStartupRoot (declaringType: string) =
+        let markerIndex = declaringType.IndexOf("@hotreload", StringComparison.Ordinal)
+
+        if markerIndex <= 0 then
+            None
+        else
+            let prefix = declaringType.Substring(0, markerIndex)
+            let lastDot = prefix.LastIndexOf('.')
+            if lastDot > 0 then Some(prefix.Substring(0, lastDot)) else None
+
+    // Roslyn parity intent: preserve user-authored method identity first, then include
+    // compiler-generated companion methods tied to the same startup scope so transformed
+    // CE/async output shapes apply in place.
+    static let augmentWithCompilerGeneratedCompanions
+        (baseline: FSharpEmitBaseline)
+        (updatedMethods: MethodDefinitionKey list)
+        =
+        let baselineMethods =
+            baseline.MethodTokens
+            |> Map.toSeq
+            |> Seq.map fst
+            |> Seq.toArray
+
+        let globalStartupRoots =
+            baselineMethods
+            |> Array.choose (fun candidate -> tryGetStartupRoot candidate.DeclaringType)
+            |> Array.distinct
+
+        let companions =
+            updatedMethods
+            |> List.collect (fun updatedMethod ->
+                let marker = updatedMethod.Name + "@hotreload"
+                let directMatches =
+                    baselineMethods
+                    |> Array.choose (fun candidate ->
+                        let matchesDeclaringType =
+                            candidate.DeclaringType.Contains(marker, StringComparison.Ordinal)
+
+                        let matchesMethodName =
+                            candidate.Name.StartsWith(marker, StringComparison.Ordinal)
+
+                        if matchesDeclaringType || matchesMethodName then
+                            Some candidate
+                        else
+                            None)
+
+                let startupRoots =
+                    let directRoots =
+                        directMatches
+                        |> Array.choose (fun candidate -> tryGetStartupRoot candidate.DeclaringType)
+                        |> Array.distinct
+
+                    if directRoots.Length > 0 then
+                        directRoots
+                    else
+                        globalStartupRoots
+
+                baselineMethods
+                |> Array.choose (fun candidate ->
+                    let isCompilerGeneratedCompanion =
+                        candidate.DeclaringType.Contains("@hotreload", StringComparison.Ordinal)
+
+                    let inTransitiveScope =
+                        startupRoots
+                        |> Array.exists (fun root ->
+                            candidate.DeclaringType.StartsWith(root + ".", StringComparison.Ordinal))
+
+                    if isCompilerGeneratedCompanion && inTransitiveScope then
+                        Some candidate
+                    else
+                        None)
+                |> Array.toList)
+
+        let augmented = dedupeMethodKeys (updatedMethods @ companions)
+
+        if shouldTraceMethods () && not (List.isEmpty companions) then
+            let names =
+                companions
+                |> List.map (fun key -> $"{key.DeclaringType}::{key.Name}")
+                |> String.concat ", "
+            printfn "[fsharp-hotreload][service] compiler-generated companion methods selected: %s" names
+
+        augmented
+
     static let createSynthesizedMapFromSnapshot (snapshot: Map<string, string[]>) =
         let map = FSharpSynthesizedTypeMaps()
         map.LoadSnapshot(snapshot |> Map.toSeq)
@@ -182,6 +279,7 @@ type internal FSharpEditAndContinueLanguageService private () =
                 Error(HotReloadError.UnsupportedEdit "Deleted symbols detected; full rebuild required.")
             else
                 let updatedTypes, updatedMethods, accessorUpdates = mapSymbolChangesToDelta session.Baseline symbolChanges
+                let updatedMethods = augmentWithCompilerGeneratedCompanions session.Baseline updatedMethods
 
                 // Insert-only edits (for example, adding an allowed non-virtual method) may not produce
                 // method-body updates, but still need to flow to IlxDeltaEmitter so new MethodDef rows are emitted.

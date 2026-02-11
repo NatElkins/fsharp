@@ -447,6 +447,201 @@ type Type =
     static member GetMessage() = "Hello from generation {gen}"
 """
 
+    let private applySingleStringUpdateAndAssertRuntimeResult
+        (testLabel: string)
+        (baselineSource: string)
+        (updatedSource: string)
+        (baselineExpected: string)
+        (updatedExpected: string)
+        =
+        // These runtime assertions require EnC-capable runtime loading.
+        let modifiable = Environment.GetEnvironmentVariable("DOTNET_MODIFIABLE_ASSEMBLIES")
+        if not (String.Equals(modifiable, "debug", StringComparison.OrdinalIgnoreCase)) then
+            printfn "[skip] DOTNET_MODIFIABLE_ASSEMBLIES must be 'debug' for '%s'" testLabel
+        else
+            let checker =
+                FSharpChecker.Create(
+                    keepAssemblyContents = true,
+                    keepAllBackgroundResolutions = false,
+                    keepAllBackgroundSymbolUses = false,
+                    enableBackgroundItemKeyStoreAndSemanticClassification = false,
+                    enablePartialTypeChecking = false,
+                    captureIdentifiersWhenParsing = false
+                )
+
+            let projectDir = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-runtime-string-update", System.Guid.NewGuid().ToString("N"))
+            Directory.CreateDirectory(projectDir) |> ignore
+            let fsPath = Path.Combine(projectDir, "Library.fs")
+            let dllPath = Path.Combine(projectDir, "Library.dll")
+            let runtimeDllPath = Path.Combine(projectDir, "Library.runtime.dll")
+            let loadContext = new AssemblyLoadContext($"fsharp-hotreload-runtime-{System.Guid.NewGuid():N}", isCollectible = true)
+
+            try
+                File.WriteAllText(fsPath, baselineSource)
+
+                let projectOptions, _ =
+                    checker.GetProjectOptionsFromScript(
+                        fsPath,
+                        SourceText.ofString baselineSource,
+                        assumeDotNetFramework = false,
+                        useSdkRefs = true,
+                        useFsiAuxLib = false
+                    )
+                    |> Async.RunImmediate
+
+                let projectOptions =
+                    { projectOptions with
+                        SourceFiles = [| fsPath |]
+                        OtherOptions =
+                            projectOptions.OtherOptions
+                            |> Array.append
+                                [| "--target:library"
+                                   "--langversion:preview"
+                                   "--optimize-"
+                                   "--debug:portable"
+                                   "--deterministic"
+                                   "--enable:hotreloaddeltas"
+                                   $"--out:{dllPath}" |] }
+
+                checker.InvalidateAll()
+
+                let baselineCompileDiagnostics, _ =
+                    checker.Compile(Array.concat [ [| "fsc.exe" |]; projectOptions.OtherOptions; projectOptions.SourceFiles ])
+                    |> Async.RunImmediate
+
+                let baselineErrors =
+                    baselineCompileDiagnostics
+                    |> Array.filter (fun d -> d.Severity = FSharpDiagnosticSeverity.Error)
+
+                if baselineErrors.Length > 0 then
+                    failwithf "[%s] baseline compilation failed: %A" testLabel (baselineErrors |> Array.map (fun d -> d.Message))
+
+                match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+                | Error error -> failwithf "[%s] failed to start hot reload session: %A" testLabel error
+                | Ok () -> ()
+
+                File.Copy(dllPath, runtimeDllPath, true)
+                let pdbPath = Path.ChangeExtension(dllPath, ".pdb")
+                if File.Exists(pdbPath) then
+                    File.Copy(pdbPath, Path.ChangeExtension(runtimeDllPath, ".pdb"), true)
+
+                let assembly = loadContext.LoadFromAssemblyPath(runtimeDllPath)
+                let methodType = assembly.GetType("Sample.Type", throwOnError = true)
+                let method = methodType.GetMethod("GetMessage", BindingFlags.Public ||| BindingFlags.Static)
+
+                let baselineMessage = method.Invoke(null, [||]) :?> string
+                Assert.Equal(baselineExpected, baselineMessage)
+
+                File.WriteAllText(fsPath, updatedSource)
+                checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+
+                let updatedOptions =
+                    { projectOptions with
+                        OtherOptions =
+                            projectOptions.OtherOptions
+                            |> Array.filter (fun opt ->
+                                not (opt.StartsWith("--enable:hotreloaddeltas", StringComparison.OrdinalIgnoreCase))) }
+
+                let updateCompileDiagnostics, _ =
+                    checker.Compile(Array.concat [ [| "fsc.exe" |]; updatedOptions.OtherOptions; updatedOptions.SourceFiles ])
+                    |> Async.RunImmediate
+
+                let updateErrors =
+                    updateCompileDiagnostics
+                    |> Array.filter (fun d -> d.Severity = FSharpDiagnosticSeverity.Error)
+
+                if updateErrors.Length > 0 then
+                    failwithf "[%s] updated compilation failed: %A" testLabel (updateErrors |> Array.map (fun d -> d.Message))
+
+                match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+                | Error error -> failwithf "[%s] EmitHotReloadDelta failed: %A" testLabel error
+                | Ok delta ->
+                    Assert.NotEmpty(delta.Metadata)
+                    Assert.NotEmpty(delta.IL)
+
+                    let pdbBytes = delta.Pdb |> Option.defaultValue Array.empty
+                    MetadataUpdater.ApplyUpdate(assembly, delta.Metadata.AsSpan(), delta.IL.AsSpan(), pdbBytes.AsSpan())
+
+                    let updatedMessage = method.Invoke(null, [||]) :?> string
+                    Assert.Equal(updatedExpected, updatedMessage)
+
+            finally
+                try loadContext.Unload() with _ -> ()
+                try checker.EndHotReloadSession() with _ -> ()
+                try checker.InvalidateAll() with _ -> ()
+                try Directory.Delete(projectDir, true) with _ -> ()
+
+    [<Fact>]
+    let ``Computation-expression output shape is preserved across desugaring variants`` () =
+        let simpleBuilderBaseline =
+            """
+namespace Sample
+
+type HtmlBuilder() =
+    member _.Yield(text: string) = text
+    member _.Combine(a: string, b: string) = a + b
+    member _.Delay(f: unit -> string) = f()
+    member _.Run(text: string) = text
+    member _.Zero() = ""
+
+type Type =
+    static member GetMessage() =
+        let html = HtmlBuilder()
+        html {
+            yield "Hello, "
+            yield "watch"
+        }
+"""
+
+        let simpleBuilderUpdated = simpleBuilderBaseline.Replace("Hello, ", "Welcome, ")
+
+        let localLambdaBaseline =
+            """
+namespace Sample
+
+type HtmlBuilder() =
+    member _.Yield(text: string) = text
+    member _.Combine(a: string, b: string) = a + b
+    member _.Delay(f: unit -> string) = f()
+    member _.Run(text: string) = text
+    member _.Zero() = ""
+
+type Type =
+    static member GetMessage() =
+        let html = HtmlBuilder()
+        let prefixFactory = fun () -> "Hello, "
+        html {
+            yield prefixFactory()
+            yield "watch"
+        }
+"""
+
+        let localLambdaUpdated = localLambdaBaseline.Replace("Hello, ", "Welcome, ")
+
+        let asyncBaseline =
+            """
+namespace Sample
+
+type Type =
+    static member GetMessage() =
+        async {
+            do! Async.Sleep 1
+            let prefix = "Hello"
+            return prefix + ", watch"
+        }
+        |> Async.RunSynchronously
+"""
+
+        let asyncUpdated = asyncBaseline.Replace("Hello", "Welcome")
+
+        let scenarios =
+            [ ("ce-simple", simpleBuilderBaseline, simpleBuilderUpdated)
+              ("ce-local-lambda", localLambdaBaseline, localLambdaUpdated)
+              ("ce-async", asyncBaseline, asyncUpdated) ]
+
+        for (label, baseline, updated) in scenarios do
+            applySingleStringUpdateAndAssertRuntimeResult label baseline updated "Hello, watch" "Welcome, watch"
+
     [<Fact>]
     let ``Multi-generation user string literals resolve correctly`` () =
         // This test verifies that user string literals are correctly resolved across

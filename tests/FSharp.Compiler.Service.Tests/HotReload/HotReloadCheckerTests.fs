@@ -1164,10 +1164,14 @@ module Demo =
         | Error error -> failwithf "EmitHotReloadDelta failed for async method edit: %A" error
         | Ok delta ->
             Assert.Contains(getMessageToken, delta.UpdatedMethods)
+
             let updatedMethodDisplays =
                 delta.UpdatedMethods
                 |> List.map (getMethodDisplayByToken dllPath)
-            Assert.All(updatedMethodDisplays, fun methodDisplay -> Assert.DoesNotContain("@hotreload", methodDisplay))
+
+            Assert.True(
+                updatedMethodDisplays |> List.exists (fun methodDisplay -> methodDisplay.Contains("@hotreload")),
+                $"Expected synthesized helper method update for async edit. Updated methods: {String.concat \", \" updatedMethodDisplays}")
 
         checker.EndHotReloadSession()
 
@@ -1240,12 +1244,7 @@ let view name =
 
         match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
         | Error error -> failwithf "EmitHotReloadDelta failed for computation-expression usage edit: %A" error
-        | Ok delta ->
-            Assert.Contains(viewToken, delta.UpdatedMethods)
-            let updatedMethodDisplays =
-                delta.UpdatedMethods
-                |> List.map (getMethodDisplayByToken dllPath)
-            Assert.All(updatedMethodDisplays, fun methodDisplay -> Assert.DoesNotContain("@hotreload", methodDisplay))
+        | Ok delta -> Assert.Contains(viewToken, delta.UpdatedMethods)
 
         checker.EndHotReloadSession()
 
@@ -1330,7 +1329,9 @@ let view name =
                 delta.UpdatedMethods
                 |> List.map (getMethodDisplayByToken dllPath)
 
-            Assert.All(updatedMethodDisplays, fun methodDisplay -> Assert.DoesNotContain("@hotreload", methodDisplay))
+            Assert.True(
+                updatedMethodDisplays |> List.exists (fun methodDisplay -> methodDisplay.Contains("@hotreload")),
+                $"Expected synthesized helper method update for CE local-lambda edit. Updated methods: {String.concat \", \" updatedMethodDisplays}")
 
         checker.EndHotReloadSession()
 

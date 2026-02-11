@@ -1033,22 +1033,15 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
                         $"Lambda lowering shape changed from '{baselineBinding.LambdaShapeDigest}' to '{updatedBinding.LambdaShapeDigest}'." }
                 )
             elif baselineBinding.BodyHash <> updatedBinding.BodyHash then
-                if not baselineBinding.IsSynthesized then
-                    if traceHotReloadMethodDiff then
-                        printfn
-                            "[fsharp-hotreload][typed-diff] body change symbol=%s synthesized=%b baselineHash=%d updatedHash=%d"
-                            baselineBinding.Symbol.LogicalName
-                            baselineBinding.IsSynthesized
-                            baselineBinding.BodyHash
-                            updatedBinding.BodyHash
-
-                    handleEdit baselineBinding SemanticEditKind.MethodBody (Some baselineBinding.BodyHash) (Some updatedBinding.BodyHash)
-                elif traceHotReloadMethodDiff then
+                if traceHotReloadMethodDiff then
                     printfn
-                        "[fsharp-hotreload][typed-diff] skipping synthesized body change symbol=%s baselineHash=%d updatedHash=%d"
+                        "[fsharp-hotreload][typed-diff] body change symbol=%s synthesized=%b baselineHash=%d updatedHash=%d"
                         baselineBinding.Symbol.LogicalName
+                        baselineBinding.IsSynthesized
                         baselineBinding.BodyHash
                         updatedBinding.BodyHash
+
+                handleEdit baselineBinding SemanticEditKind.MethodBody (Some baselineBinding.BodyHash) (Some updatedBinding.BodyHash)
         | None ->
             rude.Add(
                 { Symbol = Some baselineBinding.Symbol

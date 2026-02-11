@@ -702,14 +702,23 @@ module DeltaEmitterTests =
         let delta = emitDelta request
 
         Assert.NotEmpty(delta.UserStringUpdates)
+        let baselineUserStringStart = baseline.Metadata.HeapSizes.UserStringHeapSize
 
         let updatedLiteral =
             delta.UserStringUpdates
-            |> List.tryPick (fun (_, _, text) ->
-                if text.StartsWith("Message version", StringComparison.Ordinal) then Some text else None)
+            |> List.tryPick (fun (_, updatedToken, text) ->
+                if text.StartsWith("Message version", StringComparison.Ordinal) then
+                    Some(updatedToken, text)
+                else
+                    None)
 
         match updatedLiteral with
-        | Some text -> Assert.Equal("Message version 2 (invocation #%d)", text)
+        | Some(updatedToken, text) ->
+            Assert.Equal("Message version 2 (invocation #%d)", text)
+            let updatedOffset = updatedToken &&& 0x00FFFFFF
+            Assert.True(
+                updatedOffset > baselineUserStringStart,
+                $"Expected new #US token offset ({updatedOffset}) to be greater than baseline start ({baselineUserStringStart}).")
         | None -> Assert.True(false, "Expected updated user string literal in delta metadata.")
 
     [<Fact>]
