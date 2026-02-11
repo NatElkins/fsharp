@@ -1474,6 +1474,70 @@ module Demo =
         with _ -> ()
 
     [<Fact>]
+    let ``Type-provider generative usage edit updates user-authored method token`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-typeprovider-generative-usage", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+        let csharpAnalysisPath, testTypeProviderPath = getTypeProviderReferencePaths ()
+
+        let baseline =
+            """
+namespace ProviderHotReload
+
+type Generated = GeneratedWithConstructor.Provided.GenerativeProvider<3>
+
+module Demo =
+    let create () =
+        let value = Generated()
+        value.ToString()
+"""
+
+        let updated =
+            """
+namespace ProviderHotReload
+
+type Generated = GeneratedWithConstructor.Provided.GenerativeProvider<3>
+
+module Demo =
+    let create () =
+        let value = Generated()
+        value.ToString() + "!"
+"""
+
+        File.WriteAllText(fsPath, baseline)
+
+        let checker = createChecker ()
+
+        let projectOptions =
+            prepareProjectOptions checker fsPath dllPath baseline
+            |> withReferences [ csharpAnalysisPath; testTypeProviderPath ]
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let createToken = getMethodToken dllPath "Demo" "create"
+        File.WriteAllText(fsPath, updated)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitHotReloadDelta failed for type-provider generative usage edit: %A" error
+        | Ok delta -> Assert.Contains(createToken, delta.UpdatedMethods)
+
+        checker.EndHotReloadSession()
+        Assert.False(checker.HotReloadSessionActive)
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
     let ``Type-provider dependency timestamp invalidation keeps subsequent source edit hot-reloadable`` () =
         let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-typeprovider-dependency", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(projectDir) |> ignore
