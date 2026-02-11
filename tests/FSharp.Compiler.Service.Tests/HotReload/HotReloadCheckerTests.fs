@@ -127,6 +127,12 @@ type Type =
                     else
                         opt) }
 
+    let private withTrackedResourceInput (projectOptions: FSharpProjectOptions) (resourcePath: string) =
+        { projectOptions with
+            OtherOptions =
+                projectOptions.OtherOptions
+                |> Array.append [| $"--resource:{resourcePath},HotReloadPayload" |] }
+
     let private toWorkspaceCompilerArgs (projectOptions: FSharpProjectOptions) =
         Array.append projectOptions.OtherOptions projectOptions.SourceFiles
 
@@ -519,6 +525,65 @@ type Type =
         with _ -> ()
 
     [<Fact>]
+    let ``Workspace snapshot config version changes when tracked dependency input changes`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-workspace-tracked-inputs", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+        let projectPath = Path.Combine(projectDir, "Library.fsproj")
+        let resourcePath = Path.Combine(projectDir, "payload.xaml")
+
+        File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>")
+        File.WriteAllText(fsPath, baselineSource)
+        File.WriteAllText(resourcePath, "<Page><TextBlock Text=\"v1\" /></Page>")
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baselineSource |> withTrackedResourceInput <| resourcePath
+        let workspace = FSharpWorkspace(checker)
+
+        let projectIdentifier =
+            workspace.Projects.AddOrUpdate(projectPath, dllPath, toWorkspaceCompilerArgs projectOptions)
+
+        let baselineSnapshot =
+            workspace.Query.GetProjectSnapshot(projectIdentifier)
+            |> Option.defaultWith (fun () -> failwith "Expected workspace baseline snapshot.")
+
+        let baselineVersion = Convert.ToHexString(baselineSnapshot.ProjectConfig.Version)
+        let baselineTrackedInput =
+            baselineSnapshot.ProjectConfig.TrackedInputsOnDisk
+            |> List.tryFind (fun reference ->
+                String.Equals(Path.GetFullPath(reference.Path), Path.GetFullPath(resourcePath), StringComparison.Ordinal))
+            |> Option.defaultWith (fun () -> failwith "Expected tracked dependency input to be present in workspace config.")
+
+        File.WriteAllText(resourcePath, "<Page><TextBlock Text=\"v2\" /></Page>")
+        File.SetLastWriteTime(resourcePath, baselineTrackedInput.LastModified.AddSeconds(2.0))
+        workspace.Files.Close(Uri(resourcePath))
+        workspace.Projects.AddOrUpdate(projectPath, dllPath, toWorkspaceCompilerArgs projectOptions) |> ignore
+
+        let updatedSnapshot =
+            workspace.Query.GetProjectSnapshot(projectIdentifier)
+            |> Option.defaultWith (fun () -> failwith "Expected workspace updated snapshot.")
+
+        let updatedVersion = Convert.ToHexString(updatedSnapshot.ProjectConfig.Version)
+        let updatedTrackedInput =
+            updatedSnapshot.ProjectConfig.TrackedInputsOnDisk
+            |> List.tryFind (fun reference ->
+                String.Equals(Path.GetFullPath(reference.Path), Path.GetFullPath(resourcePath), StringComparison.Ordinal))
+            |> Option.defaultWith (fun () -> failwith "Expected tracked dependency input to remain in workspace config.")
+
+        Assert.True(
+            not (String.Equals(baselineVersion, updatedVersion, StringComparison.Ordinal)),
+            "Expected workspace project config version to change after tracked dependency input update.")
+        Assert.True(
+            updatedTrackedInput.LastModified > baselineTrackedInput.LastModified,
+            $"Expected tracked input timestamp to advance. Before={baselineTrackedInput.LastModified:o}, After={updatedTrackedInput.LastModified:o}")
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
     let ``StartHotReloadSession accepts short output option`` () =
         let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-short-output", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(projectDir) |> ignore
@@ -589,6 +654,49 @@ type Type =
         | Ok _ -> failwith "Expected stale output detection to reject delta emission."
 
         checker.EndHotReloadSession()
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``Tracked dependency invalidation keeps subsequent source edit hot-reloadable`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-dependency-invalidation", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+        let resourcePath = Path.Combine(projectDir, "payload.xaml")
+
+        File.WriteAllText(fsPath, baselineSource)
+        File.WriteAllText(resourcePath, "<Page><TextBlock Text=\"v1\" /></Page>")
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baselineSource |> withTrackedResourceInput <| resourcePath
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let getValueToken = getMethodToken dllPath "Type" "GetValue"
+
+        File.WriteAllText(resourcePath, "<Page><TextBlock Text=\"v2\" /></Page>")
+        checker.InvalidateConfiguration(projectOptions)
+        compileProject checker projectOptions false
+
+        File.WriteAllText(fsPath, updatedSource)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitHotReloadDelta failed after dependency invalidation: %A" error
+        | Ok delta -> Assert.Contains(getValueToken, delta.UpdatedMethods)
+
+        checker.EndHotReloadSession()
+        Assert.False(checker.HotReloadSessionActive)
 
         try
             Directory.Delete(projectDir, true)
@@ -1045,6 +1153,7 @@ type HtmlBuilder() =
     member _.Yield(text: string) = text
     member _.Combine(a: string, b: string) = a + b
     member _.Delay(f: unit -> string) = f()
+    member _.Zero() = ""
 
 let html = HtmlBuilder()
 
@@ -1063,6 +1172,7 @@ type HtmlBuilder() =
     member _.Yield(text: string) = text
     member _.Combine(a: string, b: string) = a + b
     member _.Delay(f: unit -> string) = f()
+    member _.Zero() = ""
 
 let html = HtmlBuilder()
 

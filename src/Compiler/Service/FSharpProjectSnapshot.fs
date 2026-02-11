@@ -450,13 +450,28 @@ and [<Experimental("This FCS API is experimental and subject to change.")>] Proj
                 else
                     None)
 
+        let normalizeResourceOptionValue (value: string) =
+            let normalized = trimEnclosingQuotes value
+            let logicalNameSeparator = normalized.IndexOf(',')
+
+            if logicalNameSeparator > 0 then
+                normalized.Substring(0, logicalNameSeparator)
+            else
+                normalized
+
+        let tryPathFromPrefixedOption prefixes valueNormalizer =
+            valueFromPrefix prefixes
+            |> Option.map valueNormalizer
+            |> Option.bind tryNormalizeTrackedInputPath
+
         if String.IsNullOrWhiteSpace option then
             None
         elif startsWith "-r:" || startsWith "--reference:" || startsWith "--out:" || startsWith "-o:" then
             None
         elif option.StartsWith("-", StringComparison.Ordinal) then
-            valueFromPrefix [ "--resource:"; "-resource:"; "--res:"; "-res:"; "--win32res:"; "--keyfile:"; "--load:"; "--use:" ]
-            |> Option.bind tryNormalizeTrackedInputPath
+            tryPathFromPrefixedOption [ "--resource:"; "-resource:"; "--res:"; "-res:" ] normalizeResourceOptionValue
+            |> Option.orElseWith (fun () ->
+                tryPathFromPrefixedOption [ "--win32res:"; "--keyfile:"; "--load:"; "--use:" ] trimEnclosingQuotes)
         else
             tryNormalizeTrackedInputPath option
 
