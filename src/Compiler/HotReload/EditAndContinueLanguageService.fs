@@ -74,7 +74,7 @@ type internal FSharpEditAndContinueLanguageService private () =
                     baselineMethods
                     |> Array.choose (fun candidate ->
                         let matchesDeclaringType =
-                            candidate.DeclaringType.Contains(marker, StringComparison.Ordinal)
+                            candidate.DeclaringType.IndexOf(marker, StringComparison.Ordinal) >= 0
 
                         let matchesMethodName =
                             candidate.Name.StartsWith(marker, StringComparison.Ordinal)
@@ -98,7 +98,7 @@ type internal FSharpEditAndContinueLanguageService private () =
                 baselineMethods
                 |> Array.choose (fun candidate ->
                     let isCompilerGeneratedCompanion =
-                        candidate.DeclaringType.Contains("@hotreload", StringComparison.Ordinal)
+                        candidate.DeclaringType.IndexOf("@hotreload", StringComparison.Ordinal) >= 0
 
                     let inTransitiveScope =
                         startupRoots
