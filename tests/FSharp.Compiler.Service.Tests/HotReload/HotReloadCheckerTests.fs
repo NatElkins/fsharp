@@ -1168,10 +1168,11 @@ module Demo =
             let updatedMethodDisplays =
                 delta.UpdatedMethods
                 |> List.map (getMethodDisplayByToken dllPath)
+            let updatedMethodDisplayText = String.concat ", " updatedMethodDisplays
 
             Assert.True(
                 updatedMethodDisplays |> List.exists (fun methodDisplay -> methodDisplay.Contains("@hotreload")),
-                $"Expected synthesized helper method update for async edit. Updated methods: {String.concat \", \" updatedMethodDisplays}")
+                $"Expected synthesized helper method update for async edit. Updated methods: {updatedMethodDisplayText}")
 
         checker.EndHotReloadSession()
 
@@ -1328,10 +1329,11 @@ let view name =
             let updatedMethodDisplays =
                 delta.UpdatedMethods
                 |> List.map (getMethodDisplayByToken dllPath)
+            let updatedMethodDisplayText = String.concat ", " updatedMethodDisplays
 
             Assert.True(
                 updatedMethodDisplays |> List.exists (fun methodDisplay -> methodDisplay.Contains("@hotreload")),
-                $"Expected synthesized helper method update for CE local-lambda edit. Updated methods: {String.concat \", \" updatedMethodDisplays}")
+                $"Expected synthesized helper method update for CE local-lambda edit. Updated methods: {updatedMethodDisplayText}")
 
         checker.EndHotReloadSession()
 
