@@ -741,6 +741,43 @@ type private EntitySnapshot =
       RepresentationText: string
       IsSynthesized: bool }
 
+let private containsOrdinalIgnoreCase (value: string) (fragment: string) =
+    value.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0
+
+let private tryClassifySynthesizedLoweredShapeChurn (snapshot: BindingSnapshot) =
+    if not snapshot.IsSynthesized then
+        None
+    else
+        let logicalName = snapshot.Symbol.LogicalName
+        let containingEntity = snapshot.ContainingEntity |> Option.defaultValue String.Empty
+
+        let hasQueryEvidence =
+            not (String.IsNullOrEmpty snapshot.QueryShapeDigest)
+            || isLikelyQueryDeclaringType containingEntity
+            || containsOrdinalIgnoreCase logicalName "query"
+
+        let hasStateMachineEvidence =
+            not (String.IsNullOrEmpty snapshot.StateMachineShapeDigest)
+            || isLikelyStateMachineDeclaringType containingEntity
+            || logicalName.Equals("MoveNext", StringComparison.Ordinal)
+            || containsOrdinalIgnoreCase logicalName "statemachine"
+            || containsOrdinalIgnoreCase logicalName "resumable"
+            || containsOrdinalIgnoreCase logicalName "async"
+
+        let hasLambdaEvidence =
+            not (String.IsNullOrEmpty snapshot.LambdaShapeDigest)
+            || containsOrdinalIgnoreCase logicalName "lambda"
+            || containsOrdinalIgnoreCase logicalName "clo"
+
+        if hasQueryEvidence then
+            Some RudeEditKind.QueryExpressionShapeChange
+        elif hasStateMachineEvidence then
+            Some RudeEditKind.StateMachineShapeChange
+        elif hasLambdaEvidence then
+            Some RudeEditKind.LambdaShapeChange
+        else
+            None
+
 let private symbolId
     path
     logicalName
@@ -976,6 +1013,7 @@ let private collectSnapshots g denv (CheckedImplFile (qualifiedNameOfFile = qual
 let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: Map<string, BindingSnapshot>) =
     let edits = ResizeArray()
     let rude = ResizeArray()
+    let matchedUpdatedKeys = HashSet()
 
     let handleEdit (snapshot: BindingSnapshot) kind baselineHash updatedHash =
         let symbol = snapshot.Symbol
@@ -988,60 +1026,75 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
               ContainingEntity = snapshot.ContainingEntity }
         )
 
-    for KeyValue(key, baselineBinding) in baseline do
-        match Map.tryFind key updated with
-        | Some updatedBinding ->
-            if baselineBinding.SignatureText <> updatedBinding.SignatureText then
-                rude.Add(
-                    { Symbol = Some baselineBinding.Symbol
-                      Kind = RudeEditKind.SignatureChange
-                      Message =
-                        $"Signature changed from '{baselineBinding.SignatureText}' to '{updatedBinding.SignatureText}'." }
-                )
-            elif baselineBinding.ConstraintsText <> updatedBinding.ConstraintsText then
-                rude.Add(
-                    { Symbol = Some baselineBinding.Symbol
-                      Kind = RudeEditKind.SignatureChange
-                      Message =
-                        $"Type parameter constraints changed from '{baselineBinding.ConstraintsText}' to '{updatedBinding.ConstraintsText}'." }
-                )
-            elif baselineBinding.InlineInfo <> updatedBinding.InlineInfo then
-                rude.Add(
-                    { Symbol = Some baselineBinding.Symbol
-                      Kind = RudeEditKind.InlineChange
-                      Message = "Inline annotation changed." }
-                )
-            elif baselineBinding.QueryShapeDigest <> updatedBinding.QueryShapeDigest then
-                rude.Add(
-                    { Symbol = Some baselineBinding.Symbol
-                      Kind = RudeEditKind.QueryExpressionShapeChange
-                      Message =
-                        $"Query-expression lowering shape changed from '{baselineBinding.QueryShapeDigest}' to '{updatedBinding.QueryShapeDigest}'." }
-                )
-            elif baselineBinding.StateMachineShapeDigest <> updatedBinding.StateMachineShapeDigest then
-                rude.Add(
-                    { Symbol = Some baselineBinding.Symbol
-                      Kind = RudeEditKind.StateMachineShapeChange
-                      Message =
-                        $"State-machine lowering shape changed from '{baselineBinding.StateMachineShapeDigest}' to '{updatedBinding.StateMachineShapeDigest}'." }
-                )
-            elif baselineBinding.LambdaShapeDigest <> updatedBinding.LambdaShapeDigest then
-                rude.Add(
-                    { Symbol = Some baselineBinding.Symbol
-                      Kind = RudeEditKind.LambdaShapeChange
-                      Message =
-                        $"Lambda lowering shape changed from '{baselineBinding.LambdaShapeDigest}' to '{updatedBinding.LambdaShapeDigest}'." }
-                )
-            elif baselineBinding.BodyHash <> updatedBinding.BodyHash then
-                if traceHotReloadMethodDiff then
-                    printfn
-                        "[fsharp-hotreload][typed-diff] body change symbol=%s synthesized=%b baselineHash=%d updatedHash=%d"
-                        baselineBinding.Symbol.LogicalName
-                        baselineBinding.IsSynthesized
-                        baselineBinding.BodyHash
-                        updatedBinding.BodyHash
+    let compareMatchedBindings (baselineBinding: BindingSnapshot) (updatedBinding: BindingSnapshot) =
+        let hasEquivalentRuntimeSignature =
+            baselineBinding.Symbol.CompiledName = updatedBinding.Symbol.CompiledName
+            && baselineBinding.Symbol.TotalArgCount = updatedBinding.Symbol.TotalArgCount
+            && baselineBinding.Symbol.GenericArity = updatedBinding.Symbol.GenericArity
+            && baselineBinding.Symbol.ParameterTypeIdentities = updatedBinding.Symbol.ParameterTypeIdentities
+            && baselineBinding.Symbol.ReturnTypeIdentity = updatedBinding.Symbol.ReturnTypeIdentity
 
-                handleEdit baselineBinding SemanticEditKind.MethodBody (Some baselineBinding.BodyHash) (Some updatedBinding.BodyHash)
+        if baselineBinding.SignatureText <> updatedBinding.SignatureText && not hasEquivalentRuntimeSignature then
+            rude.Add(
+                { Symbol = Some baselineBinding.Symbol
+                  Kind = RudeEditKind.SignatureChange
+                  Message =
+                    $"Signature changed from '{baselineBinding.SignatureText}' to '{updatedBinding.SignatureText}'." }
+            )
+        elif baselineBinding.ConstraintsText <> updatedBinding.ConstraintsText then
+            rude.Add(
+                { Symbol = Some baselineBinding.Symbol
+                  Kind = RudeEditKind.SignatureChange
+                  Message =
+                    $"Type parameter constraints changed from '{baselineBinding.ConstraintsText}' to '{updatedBinding.ConstraintsText}'." }
+            )
+        elif baselineBinding.InlineInfo <> updatedBinding.InlineInfo then
+            rude.Add(
+                { Symbol = Some baselineBinding.Symbol
+                  Kind = RudeEditKind.InlineChange
+                  Message = "Inline annotation changed." }
+            )
+        elif baselineBinding.QueryShapeDigest <> updatedBinding.QueryShapeDigest then
+            rude.Add(
+                { Symbol = Some baselineBinding.Symbol
+                  Kind = RudeEditKind.QueryExpressionShapeChange
+                  Message =
+                    $"Query-expression lowering shape changed from '{baselineBinding.QueryShapeDigest}' to '{updatedBinding.QueryShapeDigest}'." }
+            )
+        elif baselineBinding.StateMachineShapeDigest <> updatedBinding.StateMachineShapeDigest then
+            rude.Add(
+                { Symbol = Some baselineBinding.Symbol
+                  Kind = RudeEditKind.StateMachineShapeChange
+                  Message =
+                    $"State-machine lowering shape changed from '{baselineBinding.StateMachineShapeDigest}' to '{updatedBinding.StateMachineShapeDigest}'." }
+            )
+        elif baselineBinding.LambdaShapeDigest <> updatedBinding.LambdaShapeDigest then
+            rude.Add(
+                { Symbol = Some baselineBinding.Symbol
+                  Kind = RudeEditKind.LambdaShapeChange
+                  Message =
+                    $"Lambda lowering shape changed from '{baselineBinding.LambdaShapeDigest}' to '{updatedBinding.LambdaShapeDigest}'." }
+            )
+        elif baselineBinding.BodyHash <> updatedBinding.BodyHash then
+            if traceHotReloadMethodDiff then
+                printfn
+                    "[fsharp-hotreload][typed-diff] body change symbol=%s synthesized=%b baselineHash=%d updatedHash=%d"
+                    baselineBinding.Symbol.LogicalName
+                    baselineBinding.IsSynthesized
+                    baselineBinding.BodyHash
+                    updatedBinding.BodyHash
+
+            handleEdit baselineBinding SemanticEditKind.MethodBody (Some baselineBinding.BodyHash) (Some updatedBinding.BodyHash)
+
+    let addRemovedDeclarationRudeEdit (baselineBinding: BindingSnapshot) =
+        match tryClassifySynthesizedLoweredShapeChurn baselineBinding with
+        | Some loweredKind ->
+            rude.Add(
+                { Symbol = Some baselineBinding.Symbol
+                  Kind = loweredKind
+                  Message =
+                    $"Synthesized declaration removed while lowered shape changed for '{baselineBinding.Symbol.QualifiedName}'." }
+            )
         | None ->
             rude.Add(
                 { Symbol = Some baselineBinding.Symbol
@@ -1049,8 +1102,16 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
                   Message = "Declaration removed." }
             )
 
-    for KeyValue(key, updatedBinding) in updated do
-        if not (Map.containsKey key baseline) then
+    let addAddedDeclarationOrInsertEdit (updatedBinding: BindingSnapshot) =
+        match tryClassifySynthesizedLoweredShapeChurn updatedBinding with
+        | Some loweredKind ->
+            rude.Add(
+                { Symbol = Some updatedBinding.Symbol
+                  Kind = loweredKind
+                  Message =
+                    $"Synthesized declaration added while lowered shape changed for '{updatedBinding.Symbol.QualifiedName}'." }
+            )
+        | None ->
             let info = updatedBinding.AdditionInfo
             // Check restrictions following Roslyn patterns
             if info.IsField then
@@ -1104,6 +1165,43 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
                       Kind = RudeEditKind.DeclarationAdded
                       Message = "Adding module-level values is not supported." }
                 )
+
+    let hasSameBindingIdentity (baselineBinding: BindingSnapshot) (updatedBinding: BindingSnapshot) =
+        baselineBinding.Symbol.QualifiedName = updatedBinding.Symbol.QualifiedName
+        && baselineBinding.ContainingEntity = updatedBinding.ContainingEntity
+        && baselineBinding.Symbol.MemberKind = updatedBinding.Symbol.MemberKind
+        && baselineBinding.Symbol.CompiledName = updatedBinding.Symbol.CompiledName
+        && baselineBinding.Symbol.TotalArgCount = updatedBinding.Symbol.TotalArgCount
+        && baselineBinding.Symbol.GenericArity = updatedBinding.Symbol.GenericArity
+        && baselineBinding.Symbol.ParameterTypeIdentities = updatedBinding.Symbol.ParameterTypeIdentities
+        && baselineBinding.Symbol.ReturnTypeIdentity = updatedBinding.Symbol.ReturnTypeIdentity
+
+    let tryFindFallbackUpdatedBinding (baselineBinding: BindingSnapshot) =
+        updated
+        |> Seq.tryPick (fun (KeyValue(updatedKey, updatedBinding)) ->
+            if matchedUpdatedKeys.Contains updatedKey then
+                None
+            elif hasSameBindingIdentity baselineBinding updatedBinding then
+                Some(updatedKey, updatedBinding)
+            else
+                None)
+
+    for KeyValue(key, baselineBinding) in baseline do
+        match Map.tryFind key updated with
+        | Some updatedBinding ->
+            matchedUpdatedKeys.Add key |> ignore
+            compareMatchedBindings baselineBinding updatedBinding
+        | None ->
+            match tryFindFallbackUpdatedBinding baselineBinding with
+            | Some(updatedKey, updatedBinding) ->
+                matchedUpdatedKeys.Add updatedKey |> ignore
+                compareMatchedBindings baselineBinding updatedBinding
+            | None ->
+                addRemovedDeclarationRudeEdit baselineBinding
+
+    for KeyValue(key, updatedBinding) in updated do
+        if not (matchedUpdatedKeys.Contains key) && not (Map.containsKey key baseline) then
+            addAddedDeclarationOrInsertEdit updatedBinding
 
     edits |> Seq.toList, rude |> Seq.toList
 

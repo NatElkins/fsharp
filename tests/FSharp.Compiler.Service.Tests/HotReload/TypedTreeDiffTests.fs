@@ -312,16 +312,10 @@ let runAsync () =
 
         let result = harness.Diff baseline updated
 
-        // Some lowered async forms currently surface as declaration churn rather than
-        // a specific StateMachineShapeChange rude-edit classification.
         Assert.NotEmpty(result.RudeEdits)
-        Assert.Contains(
-            result.RudeEdits,
-            fun rude ->
-                rude.Kind = RudeEditKind.StateMachineShapeChange
-                || rude.Kind = RudeEditKind.DeclarationAdded
-                || rude.Kind = RudeEditKind.DeclarationRemoved
-        )
+        Assert.Contains(result.RudeEdits, fun rude -> rude.Kind = RudeEditKind.StateMachineShapeChange)
+        Assert.DoesNotContain(result.RudeEdits, fun rude -> rude.Kind = RudeEditKind.DeclarationAdded)
+        Assert.DoesNotContain(result.RudeEdits, fun rude -> rude.Kind = RudeEditKind.DeclarationRemoved)
 
     [<Fact>]
     let ``query lowering shape change triggers rude edit`` () =
