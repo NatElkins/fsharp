@@ -133,6 +133,44 @@ type Type =
                 projectOptions.OtherOptions
                 |> Array.append [| $"--resource:{resourcePath},HotReloadPayload" |] }
 
+    let private withReferences (referencePaths: string list) (projectOptions: FSharpProjectOptions) =
+        let referenceArgs =
+            referencePaths
+            |> List.map (fun path -> "-r:" + path)
+            |> List.toArray
+
+        { projectOptions with
+            OtherOptions =
+                projectOptions.OtherOptions
+                |> Array.append referenceArgs }
+
+    let private getTypeProviderReferencePaths () =
+#if DEBUG
+        let csharpAnalysisPath =
+            Path.Combine(__SOURCE_DIRECTORY__, "../../../artifacts/bin/TestTP/Debug/netstandard2.0/CSharp_Analysis.dll")
+            |> Path.GetFullPath
+
+        let testTypeProviderPath =
+            Path.Combine(__SOURCE_DIRECTORY__, "../../../artifacts/bin/TestTP/Debug/netstandard2.0/TestTP.dll")
+            |> Path.GetFullPath
+#else
+        let csharpAnalysisPath =
+            Path.Combine(__SOURCE_DIRECTORY__, "../../../artifacts/bin/TestTP/Release/netstandard2.0/CSharp_Analysis.dll")
+            |> Path.GetFullPath
+
+        let testTypeProviderPath =
+            Path.Combine(__SOURCE_DIRECTORY__, "../../../artifacts/bin/TestTP/Release/netstandard2.0/TestTP.dll")
+            |> Path.GetFullPath
+#endif
+
+        if not (File.Exists(csharpAnalysisPath)) then
+            failwithf "Expected type-provider dependency assembly to exist at '%s'." csharpAnalysisPath
+
+        if not (File.Exists(testTypeProviderPath)) then
+            failwithf "Expected type-provider assembly to exist at '%s'." testTypeProviderPath
+
+        csharpAnalysisPath, testTypeProviderPath
+
     let private toWorkspaceCompilerArgs (projectOptions: FSharpProjectOptions) =
         Array.append projectOptions.OtherOptions projectOptions.SourceFiles
 
@@ -1210,6 +1248,308 @@ let view name =
             Assert.All(updatedMethodDisplays, fun methodDisplay -> Assert.DoesNotContain("@hotreload", methodDisplay))
 
         checker.EndHotReloadSession()
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``Computation-expression usage edit with local lambda still targets user-authored method token`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-ce-transformed-helpers", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        let baseline =
+            """
+module UiDslDemo
+
+type HtmlBuilder() =
+    member _.Yield(text: string) = text
+    member _.Combine(a: string, b: string) = a + b
+    member _.Delay(f: unit -> string) = f()
+    member _.Zero() = ""
+
+let html = HtmlBuilder()
+
+let view name =
+    let prefixFactory = fun () -> "Hello, "
+    html {
+        prefixFactory ()
+        name
+    }
+"""
+
+        let updated =
+            """
+module UiDslDemo
+
+type HtmlBuilder() =
+    member _.Yield(text: string) = text
+    member _.Combine(a: string, b: string) = a + b
+    member _.Delay(f: unit -> string) = f()
+    member _.Zero() = ""
+
+let html = HtmlBuilder()
+
+let view name =
+    let prefixFactory = fun () -> "Welcome, "
+    html {
+        prefixFactory ()
+        name
+    }
+"""
+
+        File.WriteAllText(fsPath, baseline)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baseline
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let viewToken = getMethodToken dllPath "UiDslDemo" "view"
+        File.WriteAllText(fsPath, updated)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Error error ->
+            failwithf
+                "EmitHotReloadDelta failed for computation-expression transformed-helper edit: %A"
+                error
+        | Ok delta ->
+            Assert.Contains(viewToken, delta.UpdatedMethods)
+
+            let updatedMethodDisplays =
+                delta.UpdatedMethods
+                |> List.map (getMethodDisplayByToken dllPath)
+
+            Assert.All(updatedMethodDisplays, fun methodDisplay -> Assert.DoesNotContain("@hotreload", methodDisplay))
+
+        checker.EndHotReloadSession()
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``Type-provider erased usage edit updates user-authored method token`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-typeprovider-erased", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+        let csharpAnalysisPath, testTypeProviderPath = getTypeProviderReferencePaths ()
+
+        let baseline =
+            """
+namespace ProviderHotReload
+
+type Provided = ErasedWithConstructor.Provided.MyType
+
+module Demo =
+    let render () =
+        let provided = Provided()
+        provided.DoNothing()
+        "generation 0"
+"""
+
+        let updated =
+            """
+namespace ProviderHotReload
+
+type Provided = ErasedWithConstructor.Provided.MyType
+
+module Demo =
+    let render () =
+        let provided = Provided()
+        provided.DoNothingOneArg()
+        "generation 1"
+"""
+
+        File.WriteAllText(fsPath, baseline)
+
+        let checker = createChecker ()
+
+        let projectOptions =
+            prepareProjectOptions checker fsPath dllPath baseline
+            |> withReferences [ csharpAnalysisPath; testTypeProviderPath ]
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let renderToken = getMethodToken dllPath "Demo" "render"
+        File.WriteAllText(fsPath, updated)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitHotReloadDelta failed for type-provider erased usage edit: %A" error
+        | Ok delta -> Assert.Contains(renderToken, delta.UpdatedMethods)
+
+        checker.EndHotReloadSession()
+        Assert.False(checker.HotReloadSessionActive)
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``Type-provider generative static-argument change with unchanged usage yields no semantic delta`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-typeprovider-generative", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+        let csharpAnalysisPath, testTypeProviderPath = getTypeProviderReferencePaths ()
+
+        let baseline =
+            """
+namespace ProviderHotReload
+
+type Generated = GeneratedWithConstructor.Provided.GenerativeProvider<3>
+
+module Demo =
+    let create () =
+        let value = Generated()
+        value.ToString()
+"""
+
+        let updated =
+            """
+namespace ProviderHotReload
+
+type Generated = GeneratedWithConstructor.Provided.GenerativeProvider<4>
+
+module Demo =
+    let create () =
+        let value = Generated()
+        value.ToString()
+"""
+
+        File.WriteAllText(fsPath, baseline)
+
+        let checker = createChecker ()
+
+        let projectOptions =
+            prepareProjectOptions checker fsPath dllPath baseline
+            |> withReferences [ csharpAnalysisPath; testTypeProviderPath ]
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        File.WriteAllText(fsPath, updated)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Ok _ ->
+            failwith "Expected no semantic delta when only generative static argument changes and consumed IL is unchanged."
+        | Error FSharpHotReloadError.NoChanges -> ()
+        | Error error ->
+            failwithf "Expected NoChanges for generative static-argument update, got: %A" error
+
+        checker.EndHotReloadSession()
+        Assert.False(checker.HotReloadSessionActive)
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``Type-provider dependency timestamp invalidation keeps subsequent source edit hot-reloadable`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-typeprovider-dependency", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+        let csharpAnalysisSourcePath, testTypeProviderSourcePath = getTypeProviderReferencePaths ()
+
+        let tpDir = Path.Combine(projectDir, "tp")
+        Directory.CreateDirectory(tpDir) |> ignore
+
+        let csharpAnalysisPath = Path.Combine(tpDir, "CSharp_Analysis.dll")
+        let testTypeProviderPath = Path.Combine(tpDir, "TestTP.dll")
+
+        File.Copy(csharpAnalysisSourcePath, csharpAnalysisPath, overwrite = true)
+        File.Copy(testTypeProviderSourcePath, testTypeProviderPath, overwrite = true)
+
+        let baseline =
+            """
+namespace ProviderHotReload
+
+type Provided = ErasedWithConstructor.Provided.MyType
+
+module Demo =
+    let render () =
+        let provided = Provided()
+        provided.DoNothing()
+        "generation 0"
+"""
+
+        let updated =
+            """
+namespace ProviderHotReload
+
+type Provided = ErasedWithConstructor.Provided.MyType
+
+module Demo =
+    let render () =
+        let provided = Provided()
+        provided.DoNothingOneArg()
+        "generation 1"
+"""
+
+        File.WriteAllText(fsPath, baseline)
+
+        let checker = createChecker ()
+
+        let projectOptions =
+            prepareProjectOptions checker fsPath dllPath baseline
+            |> withReferences [ csharpAnalysisPath; testTypeProviderPath ]
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        match checker.StartHotReloadSession(projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let renderToken = getMethodToken dllPath "Demo" "render"
+
+        // Simulate provider dependency refresh and force configuration invalidation before the source edit.
+        let dependencyTimestamp = File.GetLastWriteTime(csharpAnalysisPath).AddSeconds(2.0)
+        File.SetLastWriteTime(csharpAnalysisPath, dependencyTimestamp)
+        checker.InvalidateConfiguration(projectOptions)
+        compileProject checker projectOptions false
+
+        File.WriteAllText(fsPath, updated)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+        compileProject checker projectOptions false
+
+        match checker.EmitHotReloadDelta(projectOptions) |> Async.RunImmediate with
+        | Error error ->
+            failwithf
+                "EmitHotReloadDelta failed after type-provider dependency invalidation: %A"
+                error
+        | Ok delta -> Assert.Contains(renderToken, delta.UpdatedMethods)
+
+        checker.EndHotReloadSession()
+        Assert.False(checker.HotReloadSessionActive)
 
         try
             Directory.Delete(projectDir, true)

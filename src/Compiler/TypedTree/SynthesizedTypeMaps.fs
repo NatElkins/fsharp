@@ -22,10 +22,11 @@ type FSharpSynthesizedTypeMaps() =
 
     /// Validates that a generated name starts with the basicName followed by '@'.
     let validateName basicName (name: string) index =
-        // Names should start with basicName + "@" (the compiler-generated marker)
+        // Snapshots can contain legacy/basic synthesized names (for example "@_instance")
+        // alongside hot-reload-managed names. Accept both forms so existing sessions restore.
         let expectedPrefix = basicName + "@"
-        if not (name.StartsWith(expectedPrefix, System.StringComparison.Ordinal)) then
-            invalidArg "snapshot" $"Name '{name}' at index {index} should start with '{expectedPrefix}' for basicName '{basicName}'"
+        if not (name.Equals(basicName, System.StringComparison.Ordinal) || name.StartsWith(expectedPrefix, System.StringComparison.Ordinal)) then
+            invalidArg "snapshot" $"Name '{name}' at index {index} should equal '{basicName}' or start with '{expectedPrefix}' for basicName '{basicName}'"
 
     member _.GetOrAddName(basicName: string) =
         let bucket = buckets.GetOrAdd(basicName, fun _ -> ResizeArray())

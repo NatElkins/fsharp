@@ -73,6 +73,19 @@ module NameMapTests =
         map.LoadSnapshot validSnapshot // Should not throw
 
     [<Fact>]
+    let ``LoadSnapshot accepts legacy basic names`` () =
+        let map = FSharpSynthesizedTypeMaps()
+
+        // Some historical snapshots contain exact compiler-generated basic names
+        // (for example "@_instance") instead of the newer "basicName@..." form.
+        let legacySnapshot = [|
+            ("@_instance", [| "@_instance" |])
+            ("cached", [| "cached"; "cached@hotreload" |])
+        |]
+
+        map.LoadSnapshot legacySnapshot // Should not throw
+
+    [<Fact>]
     let ``LoadSnapshot rejects basicName mismatch`` () =
         let map = FSharpSynthesizedTypeMaps()
 
