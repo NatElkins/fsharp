@@ -27,6 +27,12 @@ module internal RudeEditDiagnostics =
             sprintf "Adding a new declaration '%s' requires a rebuild." name
         | RudeEditKind.DeclarationRemoved ->
             sprintf "Removing the declaration '%s' requires a rebuild." name
+        | RudeEditKind.LambdaShapeChange ->
+            sprintf "Changing lowered lambda shape for '%s' requires a rebuild." name
+        | RudeEditKind.StateMachineShapeChange ->
+            sprintf "Changing lowered state-machine shape for '%s' requires a rebuild." name
+        | RudeEditKind.QueryExpressionShapeChange ->
+            sprintf "Changing lowered query-expression shape for '%s' requires a rebuild." name
         | RudeEditKind.InsertVirtual ->
             sprintf "Adding virtual, abstract, or override method '%s' is not supported." name
         | RudeEditKind.InsertConstructor ->
@@ -48,6 +54,9 @@ module internal RudeEditDiagnostics =
         | RudeEditKind.TypeLayoutChange -> "FSHRDL003"
         | RudeEditKind.DeclarationAdded -> "FSHRDL004"
         | RudeEditKind.DeclarationRemoved -> "FSHRDL005"
+        | RudeEditKind.LambdaShapeChange -> "FSHRDL012"
+        | RudeEditKind.StateMachineShapeChange -> "FSHRDL013"
+        | RudeEditKind.QueryExpressionShapeChange -> "FSHRDL014"
         | RudeEditKind.InsertVirtual -> "FSHRDL006"
         | RudeEditKind.InsertConstructor -> "FSHRDL007"
         | RudeEditKind.InsertOperator -> "FSHRDL008"

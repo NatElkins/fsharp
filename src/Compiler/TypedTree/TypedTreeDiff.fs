@@ -61,6 +61,9 @@ type RudeEditKind =
     | TypeLayoutChange
     | DeclarationAdded
     | DeclarationRemoved
+    | LambdaShapeChange
+    | StateMachineShapeChange
+    | QueryExpressionShapeChange
     | Unsupported
     // Method addition restrictions (following Roslyn patterns)
     | InsertVirtual           // Virtual/abstract/override methods cannot be added
@@ -447,6 +450,139 @@ let private opDigest (denv: DisplayEnv) (op: TOp) =
         string isCtor + ":" + string valUseFlag + ":" + string isProperty + ":" + string noTailCall +
         ":" + ilMethRef.DeclaringTypeRef.FullName + "." + ilMethRef.Name
 
+type private LoweredShapeCollector =
+    { LambdaArities: ResizeArray<int>
+      StateMachineOperations: ResizeArray<string>
+      QueryOperations: ResizeArray<string> }
+
+let private isLikelyStateMachineDeclaringType (declaringTypeName: string) =
+    declaringTypeName.IndexOf("AsyncBuilder", StringComparison.Ordinal) >= 0
+    || declaringTypeName.IndexOf("TaskBuilder", StringComparison.Ordinal) >= 0
+    || declaringTypeName.IndexOf("Resumable", StringComparison.Ordinal) >= 0
+
+let private isLikelyQueryDeclaringType (declaringTypeName: string) =
+    declaringTypeName.IndexOf("QueryBuilder", StringComparison.Ordinal) >= 0
+    || declaringTypeName.IndexOf("Microsoft.FSharp.Linq", StringComparison.Ordinal) >= 0
+
+let private isLikelyQueryOperationName (name: string) =
+    match name with
+    | "For"
+    | "Select"
+    | "SelectMany"
+    | "Where"
+    | "GroupBy"
+    | "Join"
+    | "LeftOuterJoin"
+    | "SortBy"
+    | "SortByDescending"
+    | "ThenBy"
+    | "ThenByDescending"
+    | "Yield"
+    | "YieldFrom"
+    | "Run"
+    | "Zero"
+    | "Source"
+    | "Quote" -> true
+    | _ -> false
+
+let private addDistinct (items: ResizeArray<string>) (value: string) =
+    if not (String.IsNullOrEmpty value) && not (items.Contains value) then
+        items.Add value
+
+let private collectLoweredShapeInfo (expr: Expr) =
+    let collector =
+        { LambdaArities = ResizeArray()
+          StateMachineOperations = ResizeArray()
+          QueryOperations = ResizeArray() }
+
+    let rec walk (expr: Expr) =
+        match expr with
+        | Expr.Const _ -> ()
+        | Expr.Val (vref, _, _) ->
+            match tryGetDeclaringEntityCompiledName vref with
+            | Some declaringTypeName when isLikelyStateMachineDeclaringType declaringTypeName ->
+                addDistinct collector.StateMachineOperations vref.LogicalName
+            | Some declaringTypeName when isLikelyQueryDeclaringType declaringTypeName ->
+                addDistinct collector.QueryOperations vref.LogicalName
+            | _ -> ()
+        | Expr.App (funcExpr, _, _, args, _) ->
+            walk funcExpr
+            args |> List.iter walk
+        | Expr.Sequential (expr1, expr2, _, _) ->
+            walk expr1
+            walk expr2
+        | Expr.Lambda (_, _, _, valParams, bodyExpr, _, _) ->
+            collector.LambdaArities.Add(valParams.Length)
+            walk bodyExpr
+        | Expr.TyLambda (_, _, bodyExpr, _, _) ->
+            walk bodyExpr
+        | Expr.Let (binding, bodyExpr, _, _) ->
+            let (TBind (_, bindingExpr, _)) = binding
+            walk bindingExpr
+            walk bodyExpr
+        | Expr.LetRec (bindings, bodyExpr, _, _) ->
+            bindings
+            |> List.iter (fun (TBind (_, bindingExpr, _)) -> walk bindingExpr)
+            walk bodyExpr
+        | Expr.Match (_, _, _, targets, _, _) ->
+            targets
+            |> Array.iter (fun (TTarget(_, targetExpr, _)) -> walk targetExpr)
+        | Expr.Op (op, _, args, _) ->
+            match op with
+            | TOp.TryWith _ -> addDistinct collector.StateMachineOperations "TryWith"
+            | TOp.TryFinally _ -> addDistinct collector.StateMachineOperations "TryFinally"
+            | TOp.While _ -> addDistinct collector.StateMachineOperations "While"
+            | TOp.IntegerForLoop _ -> addDistinct collector.StateMachineOperations "ForLoop"
+            | TOp.TraitCall traitInfo ->
+                if isLikelyQueryOperationName traitInfo.MemberLogicalName then
+                    addDistinct collector.QueryOperations traitInfo.MemberLogicalName
+            | _ -> ()
+
+            args |> List.iter walk
+        | Expr.Obj (_, _, _, ctorCall, overrides, interfaceImpls, _) ->
+            walk ctorCall
+
+            overrides
+            |> List.iter (fun (TObjExprMethod(_, _, _, _, body, _)) -> walk body)
+
+            interfaceImpls
+            |> List.iter (fun (_, methods) ->
+                methods
+                |> List.iter (fun (TObjExprMethod(_, _, _, _, body, _)) -> walk body))
+        | Expr.Quote (quotedExpr, _, _, _, _) ->
+            walk quotedExpr
+        | Expr.DebugPoint (_, body) ->
+            walk body
+        | Expr.Link eref ->
+            walk eref.Value
+        | Expr.TyChoose (_, bodyExpr, _) ->
+            walk bodyExpr
+        | Expr.WitnessArg (traitInfo, _) ->
+            if isLikelyQueryOperationName traitInfo.MemberLogicalName then
+                addDistinct collector.QueryOperations traitInfo.MemberLogicalName
+        | Expr.StaticOptimization (_, onExpr, elseExpr, _) ->
+            walk onExpr
+            walk elseExpr
+
+    walk expr
+
+    let lambdaDigest =
+        collector.LambdaArities
+        |> Seq.map string
+        |> String.concat ","
+
+    let stateMachineDigest =
+        collector.StateMachineOperations
+        |> Seq.sort
+        |> String.concat ","
+
+    let queryDigest =
+        collector.QueryOperations
+        |> Seq.sort
+        |> String.concat ","
+
+    lambdaDigest, stateMachineDigest, queryDigest
+
 let rec private exprDigest (denv: DisplayEnv) (expr: Expr) =
     let recurse = exprDigest denv
 
@@ -592,6 +728,9 @@ type private BindingSnapshot =
       SignatureText: string
       ConstraintsText: string
       BodyHash: int
+      LambdaShapeDigest: string
+      StateMachineShapeDigest: string
+      QueryShapeDigest: string
       IsSynthesized: bool
       ContainingEntity: string option
       AdditionInfo: MethodAdditionInfo }
@@ -674,6 +813,7 @@ and private snapshotBinding g denv path (TBind (var, expr, _)) =
     let signature = tyToString denv var.Type
     let constraints = typarConstraintsDigest denv var.Typars
     let bodyHash = exprDigest denv expr
+    let lambdaShapeDigest, stateMachineShapeDigest, queryShapeDigest = collectLoweredShapeInfo expr
     let containingEntity = tryGetContainingEntityFullName var
     let memberKind = memberKindOfVal var
     let vref = mkLocalValRef var
@@ -758,6 +898,9 @@ and private snapshotBinding g denv path (TBind (var, expr, _)) =
       SignatureText = signature
       ConstraintsText = constraints
       BodyHash = bodyHash
+      LambdaShapeDigest = lambdaShapeDigest
+      StateMachineShapeDigest = stateMachineShapeDigest
+      QueryShapeDigest = queryShapeDigest
       IsSynthesized = var.IsCompilerGenerated
       ContainingEntity = containingEntity
       AdditionInfo = additionInfo }: BindingSnapshot
@@ -867,6 +1010,27 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
                     { Symbol = Some baselineBinding.Symbol
                       Kind = RudeEditKind.InlineChange
                       Message = "Inline annotation changed." }
+                )
+            elif baselineBinding.QueryShapeDigest <> updatedBinding.QueryShapeDigest then
+                rude.Add(
+                    { Symbol = Some baselineBinding.Symbol
+                      Kind = RudeEditKind.QueryExpressionShapeChange
+                      Message =
+                        $"Query-expression lowering shape changed from '{baselineBinding.QueryShapeDigest}' to '{updatedBinding.QueryShapeDigest}'." }
+                )
+            elif baselineBinding.StateMachineShapeDigest <> updatedBinding.StateMachineShapeDigest then
+                rude.Add(
+                    { Symbol = Some baselineBinding.Symbol
+                      Kind = RudeEditKind.StateMachineShapeChange
+                      Message =
+                        $"State-machine lowering shape changed from '{baselineBinding.StateMachineShapeDigest}' to '{updatedBinding.StateMachineShapeDigest}'." }
+                )
+            elif baselineBinding.LambdaShapeDigest <> updatedBinding.LambdaShapeDigest then
+                rude.Add(
+                    { Symbol = Some baselineBinding.Symbol
+                      Kind = RudeEditKind.LambdaShapeChange
+                      Message =
+                        $"Lambda lowering shape changed from '{baselineBinding.LambdaShapeDigest}' to '{updatedBinding.LambdaShapeDigest}'." }
                 )
             elif baselineBinding.BodyHash <> updatedBinding.BodyHash then
                 if not baselineBinding.IsSynthesized then

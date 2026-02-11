@@ -43,6 +43,24 @@ module RudeEditDiagnosticsTests =
         Assert.Contains("Removing", diag.Message, StringComparison.OrdinalIgnoreCase)
 
     [<Fact>]
+    let ``lambda shape change diagnostic id`` () =
+        let diag = RudeEditDiagnostics.ofRudeEdit (rude RudeEditKind.LambdaShapeChange "fallback")
+        Assert.Equal("FSHRDL012", diag.Id)
+        Assert.Contains("lambda", diag.Message, StringComparison.OrdinalIgnoreCase)
+
+    [<Fact>]
+    let ``state machine shape change diagnostic id`` () =
+        let diag = RudeEditDiagnostics.ofRudeEdit (rude RudeEditKind.StateMachineShapeChange "fallback")
+        Assert.Equal("FSHRDL013", diag.Id)
+        Assert.Contains("state-machine", diag.Message, StringComparison.OrdinalIgnoreCase)
+
+    [<Fact>]
+    let ``query expression shape change diagnostic id`` () =
+        let diag = RudeEditDiagnostics.ofRudeEdit (rude RudeEditKind.QueryExpressionShapeChange "fallback")
+        Assert.Equal("FSHRDL014", diag.Id)
+        Assert.Contains("query-expression", diag.Message, StringComparison.OrdinalIgnoreCase)
+
+    [<Fact>]
     let ``explicit interface insertion diagnostic id`` () =
         let diag = RudeEditDiagnostics.ofRudeEdit (rude RudeEditKind.InsertExplicitInterface "fallback")
         Assert.Equal("FSHRDL009", diag.Id)

@@ -203,6 +203,95 @@ module TypedTreeDiffTests =
         Assert.NotEmpty(result.RudeEdits)
         Assert.Equal(RudeEditKind.TypeLayoutChange, result.RudeEdits[0].Kind)
 
+    [<Fact>]
+    let ``lambda lowering shape change triggers rude edit`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+let evaluate () =
+    let transform = fun x -> x + 1
+    transform 41
+"""
+        let updated_source = """
+module Library
+let evaluate () =
+    let transform = fun x -> fun y -> x + y
+    transform 40 2
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        Assert.NotEmpty(result.RudeEdits)
+        Assert.Equal(RudeEditKind.LambdaShapeChange, result.RudeEdits[0].Kind)
+
+    [<Fact>]
+    let ``state machine lowering shape change triggers rude edit`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+let runAsync () =
+    async {
+        return 1
+    }
+"""
+        let updated_source = """
+module Library
+let runAsync () =
+    async {
+        let! value = async { return 1 }
+        return value
+    }
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        Assert.NotEmpty(result.RudeEdits)
+        Assert.Equal(RudeEditKind.StateMachineShapeChange, result.RudeEdits[0].Kind)
+
+    [<Fact>]
+    let ``query lowering shape change triggers rude edit`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+open Microsoft.FSharp.Linq
+
+let queryValues () =
+    query {
+        for x in [1..5] do
+        select x
+    }
+    |> Seq.toList
+"""
+        let updated_source = """
+module Library
+open Microsoft.FSharp.Linq
+
+let queryValues () =
+    query {
+        for x in [1..5] do
+        where (x > 2)
+        select x
+    }
+    |> Seq.toList
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        Assert.NotEmpty(result.RudeEdits)
+        Assert.Equal(RudeEditKind.QueryExpressionShapeChange, result.RudeEdits[0].Kind)
+
     // =========================================================================
     // Method Addition Tests
     // Following Roslyn patterns for Edit and Continue restrictions
