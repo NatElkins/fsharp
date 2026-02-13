@@ -172,12 +172,9 @@ let emitDelta
                             // debuggers won't be able to step into newly added methods until a full rebuild.
                             // TODO: Emit empty MethodDebugInformation entries for new methods to enable debugging.
                             if shouldTracePdb () then
+                                let rowCount = reader.MethodDebugInformation.Count
                                 printfn
-                                    "[hotreload-pdb] skipping newly added method (row %d > count %d) - debugger stepping unavailable (delta=0x%08x, source=0x%08x)"
-                                    methodRow
-                                    reader.MethodDebugInformation.Count
-                                    token
-                                    sourceToken
+                                    $"[hotreload-pdb] skipping newly added method (row %d{methodRow} > count %d{rowCount}) - debugger stepping unavailable (delta=0x%08x{token}, source=0x%08x{sourceToken})"
 
             // Per Roslyn DeltaMetadataWriter.cs: PDB delta EncMap should contain MethodDebugInformation
             // entries (which correspond 1:1 to MethodDef), not metadata table entries. The PDB EncLog
@@ -192,7 +189,7 @@ let emitDelta
 
             if not emitted then
                 if shouldTracePdb () then
-                    printfn "[hotreload-pdb] no method debug info emitted for tokens %A" distinctTokens
+                    printfn $"[hotreload-pdb] no method debug info emitted for tokens {distinctTokens}"
                 None
             else
                 let entryPointHandle =

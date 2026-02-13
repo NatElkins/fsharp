@@ -347,7 +347,7 @@ let private constraintDigest (denv: DisplayEnv) (constraint_: TyparConstraint) =
     | TyparConstraint.MayResolveMember(traitInfo, _) -> "member:" + traitInfo.MemberLogicalName
     | TyparConstraint.IsNonNullableStruct _ -> "struct"
     | TyparConstraint.IsReferenceType _ -> "class"
-    | TyparConstraint.SimpleChoice(tys, _) -> "choice:" + (tys |> List.map (tyToString denv) |> String.concat ",")
+    | TyparConstraint.SimpleChoice(tys, _) -> "choice:" + (tys |> Seq.map (tyToString denv) |> String.concat ",")
     | TyparConstraint.RequiresDefaultConstructor _ -> "new"
     | TyparConstraint.IsEnum(ty, _) -> "enum:" + tyToString denv ty
     | TyparConstraint.IsDelegate(ty1, ty2, _) -> "delegate:" + tyToString denv ty1 + "," + tyToString denv ty2
@@ -362,10 +362,10 @@ let private typarConstraintsDigest (denv: DisplayEnv) (typars: Typar list) =
         ""
     else
         typars
-        |> List.collect (fun tp ->
+        |> Seq.collect (fun tp ->
             tp.Constraints
-            |> List.map (fun c -> tp.DisplayName + ":" + constraintDigest denv c))
-        |> List.sort
+            |> Seq.map (fun c -> $"{tp.DisplayName}:{constraintDigest denv c}"))
+        |> Seq.sort
         |> String.concat ";"
 
 let private constDigest (c: Const) =
@@ -383,8 +383,8 @@ let private constDigest (c: Const) =
     | Const.UIntPtr v -> v.ToString("g", Globalization.CultureInfo.InvariantCulture)
     | Const.Single v -> v.ToString("r", Globalization.CultureInfo.InvariantCulture)
     | Const.Double v -> v.ToString("r", Globalization.CultureInfo.InvariantCulture)
-    | Const.String v -> "\"" + v + "\""
-    | Const.Char v -> "'" + string v + "'"
+    | Const.String v -> $"\"{v}\""
+    | Const.Char v -> $"'{string v}'"
     | Const.Decimal v -> v.ToString("g", Globalization.CultureInfo.InvariantCulture)
     | Const.Unit -> "()"
     | Const.Zero -> "zero"
@@ -606,21 +606,21 @@ let rec private exprDigest (denv: DisplayEnv) (expr: Expr) =
         hashCombine 2 referenceHash
     | Expr.App (funcExpr, _, _, args, _) ->
         let funcHash = recurse funcExpr
-        let argHash = args |> List.map recurse |> hashList
+        let argHash = args |> Seq.map recurse |> hashList
         hashCombine (hashCombine 3 funcHash) argHash
     | Expr.Sequential (expr1, expr2, _, _) ->
         hashCombine (hashCombine 4 (recurse expr1)) (recurse expr2)
     | Expr.Lambda (_, _, _, valParams, bodyExpr, _, _) ->
         let paramsHash =
             valParams
-            |> List.map (fun v -> stableHash v.LogicalName)
+            |> Seq.map (fun v -> stableHash v.LogicalName)
             |> hashList
 
         hashCombine (hashCombine 5 paramsHash) (recurse bodyExpr)
     | Expr.TyLambda (_, typars, bodyExpr, _, _) ->
         let typarHash =
             typars
-            |> List.map (fun tp -> stableHash tp.DisplayName)
+            |> Seq.map (fun tp -> stableHash tp.DisplayName)
             |> hashList
 
         hashCombine (hashCombine 6 typarHash) (recurse bodyExpr)
@@ -630,7 +630,7 @@ let rec private exprDigest (denv: DisplayEnv) (expr: Expr) =
     | Expr.LetRec (bindings, bodyExpr, _, _) ->
         let bindsHash =
             bindings
-            |> List.map (bindingDigest denv)
+            |> Seq.map (bindingDigest denv)
             |> hashList
 
         hashCombine (hashCombine 8 bindsHash) (recurse bodyExpr)
@@ -642,7 +642,7 @@ let rec private exprDigest (denv: DisplayEnv) (expr: Expr) =
                 | TTarget(boundVals, targetExpr, _) ->
                     let valsHash =
                         boundVals
-                        |> List.map (fun v -> stableHash v.LogicalName)
+                        |> Seq.map (fun v -> stableHash v.LogicalName)
                         |> hashList
 
                     hashCombine valsHash (recurse targetExpr))
@@ -651,24 +651,24 @@ let rec private exprDigest (denv: DisplayEnv) (expr: Expr) =
         hashCombine 9 targetsHash
     | Expr.Op (op, typeArgs, args, _) ->
         let opHash = stableHash (opDigest denv op)
-        let argsHash = args |> List.map recurse |> hashList
+        let argsHash = args |> Seq.map recurse |> hashList
         let tyHash =
             typeArgs
-            |> List.map (tyToString denv >> stableHash)
+            |> Seq.map (tyToString denv >> stableHash)
             |> hashList
 
         [ 10; opHash; argsHash; tyHash ] |> hashList
     | Expr.Obj (_, objTy, _, ctorCall, overrides, interfaceImpls, _) ->
         let overridesHash =
             overrides
-            |> List.map (fun (TObjExprMethod(_, _, _, _, body, _)) -> recurse body)
+            |> Seq.map (fun (TObjExprMethod(_, _, _, _, body, _)) -> recurse body)
             |> hashList
 
         let interfaceHash =
             interfaceImpls
-            |> List.map (fun (_, methods) ->
+            |> Seq.map (fun (_, methods) ->
                 methods
-                |> List.map (fun (TObjExprMethod(_, _, _, _, body, _)) -> recurse body)
+                |> Seq.map (fun (TObjExprMethod(_, _, _, _, body, _)) -> recurse body)
                 |> hashList)
             |> hashList
 
@@ -687,7 +687,7 @@ let rec private exprDigest (denv: DisplayEnv) (expr: Expr) =
     | Expr.TyChoose (typars, bodyExpr, _) ->
         let typarHash =
             typars
-            |> List.map (fun tp -> stableHash tp.DisplayName)
+            |> Seq.map (fun tp -> stableHash tp.DisplayName)
             |> hashList
 
         hashCombine (hashCombine 13 typarHash) (recurse bodyExpr)
@@ -805,7 +805,7 @@ let private symbolId
 
 let private bindingKey (snapshot: BindingSnapshot) =
     let entityKey = snapshot.ContainingEntity |> Option.defaultValue ""
-    snapshot.Symbol.QualifiedName + "|" + snapshot.SignatureText + "|" + entityKey
+    $"{snapshot.Symbol.QualifiedName}|{snapshot.SignatureText}|{entityKey}"
 
 let private entityKey (snapshot: EntitySnapshot) = snapshot.Symbol.QualifiedName
 

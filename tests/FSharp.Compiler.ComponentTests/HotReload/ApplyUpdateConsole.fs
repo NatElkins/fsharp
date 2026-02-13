@@ -6,16 +6,17 @@ open System.Reflection
 open System.Reflection.Metadata
 open System.Runtime.Loader
 open Xunit
-open Xunit.Sdk
-open Xunit.Sdk
 open FSharp.Compiler.ComponentTests.HotReload.TestHelpers
 open FSharp.Compiler.IlxDeltaEmitter
+
+[<Literal>]
+let private DotnetModifiableAssembliesEnvVar = "DOTNET_MODIFIABLE_ASSEMBLIES"
 
 /// Not a real test; used via `dotnet test --filter ...` as a console-style host to avoid vstest reuse.
 [<Fact>]
 let ``ApplyUpdate console host`` () =
-    if not (String.Equals(Environment.GetEnvironmentVariable("DOTNET_MODIFIABLE_ASSEMBLIES"), "debug", StringComparison.OrdinalIgnoreCase)) then
-        failwith "DOTNET_MODIFIABLE_ASSEMBLIES must be 'debug' for this host."
+    if not (String.Equals(Environment.GetEnvironmentVariable(DotnetModifiableAssembliesEnvVar), "debug", StringComparison.OrdinalIgnoreCase)) then
+        failwith $"{DotnetModifiableAssembliesEnvVar} must be 'debug' for this host."
 
     printfn "[applyupdate-console] MetadataUpdater.IsSupported=%b" (MetadataUpdater.IsSupported)
 
@@ -140,14 +141,15 @@ namespace Sample
     )
     let dbgBits =
         moduleType.GetMethod("GetDebuggerInfoBits", BindingFlags.Instance ||| BindingFlags.NonPublic)
-        |> Option.ofObj
-        |> Option.map (fun m -> m.Invoke(assembly.ManifestModule, [||]) :?> int)
-        |> Option.orElseWith (fun () ->
+        |> ValueOption.ofObj
+        |> ValueOption.map (fun m -> m.Invoke(assembly.ManifestModule, [||]) :?> int)
+        |> ValueOption.orElseWith (fun () ->
             [ "m_debuggerInfoBits"; "m_debuggerBits" ]
             |> Seq.tryPick (fun name ->
                 moduleType.GetField(name, BindingFlags.Instance ||| BindingFlags.NonPublic)
                 |> Option.ofObj
-                |> Option.map (fun f -> f.GetValue(assembly.ManifestModule) :?> int)))
+                |> Option.map (fun f -> f.GetValue(assembly.ManifestModule) :?> int))
+            |> ValueOption.ofOption)
     printfn "[applyupdate-console] DebuggerInfoBits=%A" dbgBits
 
     // Call ModuleInfo helpers (unsafe accessors) for native flags

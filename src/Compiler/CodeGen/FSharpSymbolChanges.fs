@@ -55,23 +55,28 @@ module FSharpSymbolChanges =
     let entitySymbolsWithChanges (changes: FSharpSymbolChanges) : SymbolId list =
         let updatedEntities =
             changes.Updated
-            |> List.choose (fun change -> if change.Symbol.Kind = SymbolKind.Entity then Some change.Symbol else None)
+            |> Seq.choose (fun change -> if change.Symbol.Kind = SymbolKind.Entity then Some change.Symbol else None)
 
         let addedEntities =
             changes.Added
-            |> List.filter (fun symbol -> symbol.Kind = SymbolKind.Entity)
+            |> Seq.filter (fun symbol -> symbol.Kind = SymbolKind.Entity)
 
         let deletedEntities =
             changes.Deleted
-            |> List.filter (fun symbol -> symbol.Kind = SymbolKind.Entity)
+            |> Seq.filter (fun symbol -> symbol.Kind = SymbolKind.Entity)
 
         let synthesizedEntities =
             changes.Synthesized
-            |> List.choose (fun change -> if change.Symbol.Kind = SymbolKind.Entity then Some change.Symbol else None)
+            |> Seq.choose (fun change -> if change.Symbol.Kind = SymbolKind.Entity then Some change.Symbol else None)
 
-        (updatedEntities @ addedEntities @ deletedEntities @ synthesizedEntities)
-        |> List.distinctBy (fun symbol -> symbol.Path, symbol.LogicalName, symbol.Stamp)
-
+        seq {
+            yield! updatedEntities
+            yield! addedEntities
+            yield! deletedEntities
+            yield! synthesizedEntities
+        }
+        |> Seq.distinctBy (fun symbol -> struct (symbol.Path, symbol.LogicalName, symbol.Stamp))
+        |> Seq.toList
     /// Extracts synthesized members classified as added.
     let synthesizedAdded (changes: FSharpSymbolChanges) : SymbolId list =
         changes.Synthesized

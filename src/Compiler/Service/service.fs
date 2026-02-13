@@ -82,7 +82,7 @@ type FSharpHotReloadDelta =
       UpdatedTypes: int list
       UpdatedMethods: int list
       AddedOrChangedMethods: FSharpAddedOrChangedMethodInfo list
-      UserStringUpdates: (int * int * string) list
+      UserStringUpdates: struct (int * int * string) list
       GenerationId: Guid
       BaseGenerationId: Guid }
 
@@ -317,6 +317,31 @@ type FSharpChecker
             projectSnapshot.ProjectFileName
             (projectSnapshot.OtherOptions |> List.toArray)
 
+    [<Literal>]
+    let HotReloadTraceOutputFlagName = "FSHARP_HOTRELOAD_TRACE_OUTPUT"
+
+    [<Literal>]
+    let StableFileMaxTotalWaitMs = 5000
+
+    [<Literal>]
+    let StableFileInitialDelayMs = 25
+
+    [<Literal>]
+    let StableFileMaxBackoffMs = 200
+
+    [<Literal>]
+    let StableFileRequiredStableReads = 2
+
+    let isEnvVarTruthy (name: string) =
+        match Environment.GetEnvironmentVariable(name) with
+        | null
+        | "" -> false
+        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
+        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
+        | _ -> false
+
+    let traceOutputFingerprint = isEnvVarTruthy HotReloadTraceOutputFlagName
+
     let getErrorDiagnostics (diagnostics: FSharpDiagnostic[]) =
         diagnostics
         |> Array.filter (fun diagnostic -> diagnostic.Severity = FSharpDiagnosticSeverity.Error)
@@ -324,28 +349,30 @@ type FSharpChecker
     let waitForStableFile path =
         // Use exponential backoff: 25ms, 50ms, 100ms, 200ms, 200ms, ...
         // Total max wait ~5 seconds (vs 500ms before) for slow I/O scenarios.
-        let maxTotalWaitMs = 5000
         let mutable totalWaited = 0
-        let mutable sleepMillis = 25
+        let mutable sleepMillis = StableFileInitialDelayMs
         let mutable stableCount = 0
         let mutable lastWrite = DateTime.MinValue
         let mutable lastSize = -1L
-        while totalWaited < maxTotalWaitMs && stableCount < 2 do
+
+        while totalWaited < StableFileMaxTotalWaitMs && stableCount < StableFileRequiredStableReads do
             let exists = File.Exists path
             let currentWrite =
                 if exists then File.GetLastWriteTimeUtc path else DateTime.MinValue
             let currentSize =
                 if exists then FileInfo(path).Length else -1L
+
             if currentWrite = lastWrite && currentSize = lastSize then
                 stableCount <- stableCount + 1
             else
                 stableCount <- 0
                 lastWrite <- currentWrite
                 lastSize <- currentSize
-            if stableCount < 2 then
+
+            if stableCount < StableFileRequiredStableReads then
                 Thread.Sleep sleepMillis
                 totalWaited <- totalWaited + sleepMillis
-                sleepMillis <- min 200 (sleepMillis * 2) // Exponential backoff, capped at 200ms
+                sleepMillis <- min StableFileMaxBackoffMs (sleepMillis * 2) // Exponential backoff, capped at 200ms
 
     let computeFileHash (path: string) : byte[] option =
         if File.Exists path then
@@ -365,7 +392,7 @@ type FSharpChecker
         else
             None
 
-    let hasOutputFingerprintChanged previous current =
+    let hasOutputFingerprintChanged path previous current =
         let hashesEqual left right =
             match left, right with
             | Some x, Some y -> StructuralComparisons.StructuralEqualityComparer.Equals(x, y)
@@ -374,7 +401,16 @@ type FSharpChecker
 
         match previous, current with
         | Some(previousTimestamp, previousHash), Some(currentTimestamp, currentHash) ->
-            previousTimestamp <> currentTimestamp || not (hashesEqual previousHash currentHash)
+            let timestampChanged = previousTimestamp <> currentTimestamp
+            let hashChanged = not (hashesEqual previousHash currentHash)
+
+            if traceOutputFingerprint && timestampChanged then
+                printfn $"[fsharp-hotreload][trace] detected write timestamp change for {path} (prev={previousTimestamp:O}, new={currentTimestamp:O})"
+
+            if traceOutputFingerprint && hashChanged then
+                printfn $"[fsharp-hotreload][trace] detected content hash change for {path}"
+
+            timestampChanged || hashChanged
         | None, Some _ -> true
         | Some _, None -> true
         | None, None -> false
@@ -403,7 +439,7 @@ type FSharpChecker
                     LocalSignatureToken = info.LocalSignatureToken
                     CodeOffset = info.CodeOffset
                     CodeLength = info.CodeLength })
-          UserStringUpdates = delta.UserStringUpdates
+          UserStringUpdates = delta.UserStringUpdates |> List.map (fun (o, n, s) -> struct (o, n, s))
           GenerationId = delta.GenerationId
           BaseGenerationId = delta.BaseGenerationId }
 
@@ -594,6 +630,7 @@ type FSharpChecker
 
                                 baseline.SynthesizedNameSnapshot
                                 |> Map.toSeq
+                                |> Seq.map (fun (k, v) -> struct (k, v))
                                 |> targetMap.LoadSnapshot
                                 targetMap.BeginSession()
                                 targetMap
@@ -649,6 +686,7 @@ type FSharpChecker
 
                                 restoredSession.Baseline.SynthesizedNameSnapshot
                                 |> Map.toSeq
+                                |> Seq.map (fun (k, v) -> struct (k, v))
                                 |> map.LoadSnapshot
                                 map.BeginSession()
                                 compilerState.SynthesizedTypeMaps <- Some map
@@ -673,7 +711,7 @@ type FSharpChecker
                                         || not (List.isEmpty accessorUpdates)
                                         || not (List.isEmpty symbolChanges.Added)
 
-                                    if hasUpdates && not (hasOutputFingerprintChanged currentOutputFingerprint outputFingerprint) then
+                                    if hasUpdates && not (hasOutputFingerprintChanged outputPath currentOutputFingerprint outputFingerprint) then
                                         Some(
                                             FSharpHotReloadError.DeltaEmissionFailed(
                                                 $"Output assembly '{outputPath}' did not change after compilation; refusing to emit a delta from stale build output."

@@ -15,12 +15,16 @@ open FSharp.Compiler.Syntax.PrettyNaming
 
 let private tableCount = DeltaTokens.TableCount
 
-let private traceHeapOffsets =
-    lazy (
-        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_HEAP_OFFSETS") with
-        | null | "" -> false
-        | value -> value = "1" || String.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
-    )
+[<Literal>]
+let private TraceHeapOffsetsFlagName = "FSHARP_HOTRELOAD_TRACE_HEAP_OFFSETS"
+
+let private isEnvVarTruthy (name: string) =
+    match Environment.GetEnvironmentVariable(name) with
+    | null
+    | "" -> false
+    | value -> value = "1" || String.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+
+let private traceHeapOffsets = lazy (isEnvVarTruthy TraceHeapOffsetsFlagName)
 
 /// Align a size to a 4-byte boundary (stream alignment per ECMA-335).
 /// Used for Blob and UserString heap cumulative tracking, per Roslyn behavior.

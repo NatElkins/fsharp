@@ -13,26 +13,27 @@ open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 open FSharp.Compiler.CodeGen.DeltaTableLayout
 open FSharp.Compiler.CodeGen.DeltaMetadataSerializer
 
-let private shouldTraceMetadata () =
-    match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METADATA") with
+[<Literal>]
+let private TraceMetadataFlagName = "FSHARP_HOTRELOAD_TRACE_METADATA"
+
+[<Literal>]
+let private TraceHeapsFlagName = "FSHARP_HOTRELOAD_TRACE_HEAPS"
+
+[<Literal>]
+let private TraceMethodsFlagName = "FSHARP_HOTRELOAD_TRACE_METHODS"
+
+let private isEnvVarTruthy (name: string) =
+    match Environment.GetEnvironmentVariable(name) with
     | null -> false
     | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
     | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
     | _ -> false
 
-let private shouldTraceHeaps () =
-    match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_HEAPS") with
-    | null -> false
-    | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
-    | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
-    | _ -> false
+let private shouldTraceMetadata () = isEnvVarTruthy TraceMetadataFlagName
 
-let private shouldTraceMethodRows () =
-    match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METHODS") with
-    | null -> false
-    | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
-    | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
-    | _ -> false
+let private shouldTraceHeaps () = isEnvVarTruthy TraceHeapsFlagName
+
+let private shouldTraceMethodRows () = isEnvVarTruthy TraceMethodsFlagName
 
 type MethodDefinitionRowInfo = DeltaMetadataTypes.MethodDefinitionRowInfo
 
@@ -298,21 +299,20 @@ let emitWithUserStrings
 
             let orderedTableSet = orderedTables |> Set.ofArray
             let builder = ResizeArray()
-
             let appendEntries (table: TableName) =
                 snapshot
-                |> Array.filter (fun struct (t, _, _) -> t.Index = table.Index)
-                |> Array.sortBy (fun struct (_, rowId, _) -> rowId)
-                |> Array.iter builder.Add
+                |> Seq.filter (fun struct (t, _, _) -> t.Index = table.Index)
+                |> Seq.sortBy (fun struct (_, rowId, _) -> rowId)
+                |> Seq.iter builder.Add
 
             orderedTables |> Array.iter appendEntries
 
             // Any tables not in the canonical order are appended sorted by token
             snapshot
-            |> Array.filter (fun struct (table, _, _) -> not (orderedTableSet |> Set.exists (fun t -> t.Index = table.Index)))
-            |> Array.sortBy (fun struct (table, rowId, _) ->
+            |> Seq.filter (fun struct (table, _, _) -> not (orderedTableSet |> Set.exists (fun t -> t.Index = table.Index)))
+            |> Seq.sortBy (fun struct (table, rowId, _) ->
                 (table.Index <<< 24) ||| (rowId &&& 0x00FFFFFF))
-            |> Array.iter builder.Add
+            |> Seq.iter builder.Add
 
             builder.ToArray()
 

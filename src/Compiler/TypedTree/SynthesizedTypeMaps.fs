@@ -48,19 +48,19 @@ type FSharpSynthesizedTypeMaps() =
                 ordinals[key] <- 0)
 
     /// <summary>Captures the current stable names grouped by compiler-generated base name.</summary>
-    member _.Snapshot: seq<string * string[]> =
+    member _.Snapshot: seq<struct (string * string[])> =
         lock syncLock (fun () ->
             // Materialize the snapshot under the lock to avoid race conditions
-            [| for KeyValue(key, bucket) in buckets do yield key, bucket.ToArray() |]
-            :> seq<string * string[]>)
+            [| for KeyValue(key, bucket) in buckets do yield struct (key, bucket.ToArray()) |]
+            :> seq<struct (string * string[])>)
 
     /// <summary>Loads a previously captured snapshot, replacing any existing allocation state.</summary>
-    member _.LoadSnapshot(snapshot: seq<string * string[]>) =
+    member _.LoadSnapshot(snapshot: seq<struct (string * string[])>) =
         lock syncLock (fun () ->
             buckets.Clear()
             ordinals.Clear()
 
-            for (basicName, names) in snapshot do
+            for struct (basicName, names) in snapshot do
                 // Validate each name matches expected pattern
                 names |> Array.iteri (fun i name -> validateName basicName name i)
                 let bucket = createBucket names

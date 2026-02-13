@@ -55,7 +55,7 @@ module FSharpSymbolMatcher =
         (typeDef: ILTypeDef)
         =
         if depth > MaxNestedTypeDepth then
-            failwithf "Exceeded maximum nested type depth (%d) while processing type '%s'. Possible malformed IL." MaxNestedTypeDepth typeDef.Name
+            failwith $"Exceeded maximum nested type depth ({MaxNestedTypeDepth}) while processing type '{typeDef.Name}'. Possible malformed IL."
         let typeRef = mkRefForNestedILTypeDef ILScopeRef.Local (enclosing, typeDef)
         types[typeRef.FullName] <-
             { EnclosingTypes = enclosing
@@ -111,7 +111,7 @@ module FSharpSymbolMatcher =
 
     let createWithSynthesizedNames (moduleDef: ILModuleDef) (synthesizedMap: FSharpSynthesizedTypeMaps) : FSharpSymbolMatcher =
         let buckets = Dictionary<string, string[]>(StringComparer.Ordinal)
-        for basic, names in synthesizedMap.Snapshot do
+        for struct (basic, names) in synthesizedMap.Snapshot do
             buckets[basic] <- names
 
         createInternal moduleDef (Some buckets)

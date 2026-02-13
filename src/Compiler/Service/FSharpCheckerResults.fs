@@ -3916,7 +3916,7 @@ type FSharpCheckProjectResults
         let optimizedImpls, _optimizationData, _ =
             ApplyAllOptimizations(tcConfig, tcGlobals, tcVal, outfile, importMap, isIncrementalFragment, optEnv0, thisCcu, mimpls)
 
-        tcGlobals, optimizedImpls
+        struct (tcGlobals, optimizedImpls)
 
     // Not, this does not have to be a SyncOp, it can be called from any thread
     // TODO: this should be async

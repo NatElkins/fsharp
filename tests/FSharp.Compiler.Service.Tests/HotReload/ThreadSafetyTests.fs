@@ -98,7 +98,7 @@ module ThreadSafetyTests =
         map.BeginSession()
 
         // Create a valid snapshot
-        let snapshot = [| ("test", [| "test@hotreload"; "test@hotreload-1" |]) |]
+        let snapshot = [| struct ("test", [| "test@hotreload"; "test@hotreload-1" |]) |]
 
         let errors = System.Collections.Concurrent.ConcurrentBag<exn>()
 
@@ -146,7 +146,7 @@ module ThreadSafetyTests =
         for _ in 1..50 do
             map.GetOrAddName "snapshot" |> ignore
 
-        let snapshots = System.Collections.Concurrent.ConcurrentBag<(string * string[])[]>()
+        let snapshots = System.Collections.Concurrent.ConcurrentBag<struct (string * string[])[]>()
         let errors = System.Collections.Concurrent.ConcurrentBag<exn>()
 
         runConcurrently 50 (fun i ->

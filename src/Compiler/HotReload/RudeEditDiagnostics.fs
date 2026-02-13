@@ -18,33 +18,33 @@ module internal RudeEditDiagnostics =
         let name = symbolName |> Option.defaultValue "the declaration"
         match kind with
         | RudeEditKind.SignatureChange ->
-            sprintf "Changing the signature of '%s' is not supported during hot reload." name
+            $"Changing the signature of '{name}' is not supported during hot reload."
         | RudeEditKind.InlineChange ->
-            sprintf "Changing inline annotations for '%s' requires a rebuild." name
+            $"Changing inline annotations for '{name}' requires a rebuild."
         | RudeEditKind.TypeLayoutChange ->
-            sprintf "Changing the representation of '%s' requires a rebuild." name
+            $"Changing the representation of '{name}' requires a rebuild."
         | RudeEditKind.DeclarationAdded ->
-            sprintf "Adding a new declaration '%s' requires a rebuild." name
+            $"Adding a new declaration '{name}' requires a rebuild."
         | RudeEditKind.DeclarationRemoved ->
-            sprintf "Removing the declaration '%s' requires a rebuild." name
+            $"Removing the declaration '{name}' requires a rebuild."
         | RudeEditKind.LambdaShapeChange ->
-            sprintf "Changing lowered lambda shape for '%s' requires a rebuild." name
+            $"Changing lowered lambda shape for '{name}' requires a rebuild."
         | RudeEditKind.StateMachineShapeChange ->
-            sprintf "Changing lowered state-machine shape for '%s' requires a rebuild." name
+            $"Changing lowered state-machine shape for '{name}' requires a rebuild."
         | RudeEditKind.QueryExpressionShapeChange ->
-            sprintf "Changing lowered query-expression shape for '%s' requires a rebuild." name
+            $"Changing lowered query-expression shape for '{name}' requires a rebuild."
         | RudeEditKind.InsertVirtual ->
-            sprintf "Adding virtual, abstract, or override method '%s' is not supported." name
+            $"Adding virtual, abstract, or override method '{name}' is not supported."
         | RudeEditKind.InsertConstructor ->
-            sprintf "Adding constructor '%s' is not supported." name
+            $"Adding constructor '{name}' is not supported."
         | RudeEditKind.InsertOperator ->
-            sprintf "Adding user-defined operator '%s' is not supported." name
+            $"Adding user-defined operator '{name}' is not supported."
         | RudeEditKind.InsertExplicitInterface ->
-            sprintf "Adding explicit interface implementation '%s' is not supported." name
+            $"Adding explicit interface implementation '{name}' is not supported."
         | RudeEditKind.InsertIntoInterface ->
-            sprintf "Adding member '%s' to an interface is not supported." name
+            $"Adding member '{name}' to an interface is not supported."
         | RudeEditKind.FieldAdded ->
-            sprintf "Adding field '%s' is not supported (changes type layout)." name
+            $"Adding field '{name}' is not supported (changes type layout)."
         | RudeEditKind.Unsupported -> fallback
 
     let private diagnosticId kind =
@@ -72,4 +72,4 @@ module internal RudeEditDiagnostics =
           Kind = edit.Kind
           SymbolName = symbolName }
 
-    let ofRudeEdits edits = edits |> List.map ofRudeEdit
+    let ofRudeEdits edits = edits |> Seq.map ofRudeEdit |> Seq.toList

@@ -471,7 +471,7 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
             if traceHeapOffsets.Value then
                 printfn "[fsharp-hotreload][module-row-write] generation=%d mvidIndex=%d encIdIndex=%d encBaseIdIndex=%d"
                     generation mvidIndex encIdIndex encBaseIdIndex
-            let row =
+            moduleRows.Add
                 [|
                     rowElementUShort (uint16 generation)
                     stringElement nameToken
@@ -479,7 +479,6 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
                     rowElementGuidAbsolute encIdIndex     // EncId - delta-local absolute index
                     rowElementGuidAbsolute encBaseIdIndex // EncBaseId - 0 or delta-local index
                 |]
-            moduleRows.Add row
 
     member _.AddMethodRow(row: MethodDefinitionRowInfo, body: MethodBodyUpdate) =
         let nameToken = addExistingStringOffset row.NameOffset row.Name

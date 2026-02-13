@@ -22,12 +22,12 @@ let private traceMethodResolution = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_METHO
 
 let private checkedFiles (CheckedAssemblyAfterOptimization impls) =
     impls
-    |> List.map (fun afterOpt -> afterOpt.ImplFile)
+    |> Seq.map (fun afterOpt -> afterOpt.ImplFile)
 
 let private fileKey (CheckedImplFile(qualifiedNameOfFile = qual)) = qual.Text
 
-let private buildLookup (files: CheckedImplFile list) =
-    files |> List.map (fun file -> fileKey file, file) |> Map.ofList
+let private buildLookup (files: seq<CheckedImplFile>) =
+    files |> Seq.map (fun file -> fileKey file, file) |> Map.ofSeq
 
 let private emptyDefinitionMap: FSharpDefinitionMap =
     { Changes = []
@@ -49,7 +49,7 @@ let computeSymbolChanges
 
     let definitionMap =
         (emptyDefinitionMap, updatedFiles)
-        ||> List.fold (fun acc updatedFile ->
+        ||> Seq.fold (fun acc updatedFile ->
             match Map.tryFind (fileKey updatedFile) baselineLookup with
             | Some baselineFile ->
                 let diff = diffImplementationFile tcGlobals baselineFile updatedFile
@@ -288,10 +288,10 @@ let mapSymbolChangesToDelta
 
     let accessorSymbols =
         [ yield! FSharpSymbolChanges.propertyAccessorsAdded changes
-          yield! FSharpSymbolChanges.propertyAccessorsUpdated changes |> List.map (fun change -> change.Symbol)
+          yield! FSharpSymbolChanges.propertyAccessorsUpdated changes |> Seq.map (fun change -> change.Symbol)
           yield! FSharpSymbolChanges.propertyAccessorsDeleted changes
           yield! FSharpSymbolChanges.eventAccessorsAdded changes
-          yield! FSharpSymbolChanges.eventAccessorsUpdated changes |> List.map (fun change -> change.Symbol)
+          yield! FSharpSymbolChanges.eventAccessorsUpdated changes |> Seq.map (fun change -> change.Symbol)
           yield! FSharpSymbolChanges.eventAccessorsDeleted changes ]
         |> List.filter (fun symbol ->
             match symbol.MemberKind with

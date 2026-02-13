@@ -66,9 +66,9 @@ module NameMapTests =
 
         // Valid snapshots with different suffixes should work
         let validSnapshot = [|
-            ("test", [| "test@hotreload"; "test@hotreload-1" |])
-            ("Name", [| "Name@" |])  // Simple marker suffix
-            ("Circle", [| "Circle@DebugTypeProxy" |])  // Debug proxy
+            struct ("test", [| "test@hotreload"; "test@hotreload-1" |])
+            struct ("Name", [| "Name@" |])  // Simple marker suffix
+            struct ("Circle", [| "Circle@DebugTypeProxy" |])  // Debug proxy
         |]
         map.LoadSnapshot validSnapshot // Should not throw
 
@@ -79,8 +79,8 @@ module NameMapTests =
         // Some historical snapshots contain exact compiler-generated basic names
         // (for example "@_instance") instead of the newer "basicName@..." form.
         let legacySnapshot = [|
-            ("@_instance", [| "@_instance" |])
-            ("cached", [| "cached"; "cached@hotreload" |])
+            struct ("@_instance", [| "@_instance" |])
+            struct ("cached", [| "cached"; "cached@hotreload" |])
         |]
 
         map.LoadSnapshot legacySnapshot // Should not throw
@@ -90,7 +90,7 @@ module NameMapTests =
         let map = FSharpSynthesizedTypeMaps()
 
         // Name doesn't start with basicName@
-        let mismatchedSnapshot = [| ("foo", [| "bar@hotreload" |]) |]
+        let mismatchedSnapshot = [| struct ("foo", [| "bar@hotreload" |]) |]
         let ex = Assert.Throws<System.ArgumentException>(fun () -> map.LoadSnapshot mismatchedSnapshot)
         Assert.Contains("foo@", ex.Message)
         Assert.Contains("bar@hotreload", ex.Message)
@@ -100,6 +100,6 @@ module NameMapTests =
         let map = FSharpSynthesizedTypeMaps()
 
         // Name missing the @ marker entirely
-        let invalidSnapshot = [| ("test", [| "testhotreload" |]) |]
+        let invalidSnapshot = [| struct ("test", [| "testhotreload" |]) |]
         let ex = Assert.Throws<System.ArgumentException>(fun () -> map.LoadSnapshot invalidSnapshot)
         Assert.Contains("test@", ex.Message)

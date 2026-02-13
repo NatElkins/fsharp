@@ -536,7 +536,7 @@ type public FSharpCheckProjectResults =
 
     member internal TypedImplementationFiles: TcGlobals * CcuThunk * TcImports * CheckedImplFile list
 
-    member internal HotReloadOptimizationData: TcGlobals * CheckedAssemblyAfterOptimization
+    member internal HotReloadOptimizationData: struct (TcGlobals * CheckedAssemblyAfterOptimization)
 
     /// Get the resolution of the ProjectOptions
     member ProjectContext: FSharpProjectContext

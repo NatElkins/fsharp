@@ -8,6 +8,6 @@ let makeHotReloadName (baseName: string) ordinal =
         if ordinal <= 0 then
             "hotreload"
         else
-            sprintf "hotreload-%d" ordinal
+            $"hotreload-{ordinal}"
 
     CompilerGeneratedNameSuffix baseName suffix

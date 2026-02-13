@@ -50,26 +50,29 @@ module FSharpDefinitionMap =
     /// Retrieves all symbols newly added in the updated compilation.
     let added (map: FSharpDefinitionMap) : SymbolId list =
         map.Changes
-        |> List.choose (fun (change: SymbolChange) ->
+        |> Seq.choose (fun (change: SymbolChange) ->
             match change.EditKind with
             | SymbolEditKind.Added -> Some change.Symbol
             | _ -> None)
+        |> Seq.toList
 
     /// Retrieves all updated symbols along with the semantic edit classification.
     let updated (map: FSharpDefinitionMap) : (SymbolChange * SemanticEditKind) list =
         map.Changes
-        |> List.choose (fun (change: SymbolChange) ->
+        |> Seq.choose (fun (change: SymbolChange) ->
             match change.EditKind with
             | SymbolEditKind.Updated kind -> Some(change, kind)
             | _ -> None)
+        |> Seq.toList
 
     /// Retrieves all symbols deleted from the updated compilation.
     let deleted (map: FSharpDefinitionMap) : SymbolId list =
         map.Changes
-        |> List.choose (fun (change: SymbolChange) ->
+        |> Seq.choose (fun (change: SymbolChange) ->
             match change.EditKind with
             | SymbolEditKind.Deleted -> Some change.Symbol
             | _ -> None)
+        |> Seq.toList
 
     /// Retrieves changes that correspond to compiler-synthesized members.
     let synthesized (map: FSharpDefinitionMap) : SymbolChange list =

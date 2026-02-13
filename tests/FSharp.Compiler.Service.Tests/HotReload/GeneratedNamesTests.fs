@@ -32,8 +32,8 @@ module GeneratedNamesTests =
 
         let snapshot =
             map.Snapshot
-            |> Seq.find (fun (key, _) -> key = "closure")
-            |> snd
+            |> Seq.find (fun struct (key, _) -> key = "closure")
+            |> (fun struct (_, names) -> names)
 
         map.BeginSession()
 

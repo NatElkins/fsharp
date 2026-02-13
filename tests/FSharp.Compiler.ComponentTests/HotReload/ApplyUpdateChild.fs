@@ -149,17 +149,19 @@ namespace Sample
     )
     let dbgBits =
         moduleType.GetMethod("GetDebuggerInfoBits", BindingFlags.Instance ||| BindingFlags.NonPublic)
-        |> Option.ofObj
-        |> Option.map (fun m -> m.Invoke(assembly.ManifestModule, [||]) :?> int)
-        |> Option.orElseWith (fun () ->
+        |> ValueOption.ofObj
+        |> ValueOption.map (fun m -> m.Invoke(assembly.ManifestModule, [||]) :?> int)
+        |> ValueOption.orElseWith (fun () ->
             [ "m_debuggerInfoBits"; "m_debuggerBits" ]
             |> Seq.tryPick (fun name ->
                 moduleType.GetField(name, BindingFlags.Instance ||| BindingFlags.NonPublic)
                 |> Option.ofObj
-                |> Option.map (fun f -> f.GetValue(assembly.ManifestModule) :?> int)))
+                |> Option.map (fun f -> f.GetValue(assembly.ManifestModule) :?> int))
+            |> ValueOption.ofOption)
+
     match dbgBits with
-    | Some bits -> printfn "[applyupdate-child] DebuggerInfoBits=0x%X" bits
-    | None -> printfn "[applyupdate-child] DebuggerInfoBits: <unavailable>"
+    | ValueSome bits -> printfn "[applyupdate-child] DebuggerInfoBits=0x%X" bits
+    | ValueNone -> printfn "[applyupdate-child] DebuggerInfoBits: <unavailable>"
     assembly.GetCustomAttributes<DebuggableAttribute>()
     |> Seq.iter (fun a -> printfn "[applyupdate-child] Debuggable: tracking=%b disableOpt=%b modes=%A" a.IsJITTrackingEnabled a.IsJITOptimizerDisabled a.DebuggingFlags)
     try

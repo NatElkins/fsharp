@@ -19,6 +19,17 @@ type internal HotReloadCapabilities =
 
 module internal HotReloadCapability =
 
+    [<Literal>]
+    let private RuntimeApplyFeatureFlagName = "FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY"
+
+    let private isEnvVarTruthy (name: string) =
+        match Environment.GetEnvironmentVariable(name) with
+        | null
+        | "" -> false
+        | value when value.Equals("1", StringComparison.OrdinalIgnoreCase) -> true
+        | value when value.Equals("true", StringComparison.OrdinalIgnoreCase) -> true
+        | _ -> false
+
     let private runtimeApplySupported : bool =
 #if NET5_0_OR_GREATER
         try
@@ -29,12 +40,7 @@ module internal HotReloadCapability =
 #endif
 
     let private runtimeApplyFeatureFlag : bool =
-        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY") with
-        | null
-        | "" -> false
-        | value when value.Equals("1", StringComparison.OrdinalIgnoreCase) -> true
-        | value when value.Equals("true", StringComparison.OrdinalIgnoreCase) -> true
-        | _ -> false
+        isEnvVarTruthy RuntimeApplyFeatureFlagName
 
     let private runtimeApplyEnabled = runtimeApplySupported && runtimeApplyFeatureFlag
 

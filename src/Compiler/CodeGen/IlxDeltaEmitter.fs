@@ -294,7 +294,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         request.SynthesizedNames
         |> Option.map (fun map ->
             map.Snapshot
-            |> Seq.map (fun (basic, names) -> basic, names)
+            |> Seq.map (fun struct (basic, names) -> basic, names)
             |> dict)
 
     let symbolMatcher =
@@ -1501,7 +1501,8 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                             methodSpecToken
 
                     None)
-            |> List.sortBy (fun row -> row.RowId)
+            |> Seq.sortBy _.RowId
+            |> Seq.toList
 
         let propertyDefinitionRowsSnapshot =
             propertyDefinitionIndex.Rows
@@ -1557,22 +1558,22 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
         let propertyRowsByType =
             propertyDefinitionRowsSnapshot
-            |> List.groupBy (fun row -> row.Key.DeclaringType)
+            |> Seq.groupBy (fun row -> row.Key.DeclaringType)
             |> dict
 
         let propertyRowsByName =
             propertyDefinitionRowsSnapshot
-            |> List.groupBy (fun row -> struct (row.Key.DeclaringType, row.Key.Name))
+            |> Seq.groupBy (fun row -> struct (row.Key.DeclaringType, row.Key.Name))
             |> dict
 
         let eventRowsByType =
             eventDefinitionRowsSnapshot
-            |> List.groupBy (fun row -> row.Key.DeclaringType)
+            |> Seq.groupBy (fun row -> row.Key.DeclaringType)
             |> dict
 
         let eventRowsByName =
             eventDefinitionRowsSnapshot
-            |> List.groupBy (fun row -> struct (row.Key.DeclaringType, row.Key.Name))
+            |> Seq.groupBy (fun row -> struct (row.Key.DeclaringType, row.Key.Name))
             |> dict
 
         let propertyMapDefinitionIndex =
@@ -1585,8 +1586,11 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
         let propertyMapRowsSnapshot =
             let missingTypes =
-                propertyRowsByType.Keys
+                propertyDefinitionRowsSnapshot
+                |> Seq.filter _.IsAdded
+                |> Seq.map (fun row -> row.Key.DeclaringType)
                 |> Seq.filter (fun typeName -> not (request.Baseline.PropertyMapEntries |> Map.containsKey typeName))
+                |> Seq.distinct
                 |> Seq.toList
 
             for typeName in missingTypes do
@@ -1599,9 +1603,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     match propertyRowsByType.TryGetValue typeName with
                     | true, rows ->
                         rows
-                        |> List.sortBy (fun row -> row.RowId)
-                        |> List.tryHead
-                        |> Option.map (fun row -> row.RowId)
+                        |> Seq.sortBy _.RowId
+                        |> Seq.tryHead
+                        |> Option.map _.RowId
                     | _ -> None
 
                 let shouldAdd = isAdded || List.contains typeName missingTypes
@@ -1618,8 +1622,11 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
         let eventMapRowsSnapshot =
             let missingTypes =
-                eventRowsByType.Keys
+                eventDefinitionRowsSnapshot
+                |> Seq.filter _.IsAdded
+                |> Seq.map (fun row -> row.Key.DeclaringType)
                 |> Seq.filter (fun typeName -> not (request.Baseline.EventMapEntries |> Map.containsKey typeName))
+                |> Seq.distinct
                 |> Seq.toList
 
             for typeName in missingTypes do
@@ -1632,9 +1639,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     match eventRowsByType.TryGetValue typeName with
                     | true, rows ->
                         rows
-                        |> List.sortBy (fun row -> row.RowId)
-                        |> List.tryHead
-                        |> Option.map (fun row -> row.RowId)
+                        |> Seq.sortBy _.RowId
+                        |> Seq.tryHead
+                        |> Option.map _.RowId
                     | _ -> None
 
                 let shouldAdd = isAdded || List.contains typeName missingTypes
@@ -1653,24 +1660,24 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             match propertyRowsByName.TryGetValue(struct (typeName, propertyName)) with
             | true, rows ->
                 rows
-                |> List.sortBy (fun row -> row.RowId)
-                |> List.tryHead
-                |> Option.map (fun row -> (row.RowId, row.Key))
+                |> Seq.sortBy _.RowId
+                |> Seq.tryHead
+                |> Option.map (fun row -> struct (row.RowId, row.Key))
             | _ ->
                 match baselinePropertyLookup.TryGetValue((typeName, propertyName)) with
-                | true, (key, rowId) -> Some(rowId, key)
+                | true, (key, rowId) -> Some(struct (rowId, key))
                 | _ -> None
 
         let tryGetEventAssociation typeName eventName =
             match eventRowsByName.TryGetValue(struct (typeName, eventName)) with
             | true, rows ->
                 rows
-                |> List.sortBy (fun row -> row.RowId)
-                |> List.tryHead
-                |> Option.map (fun row -> (row.RowId, row.Key))
+                |> Seq.sortBy _.RowId
+                |> Seq.tryHead
+                |> Option.map (fun row -> struct (row.RowId, row.Key))
             | _ ->
                 match baselineEventLookup.TryGetValue((typeName, eventName)) with
-                | true, (key, rowId) -> Some(rowId, key)
+                | true, (key, rowId) -> Some(struct (rowId, key))
                 | _ -> None
 
         let semanticsAttributeForMemberKind memberKind =
@@ -1710,7 +1717,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                             match tryGetPropertyAssociation typeName propertyName with
                             // Emit MethodSemantics when the property itself is added, even if the declaring type
                             // already has a PropertyMap row in the baseline metadata.
-                            | Some(propertyRowId, propertyKey) when propertyDefinitionIndex.IsAdded propertyKey ->
+                            | Some(struct (propertyRowId, propertyKey)) when propertyDefinitionIndex.IsAdded propertyKey ->
                                 nextMethodSemanticsRowId <- nextMethodSemanticsRowId + 1
                                 Some
                                     { MethodSemanticsMetadataUpdate.RowId = nextMethodSemanticsRowId
@@ -1727,7 +1734,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                             match tryGetEventAssociation typeName eventName with
                             // Emit MethodSemantics when the event itself is added, even if the declaring type
                             // already has an EventMap row in the baseline metadata.
-                            | Some(eventRowId, eventKey) when eventDefinitionIndex.IsAdded eventKey ->
+                            | Some(struct (eventRowId, eventKey)) when eventDefinitionIndex.IsAdded eventKey ->
                                 nextMethodSemanticsRowId <- nextMethodSemanticsRowId + 1
                                 Some
                                     { MethodSemanticsMetadataUpdate.RowId = nextMethodSemanticsRowId
@@ -1776,9 +1783,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     if String.IsNullOrEmpty ns then
                         name
                     else
-                        ns + "." + name
+                        $"{ns}.{name}"
                 else
-                    getFullTypeName declaring + "+" + name
+                    $"{getFullTypeName declaring}+{name}"
 
             let tryFindTypeDefinition fullName =
                 metadataReader.TypeDefinitions
@@ -1794,7 +1801,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                         if String.IsNullOrEmpty ns then
                             name
                         else
-                            ns + "." + name
+                            $"{ns}.{name}"
                     if String.Equals(decl, fullName, StringComparison.Ordinal) then
                         Some handle
                     else
@@ -1823,9 +1830,9 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     else
                         matches
                         |> Array.tryFind (fun (name, _) -> String.Equals(name, prefix, StringComparison.Ordinal))
-                        |> Option.orElseWith (fun () -> matches |> Array.tryHead)
-                        |> Option.map snd
                         |> ValueOption.ofOption
+                        |> ValueOption.orElseWith (fun () -> matches |> Array.tryHead |> ValueOption.ofOption)
+                        |> ValueOption.map snd
 
             let findAssemblyReferenceRow scopeName =
                 metadataReader.AssemblyReferences
@@ -2307,7 +2314,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
         let synthesizedSnapshot =
             request.SynthesizedNames
-            |> Option.map (fun map -> map.Snapshot |> Map.ofSeq)
+            |> Option.map (fun map -> map.Snapshot |> Seq.map (fun struct (k, v) -> k, v) |> Map.ofSeq)
 
         let updatedBaselineCore =
             HotReloadBaseline.applyDelta

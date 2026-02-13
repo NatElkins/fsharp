@@ -19,18 +19,20 @@ open FSharp.Compiler.SynthesizedTypeMaps
 type internal FSharpEditAndContinueLanguageService private () =
 
     static let lazyInstance = lazy FSharpEditAndContinueLanguageService()
-    static let shouldTraceMetadata () =
-        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METADATA") with
+    static let isEnvVarTruthy (name: string) =
+        match Environment.GetEnvironmentVariable(name) with
         | null -> false
         | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
         | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
         | _ -> false
-    static let shouldTraceMethods () =
-        match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_METHODS") with
-        | null -> false
-        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
-        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
-        | _ -> false
+
+    static let traceMetadataFlagName = "FSHARP_HOTRELOAD_TRACE_METADATA"
+
+    static let traceMethodsFlagName = "FSHARP_HOTRELOAD_TRACE_METHODS"
+
+    static let shouldTraceMetadata () = isEnvVarTruthy traceMetadataFlagName
+
+    static let shouldTraceMethods () = isEnvVarTruthy traceMethodsFlagName
 
     static let dedupeMethodKeys (keys: MethodDefinitionKey list) =
         let seen = Collections.Generic.HashSet<MethodDefinitionKey>(HashIdentity.Structural)
@@ -124,7 +126,7 @@ type internal FSharpEditAndContinueLanguageService private () =
 
     static let createSynthesizedMapFromSnapshot (snapshot: Map<string, string[]>) =
         let map = FSharpSynthesizedTypeMaps()
-        map.LoadSnapshot(snapshot |> Map.toSeq)
+        map.LoadSnapshot(snapshot |> Map.toSeq |> Seq.map (fun (k, v) -> struct (k, v)))
         map.BeginSession()
         map
 
@@ -181,7 +183,7 @@ type internal FSharpEditAndContinueLanguageService private () =
         let trace = shouldTraceMetadata ()
         if trace then
             let asm = typeof<FSharpEditAndContinueLanguageService>.Assembly
-            let message = sprintf "[fsharp-hotreload][service] EmitDelta invoked (assembly=%s)\n" asm.Location
+            let message = $"[fsharp-hotreload][service] EmitDelta invoked (assembly={asm.Location})\n"
             printf "%s" message
             try
                 let path = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-service.log")
@@ -218,7 +220,7 @@ type internal FSharpEditAndContinueLanguageService private () =
 
                 let delta = FSharp.Compiler.IlxDeltaEmitter.emitDelta deltaRequest
                 if trace then
-                    let line = sprintf "[fsharp-hotreload][service] EmitDelta produced encLog=%A\n" delta.EncLog
+                    let line = $"[fsharp-hotreload][service] EmitDelta produced encLog={delta.EncLog}\n"
                     printf "%s" line
                     try
                         let path = Path.Combine(Path.GetTempPath(), "fsharp-hotreload-service.log")
