@@ -29,11 +29,20 @@ type FSharpSynthesizedTypeMaps() =
             invalidArg "snapshot" $"Name '{name}' at index {index} should equal '{basicName}' or start with '{expectedPrefix}' for basicName '{basicName}'"
 
     member _.GetOrAddName(basicName: string) =
-        let bucket = buckets.GetOrAdd(basicName, fun _ -> ResizeArray())
-        let nextOrdinal = ordinals.AddOrUpdate(basicName, 1, fun _ value -> value + 1)
-        let index = nextOrdinal - 1
+        lock syncLock (fun () ->
+            let bucket = buckets.GetOrAdd(basicName, fun _ -> ResizeArray())
 
-        lock bucket (fun () ->
+            // Keep ordinal reservation and bucket mutation in one critical section so
+            // concurrent callers cannot observe or produce out-of-order allocations.
+            let index =
+                match ordinals.TryGetValue basicName with
+                | true, current ->
+                    ordinals[basicName] <- current + 1
+                    current
+                | _ ->
+                    ordinals[basicName] <- 1
+                    0
+
             if index < bucket.Count then
                 bucket[index]
             else

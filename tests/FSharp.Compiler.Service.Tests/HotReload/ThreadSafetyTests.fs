@@ -14,14 +14,27 @@ module ThreadSafetyTests =
         let tasks = Array.init count (fun i -> Task.Run(fun () -> action i))
         Task.WaitAll(tasks)
 
+    let parseHotReloadOrdinal (basicName: string) (name: string) =
+        let prefix = basicName + "@hotreload"
+        let numberedPrefix = prefix + "-"
+
+        if String.Equals(name, prefix, StringComparison.Ordinal) then
+            0
+        elif name.StartsWith(numberedPrefix, StringComparison.Ordinal) then
+            match Int32.TryParse(name.Substring(numberedPrefix.Length)) with
+            | true, value when value > 0 -> value
+            | _ -> failwithf "Invalid hot reload synthesized name '%s' for basic name '%s'." name basicName
+        else
+            failwithf "Unexpected synthesized name '%s' for basic name '%s'." name basicName
+
     [<Fact>]
-    let ``concurrent GetOrAddName calls are safe and produce valid names`` () =
+    let ``concurrent GetOrAddName calls allocate unique sequential ordinals`` () =
         let map = FSharpSynthesizedTypeMaps()
         map.BeginSession()
 
         let results = System.Collections.Concurrent.ConcurrentBag<string>()
         let errors = System.Collections.Concurrent.ConcurrentBag<exn>()
-        let iterations = 100
+        let iterations = 1000
 
         runConcurrently iterations (fun _ ->
             try
@@ -30,15 +43,16 @@ module ThreadSafetyTests =
             with ex ->
                 errors.Add(ex))
 
-        // No exceptions should occur
         Assert.Empty(errors)
 
         let names = results |> Seq.toArray
         Assert.Equal(iterations, names.Length)
 
-        // All names should be valid (start with expected prefix)
-        for name in names do
-            Assert.StartsWith("concurrent@", name)
+        let ordinals = names |> Array.map (parseHotReloadOrdinal "concurrent")
+        let uniqueOrdinals = ordinals |> Array.distinct |> Array.sort
+
+        Assert.Equal(iterations, uniqueOrdinals.Length)
+        Assert.Equal<int[]>([| 0 .. iterations - 1 |], uniqueOrdinals)
 
     [<Fact>]
     let ``concurrent GetOrAddName with multiple basic names is safe`` () =
