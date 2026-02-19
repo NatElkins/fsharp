@@ -61,6 +61,21 @@ module NameMapTests =
         Assert.Equal<string>(second, replaySecond)
 
     [<Fact>]
+    let ``LoadSnapshot canonicalizes hot reload ordinals for replay`` () =
+        let map = FSharpSynthesizedTypeMaps()
+
+        let outOfOrderSnapshot =
+            [| struct ("closure", [| "closure@hotreload-10"; "closure@hotreload"; "closure@hotreload-2"; "closure@hotreload-1" |]) |]
+
+        map.LoadSnapshot outOfOrderSnapshot
+        map.BeginSession()
+
+        let replayed = [| for _ in 0 .. 3 -> map.GetOrAddName "closure" |]
+        let expected = [| "closure@hotreload"; "closure@hotreload-1"; "closure@hotreload-2"; "closure@hotreload-10" |]
+
+        Assert.Equal<string>(expected, replayed)
+
+    [<Fact>]
     let ``LoadSnapshot validates name prefix`` () =
         let map = FSharpSynthesizedTypeMaps()
 

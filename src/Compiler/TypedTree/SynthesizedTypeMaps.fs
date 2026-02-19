@@ -1,5 +1,6 @@
 module internal FSharp.Compiler.SynthesizedTypeMaps
 
+open System
 open System.Collections.Concurrent
 open System.Collections.Generic
 
@@ -20,12 +21,39 @@ type FSharpSynthesizedTypeMaps() =
     let computeName basicName index =
         makeHotReloadName basicName index
 
+    let tryGetHotReloadOrdinal (basicName: string) (name: string) =
+        let hotReloadPrefix = basicName + "@hotreload"
+
+        if name.Equals(hotReloadPrefix, StringComparison.Ordinal) then
+            Some 0
+        elif name.StartsWith(hotReloadPrefix + "-", StringComparison.Ordinal) then
+            let suffix = name.Substring(hotReloadPrefix.Length + 1)
+            match Int32.TryParse suffix with
+            | true, ordinal when ordinal > 0 -> Some ordinal
+            | _ -> None
+        else
+            None
+
+    let canonicalizeSnapshotNames basicName (names: string[]) =
+        let parsed =
+            names
+            |> Array.mapi (fun index name -> index, name, tryGetHotReloadOrdinal basicName name)
+
+        if parsed |> Array.forall (fun (_, _, ordinalOpt) -> ordinalOpt.IsSome) then
+            // IL metadata can enumerate synthesized helpers in a different order than allocation.
+            // Normalize pure hot-reload buckets so replay always starts at ordinal 0, then 1, etc.
+            parsed
+            |> Array.sortBy (fun (index, _, ordinalOpt) -> struct (ordinalOpt.Value, index))
+            |> Array.map (fun (_, name, _) -> name)
+        else
+            names
+
     /// Validates that a generated name starts with the basicName followed by '@'.
     let validateName basicName (name: string) index =
         // Snapshots can contain legacy/basic synthesized names (for example "@_instance")
         // alongside hot-reload-managed names. Accept both forms so existing sessions restore.
         let expectedPrefix = basicName + "@"
-        if not (name.Equals(basicName, System.StringComparison.Ordinal) || name.StartsWith(expectedPrefix, System.StringComparison.Ordinal)) then
+        if not (name.Equals(basicName, StringComparison.Ordinal) || name.StartsWith(expectedPrefix, StringComparison.Ordinal)) then
             invalidArg "snapshot" $"Name '{name}' at index {index} should equal '{basicName}' or start with '{expectedPrefix}' for basicName '{basicName}'"
 
     member _.GetOrAddName(basicName: string) =
@@ -72,7 +100,8 @@ type FSharpSynthesizedTypeMaps() =
             for struct (basicName, names) in snapshot do
                 // Validate each name matches expected pattern
                 names |> Array.iteri (fun i name -> validateName basicName name i)
-                let bucket = createBucket names
+                let canonicalNames = canonicalizeSnapshotNames basicName names
+                let bucket = createBucket canonicalNames
                 buckets[basicName] <- bucket
                 ordinals[basicName] <- 0)
 

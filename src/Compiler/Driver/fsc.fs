@@ -985,6 +985,29 @@ let main4
             let map = FSharpSynthesizedTypeMaps()
             map.BeginSession()
             compilerGlobalState.SynthesizedTypeMaps <- Some map
+    elif FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
+        // Preserve synthesized-name replay while a hot reload session is active,
+        // even when the output build itself is emitted without capture flags.
+        let activeMap =
+            match compilerGlobalState.SynthesizedTypeMaps with
+            | Some existing -> Some existing
+            | None ->
+                match FSharpEditAndContinueLanguageService.Instance.TryGetSession() with
+                | ValueSome session ->
+                    let restored = FSharpSynthesizedTypeMaps()
+                    session.Baseline.SynthesizedNameSnapshot
+                    |> Map.toSeq
+                    |> Seq.map (fun (k, v) -> struct (k, v))
+                    |> restored.LoadSnapshot
+                    Some restored
+                | ValueNone -> None
+
+        match activeMap with
+        | Some map ->
+            map.BeginSession()
+            compilerGlobalState.SynthesizedTypeMaps <- Some map
+        | None ->
+            compilerGlobalState.SynthesizedTypeMaps <- None
     else
         compilerGlobalState.SynthesizedTypeMaps <- None
 
