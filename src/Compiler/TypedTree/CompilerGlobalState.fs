@@ -41,6 +41,15 @@ type NiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMaps opti
         let count = Interlocked.Increment(countCell)
         count - 1
 
+    let makeLegacyName basicName (m: range) ordinal =
+        let suffix =
+            if ordinal = 0 then
+                string m.StartLine
+            else
+                $"{m.StartLine}-{ordinal}"
+
+        CompilerGeneratedNameSuffix basicName suffix
+
     member _.FreshCompilerGeneratedNameOfBasicName (basicName, m: range) =
         match getSynthesizedMap() with
         | Some map ->
@@ -50,7 +59,8 @@ type NiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMaps opti
             map.GetOrAddName basicName
         | None ->
             let ordinal = ensureOrdinal basicName m
-            makeHotReloadName basicName ordinal
+            // Preserve legacy compiler-generated naming when hot reload is inactive.
+            makeLegacyName basicName m ordinal
 
     member this.FreshCompilerGeneratedName (name, m: range) =
         this.FreshCompilerGeneratedNameOfBasicName (GetBasicNameOfPossibleCompilerGeneratedName name, m)
