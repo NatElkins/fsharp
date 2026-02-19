@@ -117,6 +117,18 @@ type Type =
                          String.Equals(opt, "-o", StringComparison.OrdinalIgnoreCase)))
                 |> Array.append [| $"-o:{dllPath}" |] }
 
+
+    let private withSplitOutputOption (projectOptions: FSharpProjectOptions) (outputSwitch: string) (dllPath: string) =
+        { projectOptions with
+            OtherOptions =
+                projectOptions.OtherOptions
+                |> Array.filter (fun opt ->
+                    not (opt.StartsWith("--out:", StringComparison.OrdinalIgnoreCase) ||
+                         opt.StartsWith("-o:", StringComparison.OrdinalIgnoreCase) ||
+                         String.Equals(opt, "-o", StringComparison.OrdinalIgnoreCase) ||
+                         String.Equals(opt, "--out", StringComparison.OrdinalIgnoreCase)))
+                |> Array.append [| outputSwitch; dllPath |] }
+
     let private withExecutableTarget (projectOptions: FSharpProjectOptions) =
         { projectOptions with
             OtherOptions =
@@ -620,6 +632,76 @@ type Type =
         try
             Directory.Delete(projectDir, true)
         with _ -> ()
+
+
+    [<Theory>]
+    [<InlineData("-o")>]
+    [<InlineData("--out")>]
+    let ``Workspace snapshot ignores split output option paths when hashing tracked inputs`` (outputSwitch: string) =
+        let projectDir =
+            Path.Combine(Path.GetTempPath(), "fcs-hotreload-split-output-tracking", Guid.NewGuid().ToString("N"))
+
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+        let projectPath = Path.Combine(projectDir, "Library.fsproj")
+        let resourcePath = Path.Combine(projectDir, "payload.xaml")
+
+        File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>")
+        File.WriteAllText(fsPath, baselineSource)
+        File.WriteAllText(resourcePath, "<Page><TextBlock Text=\"v1\" /></Page>")
+        File.WriteAllBytes(dllPath, [| 0uy |])
+
+        try
+            let checker = createChecker ()
+
+            let baselineOptions =
+                prepareProjectOptions checker fsPath dllPath baselineSource
+                |> withTrackedResourceInput <| resourcePath
+
+            let projectOptions = withSplitOutputOption baselineOptions outputSwitch dllPath
+
+            let baselineSnapshot = createProjectSnapshot projectOptions
+            let baselineVersion = Convert.ToHexString(baselineSnapshot.ProjectConfig.Version)
+
+            let pathEquals left right =
+                String.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.Ordinal)
+
+            let baselineTrackedInputs = baselineSnapshot.ProjectConfig.TrackedInputsOnDisk
+
+            let trackedResource =
+                baselineTrackedInputs
+                |> List.tryFind (fun reference -> pathEquals reference.Path resourcePath)
+                |> Option.defaultWith (fun () -> failwith "Expected tracked resource input to be present.")
+
+            Assert.True(
+                baselineTrackedInputs
+                |> List.forall (fun reference -> not (pathEquals reference.Path dllPath)),
+                $"Output path '{dllPath}' should not be tracked for split option '{outputSwitch}'.")
+
+            File.SetLastWriteTime(dllPath, trackedResource.LastModified.AddSeconds(1.0))
+
+            let outputTouchedSnapshot = createProjectSnapshot projectOptions
+            let outputTouchedVersion = Convert.ToHexString(outputTouchedSnapshot.ProjectConfig.Version)
+
+            Assert.Equal(
+                baselineVersion,
+                outputTouchedVersion)
+
+            File.WriteAllText(resourcePath, "<Page><TextBlock Text=\"v2\" /></Page>")
+            File.SetLastWriteTime(resourcePath, trackedResource.LastModified.AddSeconds(2.0))
+
+            let resourceTouchedSnapshot = createProjectSnapshot projectOptions
+            let resourceTouchedVersion = Convert.ToHexString(resourceTouchedSnapshot.ProjectConfig.Version)
+
+            Assert.True(
+                not (String.Equals(outputTouchedVersion, resourceTouchedVersion, StringComparison.Ordinal)),
+                "Expected tracked resource changes to update project config version.")
+        finally
+            try
+                Directory.Delete(projectDir, true)
+            with _ -> ()
 
     [<Fact>]
     let ``StartHotReloadSession accepts short output option`` () =

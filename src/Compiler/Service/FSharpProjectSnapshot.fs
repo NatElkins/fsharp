@@ -475,9 +475,31 @@ and [<Experimental("This FCS API is experimental and subject to change.")>] Proj
         else
             tryNormalizeTrackedInputPath option
 
+    let isSplitOutputOption (option: string) =
+        String.Equals(option, "-o", StringComparison.OrdinalIgnoreCase)
+        || String.Equals(option, "--out", StringComparison.OrdinalIgnoreCase)
+
     let trackedInputsOnDisk =
+        let rec collectTrackedInputs skipNextOutput tracked options =
+            match options with
+            | [] -> tracked
+            | _ :: tail when skipNextOutput ->
+                collectTrackedInputs false tracked tail
+            | option :: tail when isSplitOutputOption option ->
+                // Split output flags are followed by an output path that should not be tracked as an input dependency.
+                collectTrackedInputs true tracked tail
+            | option :: tail ->
+                let updatedTracked =
+                    match tryGetTrackedInputPath option with
+                    | Some path -> path :: tracked
+                    | None -> tracked
+
+                collectTrackedInputs false updatedTracked tail
+
         otherOptions
-        |> Seq.choose tryGetTrackedInputPath
+        |> Seq.toList
+        |> collectTrackedInputs false []
+        |> List.rev
         |> Seq.distinct
         |> Seq.map (fun path ->
             { Path = path
