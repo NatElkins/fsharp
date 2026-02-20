@@ -61,6 +61,12 @@ module RudeEditDiagnosticsTests =
         Assert.Contains("query-expression", diag.Message, StringComparison.OrdinalIgnoreCase)
 
     [<Fact>]
+    let ``synthesized declaration change diagnostic id`` () =
+        let diag = RudeEditDiagnostics.ofRudeEdit (rude RudeEditKind.SynthesizedDeclarationChange "fallback")
+        Assert.Equal("FSHRDL015", diag.Id)
+        Assert.Contains("synthesized", diag.Message, StringComparison.OrdinalIgnoreCase)
+
+    [<Fact>]
     let ``explicit interface insertion diagnostic id`` () =
         let diag = RudeEditDiagnostics.ofRudeEdit (rude RudeEditKind.InsertExplicitInterface "fallback")
         Assert.Equal("FSHRDL009", diag.Id)

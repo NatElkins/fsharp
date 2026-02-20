@@ -55,6 +55,7 @@ type RudeEditKind =
     | LambdaShapeChange
     | StateMachineShapeChange
     | QueryExpressionShapeChange
+    | SynthesizedDeclarationChange
     | Unsupported
     // Method addition restrictions (following Roslyn patterns)
     | InsertVirtual           // Virtual/abstract/override methods cannot be added

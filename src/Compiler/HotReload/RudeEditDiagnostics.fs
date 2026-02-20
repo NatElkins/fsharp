@@ -33,6 +33,8 @@ module internal RudeEditDiagnostics =
             $"Changing lowered state-machine shape for '{name}' requires a rebuild."
         | RudeEditKind.QueryExpressionShapeChange ->
             $"Changing lowered query-expression shape for '{name}' requires a rebuild."
+        | RudeEditKind.SynthesizedDeclarationChange ->
+            $"Changing synthesized compiler-generated declarations for '{name}' requires a rebuild."
         | RudeEditKind.InsertVirtual ->
             $"Adding virtual, abstract, or override method '{name}' is not supported."
         | RudeEditKind.InsertConstructor ->
@@ -57,6 +59,7 @@ module internal RudeEditDiagnostics =
         | RudeEditKind.LambdaShapeChange -> "FSHRDL012"
         | RudeEditKind.StateMachineShapeChange -> "FSHRDL013"
         | RudeEditKind.QueryExpressionShapeChange -> "FSHRDL014"
+        | RudeEditKind.SynthesizedDeclarationChange -> "FSHRDL015"
         | RudeEditKind.InsertVirtual -> "FSHRDL006"
         | RudeEditKind.InsertConstructor -> "FSHRDL007"
         | RudeEditKind.InsertOperator -> "FSHRDL008"

@@ -64,6 +64,7 @@ type RudeEditKind =
     | LambdaShapeChange
     | StateMachineShapeChange
     | QueryExpressionShapeChange
+    | SynthesizedDeclarationChange
     | Unsupported
     // Method addition restrictions (following Roslyn patterns)
     | InsertVirtual           // Virtual/abstract/override methods cannot be added
@@ -455,15 +456,6 @@ type private LoweredShapeCollector =
       StateMachineOperations: ResizeArray<string>
       QueryOperations: ResizeArray<string> }
 
-let private isLikelyStateMachineDeclaringType (declaringTypeName: string) =
-    declaringTypeName.IndexOf("AsyncBuilder", StringComparison.Ordinal) >= 0
-    || declaringTypeName.IndexOf("TaskBuilder", StringComparison.Ordinal) >= 0
-    || declaringTypeName.IndexOf("Resumable", StringComparison.Ordinal) >= 0
-
-let private isLikelyQueryDeclaringType (declaringTypeName: string) =
-    declaringTypeName.IndexOf("QueryBuilder", StringComparison.Ordinal) >= 0
-    || declaringTypeName.IndexOf("Microsoft.FSharp.Linq", StringComparison.Ordinal) >= 0
-
 let private isLikelyQueryOperationName (name: string) =
     match name with
     | "For"
@@ -485,6 +477,18 @@ let private isLikelyQueryOperationName (name: string) =
     | "Quote" -> true
     | _ -> false
 
+let private isLikelyStateMachineOperationName (name: string) =
+    match name with
+    | "Bind"
+    | "Return"
+    | "ReturnFrom"
+    | "Delay"
+    | "Combine"
+    | "Using"
+    | "TryWith"
+    | "TryFinally" -> true
+    | _ -> false
+
 let private addDistinct (items: ResizeArray<string>) (value: string) =
     if not (String.IsNullOrEmpty value) && not (items.Contains value) then
         items.Add value
@@ -499,12 +503,12 @@ let private collectLoweredShapeInfo (expr: Expr) =
         match expr with
         | Expr.Const _ -> ()
         | Expr.Val (vref, _, _) ->
-            match tryGetDeclaringEntityCompiledName vref with
-            | Some declaringTypeName when isLikelyStateMachineDeclaringType declaringTypeName ->
-                addDistinct collector.StateMachineOperations vref.LogicalName
-            | Some declaringTypeName when isLikelyQueryDeclaringType declaringTypeName ->
+            if isLikelyQueryOperationName vref.LogicalName then
                 addDistinct collector.QueryOperations vref.LogicalName
-            | _ -> ()
+            elif isLikelyStateMachineOperationName vref.LogicalName
+                 || vref.LogicalName.Equals("MoveNext", StringComparison.Ordinal) then
+                // Keep lowered-shape classification resilient without depending on declaring-type names.
+                addDistinct collector.StateMachineOperations vref.LogicalName
         | Expr.App (funcExpr, _, _, args, _) ->
             walk funcExpr
             args |> List.iter walk
@@ -741,33 +745,21 @@ type private EntitySnapshot =
       RepresentationText: string
       IsSynthesized: bool }
 
-let private containsOrdinalIgnoreCase (value: string) (fragment: string) =
-    value.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0
-
 let private tryClassifySynthesizedLoweredShapeChurn (snapshot: BindingSnapshot) =
     if not snapshot.IsSynthesized then
         None
     else
         let logicalName = snapshot.Symbol.LogicalName
-        let containingEntity = snapshot.ContainingEntity |> Option.defaultValue String.Empty
 
         let hasQueryEvidence =
             not (String.IsNullOrEmpty snapshot.QueryShapeDigest)
-            || isLikelyQueryDeclaringType containingEntity
-            || containsOrdinalIgnoreCase logicalName "query"
 
         let hasStateMachineEvidence =
             not (String.IsNullOrEmpty snapshot.StateMachineShapeDigest)
-            || isLikelyStateMachineDeclaringType containingEntity
             || logicalName.Equals("MoveNext", StringComparison.Ordinal)
-            || containsOrdinalIgnoreCase logicalName "statemachine"
-            || containsOrdinalIgnoreCase logicalName "resumable"
-            || containsOrdinalIgnoreCase logicalName "async"
 
         let hasLambdaEvidence =
             not (String.IsNullOrEmpty snapshot.LambdaShapeDigest)
-            || containsOrdinalIgnoreCase logicalName "lambda"
-            || containsOrdinalIgnoreCase logicalName "clo"
 
         if hasQueryEvidence then
             Some RudeEditKind.QueryExpressionShapeChange
@@ -776,7 +768,9 @@ let private tryClassifySynthesizedLoweredShapeChurn (snapshot: BindingSnapshot) 
         elif hasLambdaEvidence then
             Some RudeEditKind.LambdaShapeChange
         else
-            None
+            // Fail closed when a synthesized declaration changes and we cannot confidently
+            // classify it into a known lowered-shape bucket.
+            Some RudeEditKind.SynthesizedDeclarationChange
 
 let private symbolId
     path
@@ -1027,8 +1021,21 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
         )
 
     let compareMatchedBindings (baselineBinding: BindingSnapshot) (updatedBinding: BindingSnapshot) =
+        let runtimeSignatureIdentityKnown =
+            baselineBinding.Symbol.CompiledName.IsSome
+            && updatedBinding.Symbol.CompiledName.IsSome
+            && baselineBinding.Symbol.TotalArgCount.IsSome
+            && updatedBinding.Symbol.TotalArgCount.IsSome
+            && baselineBinding.Symbol.GenericArity.IsSome
+            && updatedBinding.Symbol.GenericArity.IsSome
+            && baselineBinding.Symbol.ParameterTypeIdentities.IsSome
+            && updatedBinding.Symbol.ParameterTypeIdentities.IsSome
+            && baselineBinding.Symbol.ReturnTypeIdentity.IsSome
+            && updatedBinding.Symbol.ReturnTypeIdentity.IsSome
+
         let hasEquivalentRuntimeSignature =
-            baselineBinding.Symbol.CompiledName = updatedBinding.Symbol.CompiledName
+            runtimeSignatureIdentityKnown
+            && baselineBinding.Symbol.CompiledName = updatedBinding.Symbol.CompiledName
             && baselineBinding.Symbol.TotalArgCount = updatedBinding.Symbol.TotalArgCount
             && baselineBinding.Symbol.GenericArity = updatedBinding.Symbol.GenericArity
             && baselineBinding.Symbol.ParameterTypeIdentities = updatedBinding.Symbol.ParameterTypeIdentities
@@ -1089,11 +1096,15 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
     let addRemovedDeclarationRudeEdit (baselineBinding: BindingSnapshot) =
         match tryClassifySynthesizedLoweredShapeChurn baselineBinding with
         | Some loweredKind ->
+            let message =
+                if loweredKind = RudeEditKind.SynthesizedDeclarationChange then
+                    $"Synthesized declaration removed for '{baselineBinding.Symbol.QualifiedName}', but no known lowered-shape classifier matched."
+                else
+                    $"Synthesized declaration removed while lowered shape changed for '{baselineBinding.Symbol.QualifiedName}'."
             rude.Add(
                 { Symbol = Some baselineBinding.Symbol
                   Kind = loweredKind
-                  Message =
-                    $"Synthesized declaration removed while lowered shape changed for '{baselineBinding.Symbol.QualifiedName}'." }
+                  Message = message }
             )
         | None ->
             rude.Add(
@@ -1105,11 +1116,15 @@ let private compareBindings (baseline: Map<string, BindingSnapshot>) (updated: M
     let addAddedDeclarationOrInsertEdit (updatedBinding: BindingSnapshot) =
         match tryClassifySynthesizedLoweredShapeChurn updatedBinding with
         | Some loweredKind ->
+            let message =
+                if loweredKind = RudeEditKind.SynthesizedDeclarationChange then
+                    $"Synthesized declaration added for '{updatedBinding.Symbol.QualifiedName}', but no known lowered-shape classifier matched."
+                else
+                    $"Synthesized declaration added while lowered shape changed for '{updatedBinding.Symbol.QualifiedName}'."
             rude.Add(
                 { Symbol = Some updatedBinding.Symbol
                   Kind = loweredKind
-                  Message =
-                    $"Synthesized declaration added while lowered shape changed for '{updatedBinding.Symbol.QualifiedName}'." }
+                  Message = message }
             )
         | None ->
             let info = updatedBinding.AdditionInfo

@@ -643,6 +643,149 @@ type Type =
             applySingleStringUpdateAndAssertRuntimeResult label baseline updated "Hello, watch" "Welcome, watch"
 
     [<Fact>]
+    let ``Tier1 construct matrix preserves runtime apply for method-body edits`` () =
+        let seqBaseline =
+            """
+namespace Sample
+
+type Type =
+    static member GetMessage() =
+        seq {
+            yield "Hello"
+            yield ", "
+            yield "watch"
+        }
+        |> String.concat ""
+"""
+
+        let recordBaseline =
+            """
+namespace Sample
+
+type Greeting = { Prefix: string; Name: string }
+
+type Type =
+    static member GetMessage() =
+        let greeting = { Prefix = "Hello"; Name = "watch" }
+        $"{greeting.Prefix}, {greeting.Name}"
+"""
+
+        let unionBaseline =
+            """
+namespace Sample
+
+type Greeting =
+    | Message of string * string
+
+type Type =
+    static member GetMessage() =
+        let value = Message("Hello", "watch")
+        match value with
+        | Message(prefix, name) -> $"{prefix}, {name}"
+"""
+
+        let structBaseline =
+            """
+namespace Sample
+
+[<Struct>]
+type Greeting =
+    { Prefix: string
+      Name: string }
+
+type Type =
+    static member GetMessage() =
+        let greeting = { Prefix = "Hello"; Name = "watch" }
+        greeting.Prefix + ", " + greeting.Name
+"""
+
+        let recursiveBaseline =
+            """
+namespace Sample
+
+type Type =
+    static member GetMessage() =
+        let rec prefix i =
+            if i = 0 then "Hello" else prefix (i - 1)
+
+        let rec suffix i =
+            if i = 0 then "watch" else suffix (i - 1)
+
+        prefix 1 + ", " + suffix 1
+"""
+
+        let scenarios =
+            [ ("tier1-seq", seqBaseline)
+              ("tier1-record", recordBaseline)
+              ("tier1-union", unionBaseline)
+              ("tier1-struct", structBaseline)
+              ("tier1-recursive", recursiveBaseline) ]
+
+        for (label, baseline) in scenarios do
+            let updated = baseline.Replace("Hello", "Welcome")
+            applySingleStringUpdateAndAssertRuntimeResult label baseline updated "Hello, watch" "Welcome, watch"
+
+    [<Fact>]
+    let ``Tier2 construct matrix preserves runtime apply for method-body edits`` () =
+        let anonymousRecordBaseline =
+            """
+namespace Sample
+
+type Type =
+    static member GetMessage() =
+        let greeting = {| Prefix = "Hello"; Name = "watch" |}
+        greeting.Prefix + ", " + greeting.Name
+"""
+
+        let activePatternBaseline =
+            """
+namespace Sample
+
+module Internal =
+    let (|SplitGreeting|) (text: string) = text.Split(',')
+
+type Type =
+    static member GetMessage() =
+        match "Hello,watch" with
+        | Internal.SplitGreeting parts -> parts.[0] + ", " + parts.[1]
+"""
+
+        let objectExpressionBaseline =
+            """
+namespace Sample
+
+type Type =
+    static member GetMessage() =
+        let provider =
+            { new obj() with
+                override _.ToString() = "Hello" }
+
+        provider.ToString() + ", watch"
+"""
+
+        let loopBaseline =
+            """
+namespace Sample
+
+type Type =
+    static member GetMessage() =
+        let parts = ResizeArray<string>()
+        for value in [ "Hello"; "watch" ] do
+            parts.Add(value)
+        parts.[0] + ", " + parts.[1]
+"""
+
+        let scenarios =
+            [ ("tier2-anon-record", anonymousRecordBaseline)
+              ("tier2-active-pattern", activePatternBaseline)
+              ("tier2-object-expression", objectExpressionBaseline)
+              ("tier2-loop", loopBaseline) ]
+
+        for (label, baseline) in scenarios do
+            let updated = baseline.Replace("Hello", "Welcome")
+            applySingleStringUpdateAndAssertRuntimeResult label baseline updated "Hello, watch" "Welcome, watch"
+
+    [<Fact>]
     let ``Multi-generation user string literals resolve correctly`` () =
         // This test verifies that user string literals are correctly resolved across
         // multiple delta generations. The bug manifests as CJK character corruption

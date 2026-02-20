@@ -279,6 +279,102 @@ let private rewriteMethodBody (remapUserString: int -> int) (remapEntityToken: i
 
     rewritten, (referencedMethodSpecs |> Seq.toList)
 
+let private buildUpdatedTypeTokens
+    (tryGetBaselineTypeName: string -> string)
+    (baselineTypeTokens: Map<string, int>)
+    (updatedTypes: string list)
+    (symbolChangeTypeNames: string list)
+    (resolvedMethods: (ILTypeDef list * ILTypeDef * ILMethodDef * MethodDefinitionKey) list)
+    =
+    let methodTypeNames =
+        resolvedMethods
+        |> List.map (fun (enclosing, typeDef, _, _) ->
+            let typeRef = mkRefForNestedILTypeDef ILScopeRef.Local (enclosing, typeDef)
+            tryGetBaselineTypeName typeRef.FullName)
+
+    (updatedTypes @ symbolChangeTypeNames @ methodTypeNames)
+    |> List.map tryGetBaselineTypeName
+    |> List.distinct
+    |> List.choose (fun typeName -> baselineTypeTokens |> Map.tryFind typeName)
+
+let private buildUpdatedBaseline
+    (updatedBaselineCore: FSharpEmitBaseline)
+    (propertyMapRowsSnapshot: PropertyMapRowInfo list)
+    (eventMapRowsSnapshot: EventMapRowInfo list)
+    (methodSemanticsRowsSnapshot: MethodSemanticsMetadataUpdate list)
+    (methodTokenToKey: Dictionary<int, MethodDefinitionKey>)
+    (addedMethodDeltaTokens: Dictionary<MethodDefinitionKey, int>)
+    (addedPropertyDeltaTokens: Dictionary<PropertyDefinitionKey, int>)
+    (addedEventDeltaTokens: Dictionary<EventDefinitionKey, int>)
+    =
+    let addPropertyMapEntry (entries: Map<string, int>) (row: PropertyMapRowInfo) =
+        if row.IsAdded then
+            entries |> Map.add row.DeclaringType row.RowId
+        else
+            entries
+
+    let addEventMapEntry (entries: Map<string, int>) (row: EventMapRowInfo) =
+        if row.IsAdded then
+            entries |> Map.add row.DeclaringType row.RowId
+        else
+            entries
+
+    let extendMethodSemanticsMap
+        (entries: Map<MethodDefinitionKey, MethodSemanticsEntry list>)
+        (row: MethodSemanticsMetadataUpdate)
+        =
+        if row.IsAdded then
+            match methodTokenToKey.TryGetValue row.MethodToken with
+            | true, methodKey ->
+                let newEntry =
+                    { MethodSemanticsEntry.RowId = row.RowId
+                      Attributes = row.Attributes
+                      Association = row.AssociationInfo }
+
+                let updatedList =
+                    match entries |> Map.tryFind methodKey with
+                    | Some existing ->
+                        newEntry :: existing
+                        |> List.distinctBy (fun entry -> entry.RowId)
+                    | None -> [ newEntry ]
+
+                entries |> Map.add methodKey updatedList
+            | _ -> entries
+        else
+            entries
+
+    let updatedPropertyMapEntries =
+        propertyMapRowsSnapshot
+        |> List.fold addPropertyMapEntry updatedBaselineCore.PropertyMapEntries
+
+    let updatedEventMapEntries =
+        eventMapRowsSnapshot
+        |> List.fold addEventMapEntry updatedBaselineCore.EventMapEntries
+
+    let updatedMethodSemanticsEntries =
+        methodSemanticsRowsSnapshot
+        |> List.fold extendMethodSemanticsMap updatedBaselineCore.MethodSemanticsEntries
+
+    let updatedMethodTokenMap =
+        addedMethodDeltaTokens
+        |> Seq.fold (fun acc (KeyValue(key, token)) -> acc |> Map.add key token) updatedBaselineCore.MethodTokens
+
+    let updatedPropertyTokenMap =
+        addedPropertyDeltaTokens
+        |> Seq.fold (fun acc (KeyValue(key, token)) -> acc |> Map.add key token) updatedBaselineCore.PropertyTokens
+
+    let updatedEventTokenMap =
+        addedEventDeltaTokens
+        |> Seq.fold (fun acc (KeyValue(key, token)) -> acc |> Map.add key token) updatedBaselineCore.EventTokens
+
+    { updatedBaselineCore with
+        MethodTokens = updatedMethodTokenMap
+        PropertyTokens = updatedPropertyTokenMap
+        EventTokens = updatedEventTokenMap
+        PropertyMapEntries = updatedPropertyMapEntries
+        EventMapEntries = updatedEventMapEntries
+        MethodSemanticsEntries = updatedMethodSemanticsEntries }
+
 /// Emits the delta artifacts for a request. The current implementation populates token projections
 /// while leaving the raw metadata/IL/PDB payload empty; future work will replace the placeholders
 /// with fully emitted heaps.
@@ -1283,16 +1379,12 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
         | None -> ()
 
     let updatedTypeTokens =
-        let methodTypeNames =
+        buildUpdatedTypeTokens
+            tryGetBaselineTypeName
+            request.Baseline.TypeTokens
+            request.UpdatedTypes
+            symbolChangeTypeNames
             resolvedMethods
-            |> List.map (fun (enclosing, typeDef, _, _) ->
-                let typeRef = mkRefForNestedILTypeDef ILScopeRef.Local (enclosing, typeDef)
-                tryGetBaselineTypeName typeRef.FullName)
-
-        (request.UpdatedTypes @ symbolChangeTypeNames @ methodTypeNames)
-        |> List.map tryGetBaselineTypeName
-        |> List.distinct
-        |> List.choose (fun typeName -> request.Baseline.TypeTokens |> Map.tryFind typeName)
 
     let updatedMethodTokenList =
         orderedMethodInputs
@@ -2319,74 +2411,16 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 encBaseId
                 synthesizedSnapshot
 
-        let addPropertyMapEntry (entries: Map<string, int>) (row: PropertyMapRowInfo) =
-            if row.IsAdded then
-                entries |> Map.add row.DeclaringType row.RowId
-            else
-                entries
-
-        let addEventMapEntry (entries: Map<string, int>) (row: EventMapRowInfo) =
-            if row.IsAdded then
-                entries |> Map.add row.DeclaringType row.RowId
-            else
-                entries
-
-        let extendMethodSemanticsMap
-            (entries: Map<MethodDefinitionKey, MethodSemanticsEntry list>)
-            (row: MethodSemanticsMetadataUpdate)
-            =
-            if row.IsAdded then
-                match methodTokenToKey.TryGetValue row.MethodToken with
-                | true, methodKey ->
-                    let newEntry =
-                        { MethodSemanticsEntry.RowId = row.RowId
-                          Attributes = row.Attributes
-                          Association = row.AssociationInfo }
-
-                    let updatedList =
-                        match entries |> Map.tryFind methodKey with
-                        | Some existing ->
-                            newEntry :: existing
-                            |> List.distinctBy (fun entry -> entry.RowId)
-                        | None -> [ newEntry ]
-
-                    entries |> Map.add methodKey updatedList
-                | _ -> entries
-            else
-                entries
-
-        let updatedPropertyMapEntries =
-            propertyMapRowsSnapshot
-            |> List.fold addPropertyMapEntry updatedBaselineCore.PropertyMapEntries
-
-        let updatedEventMapEntries =
-            eventMapRowsSnapshot
-            |> List.fold addEventMapEntry updatedBaselineCore.EventMapEntries
-
-        let updatedMethodSemanticsEntries =
-            methodSemanticsRowsSnapshot
-            |> List.fold extendMethodSemanticsMap updatedBaselineCore.MethodSemanticsEntries
-
-        let updatedMethodTokenMap =
-            addedMethodDeltaTokens
-            |> Seq.fold (fun acc (KeyValue(key, token)) -> acc |> Map.add key token) updatedBaselineCore.MethodTokens
-
-        let updatedPropertyTokenMap =
-            addedPropertyDeltaTokens
-            |> Seq.fold (fun acc (KeyValue(key, token)) -> acc |> Map.add key token) updatedBaselineCore.PropertyTokens
-
-        let updatedEventTokenMap =
-            addedEventDeltaTokens
-            |> Seq.fold (fun acc (KeyValue(key, token)) -> acc |> Map.add key token) updatedBaselineCore.EventTokens
-
         let updatedBaseline =
-            { updatedBaselineCore with
-                MethodTokens = updatedMethodTokenMap
-                PropertyTokens = updatedPropertyTokenMap
-                EventTokens = updatedEventTokenMap
-                PropertyMapEntries = updatedPropertyMapEntries
-                EventMapEntries = updatedEventMapEntries
-                MethodSemanticsEntries = updatedMethodSemanticsEntries }
+            buildUpdatedBaseline
+                updatedBaselineCore
+                propertyMapRowsSnapshot
+                eventMapRowsSnapshot
+                methodSemanticsRowsSnapshot
+                methodTokenToKey
+                addedMethodDeltaTokens
+                addedPropertyDeltaTokens
+                addedEventDeltaTokens
 
         { emptyDelta with
             Metadata = metadataDelta.Metadata
