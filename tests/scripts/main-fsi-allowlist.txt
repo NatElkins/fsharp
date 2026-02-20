@@ -1,0 +1,17 @@
+# Paths under src/Compiler/*.fsi that are currently expected to differ from origin/main
+# during hot-reload branch development. Keep this list intentionally small and remove
+# entries as invasive surface changes are refactored away.
+
+src/Compiler/AbstractIL/ilbinary.fsi
+src/Compiler/AbstractIL/ilwrite.fsi
+src/Compiler/AbstractIL/ilwritepdb.fsi
+src/Compiler/CodeGen/HotReloadBaseline.fsi
+src/Compiler/CodeGen/IlxGen.fsi
+src/Compiler/Driver/CompilerConfig.fsi
+src/Compiler/Generated/GeneratedNames.fsi
+src/Compiler/Service/FSharpCheckerResults.fsi
+src/Compiler/Service/service.fsi
+src/Compiler/TypedTree/CompilerGlobalState.fsi
+src/Compiler/TypedTree/SynthesizedTypeMaps.fsi
+src/Compiler/TypedTree/TypedTreeDiff.fsi
+src/Compiler/Utilities/Activity.fsi

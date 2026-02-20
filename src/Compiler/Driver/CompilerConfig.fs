@@ -450,6 +450,27 @@ type TypeCheckingConfig =
         DumpGraph: bool
     }
 
+type HotReloadEmitArtifacts =
+    { IlxMainModule: ILModuleDef
+      TokenMappings: FSharp.Compiler.AbstractIL.ILBinaryWriter.ILTokenMappings
+      AssemblyBytes: byte[]
+      PortablePdbBytes: byte[] option
+      IlxGenEnvSnapshot: FSharp.Compiler.IlxGen.IlxGenEnvSnapshot
+      OptimizedImpls: CheckedAssemblyAfterOptimization }
+
+type IHotReloadEmitHook =
+    abstract PrepareForCodeGeneration:
+        hotReloadCapture: bool * compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
+
+    abstract BeforeFileEmit:
+        hotReloadCapture: bool * compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
+
+    abstract CaptureArtifacts:
+        compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState * artifacts: HotReloadEmitArtifacts -> unit
+
+    abstract FallbackEmit:
+        compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
+
 [<NoEquality; NoComparison>]
 type TcConfigBuilder =
     {
@@ -606,6 +627,7 @@ type TcConfigBuilder =
         mutable emitDebugInfoInQuotations: bool
 
         mutable hotReloadCapture: bool
+        mutable hotReloadEmitHook: IHotReloadEmitHook option
 
         mutable strictIndentation: bool option
 
@@ -828,6 +850,7 @@ type TcConfigBuilder =
             useReflectionFreeCodeGen = false
             emitDebugInfoInQuotations = false
             hotReloadCapture = false
+            hotReloadEmitHook = None
             exename = None
             shadowCopyReferences = false
             useSdkRefs = true
@@ -1400,6 +1423,7 @@ type TcConfig private (data: TcConfigBuilder, validate: bool) =
     member _.emitDebugInfoInQuotations = data.emitDebugInfoInQuotations
 
     member _.hotReloadCapture = data.hotReloadCapture
+    member _.hotReloadEmitHook = data.hotReloadEmitHook
     member _.copyFSharpCore = data.copyFSharpCore
     member _.shadowCopyReferences = data.shadowCopyReferences
     member _.useSdkRefs = data.useSdkRefs

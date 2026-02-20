@@ -1,6 +1,7 @@
 namespace FSharp.Compiler.HotReload
 
 open System
+open FSharp.Compiler.EnvironmentHelpers
 #if NET5_0_OR_GREATER
 open System.Reflection.Metadata
 #endif
@@ -21,14 +22,6 @@ module internal HotReloadCapability =
 
     [<Literal>]
     let private RuntimeApplyFeatureFlagName = "FSHARP_HOTRELOAD_ENABLE_RUNTIME_APPLY"
-
-    let private isEnvVarTruthy (name: string) =
-        match Environment.GetEnvironmentVariable(name) with
-        | null
-        | "" -> false
-        | value when value.Equals("1", StringComparison.OrdinalIgnoreCase) -> true
-        | value when value.Equals("true", StringComparison.OrdinalIgnoreCase) -> true
-        | _ -> false
 
     let private runtimeApplySupported : bool =
 #if NET5_0_OR_GREATER

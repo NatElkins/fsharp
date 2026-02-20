@@ -20,52 +20,27 @@ open FSharp.Compiler.GeneratedNames
 /// policy to make all globally-allocated objects concurrency safe in case future versions of the compiler
 /// are used to host multiple concurrent instances of compilation.
 type NiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMaps option) =
-    // Use file path (stable) instead of FileIndex (unstable when files added/removed).
-    // Hash the file path to get a stable integer key.
     let basicNameCounts = ConcurrentDictionary<struct (string * int), int ref>(max Environment.ProcessorCount 1, 127)
     // Cache this as a delegate.
     let basicNameCountsAddDelegate = Func<struct (string * int), int ref>(fun _ -> ref 0)
 
-    // FNV-1a hash for stable file path hashing
-    let stableFileHash (path: string) =
-        let mutable hash = 0x811c9dc5u
-        for c in path do
-            hash <- hash ^^^ uint32 c
-            hash <- hash * 0x01000193u
-        int hash
-
-    let ensureOrdinal basicName (m: range) =
-        // Use stable hash of file path instead of FileIndex which changes when files added/removed
-        let key = struct (basicName, stableFileHash m.FileName)
+    let increment basicName (m: range) =
+        let key = struct (basicName, m.FileIndex)
         let countCell = basicNameCounts.GetOrAdd(key, basicNameCountsAddDelegate)
-        let count = Interlocked.Increment(countCell)
-        count - 1
-
-    let makeLegacyName basicName (m: range) ordinal =
-        let suffix =
-            if ordinal = 0 then
-                string m.StartLine
-            else
-                $"{m.StartLine}-{ordinal}"
-
-        CompilerGeneratedNameSuffix basicName suffix
+        Interlocked.Increment(countCell)
 
     member _.FreshCompilerGeneratedNameOfBasicName (basicName, m: range) =
         match getSynthesizedMap() with
         | Some map ->
-            // When hot reload is enabled, use only the map's ordinals.
-            // Don't increment basicNameCounts - the counters have different keys
-            // (per-file vs global) and would drift out of sync.
             map.GetOrAddName basicName
         | None ->
-            let ordinal = ensureOrdinal basicName m
-            // Preserve legacy compiler-generated naming when hot reload is inactive.
-            makeLegacyName basicName m ordinal
+            let count = increment basicName m
+            CompilerGeneratedNameSuffix basicName (string m.StartLine + (match (count - 1) with 0 -> "" | n -> "-" + string n))
 
     member this.FreshCompilerGeneratedName (name, m: range) =
         this.FreshCompilerGeneratedNameOfBasicName (GetBasicNameOfPossibleCompilerGeneratedName name, m)
 
-    member _.IncrementOnly(name: string, m: range) = ensureOrdinal name m
+    member _.IncrementOnly(name: string, m: range) = increment name m
 
     new () = NiceNameGenerator(fun () -> None)
 

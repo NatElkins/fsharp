@@ -25,7 +25,6 @@ open FSharp.Compiler.AbstractIL.ILX
 open FSharp.Compiler.AbstractIL.ILX.Types
 open FSharp.Compiler.AttributeChecking
 open FSharp.Compiler.CompilerGlobalState
-open FSharp.Compiler.SynthesizedTypeMaps
 open FSharp.Compiler.DiagnosticsLogger
 open FSharp.Compiler.Features
 open FSharp.Compiler.Infos
@@ -46,13 +45,8 @@ open FSharp.Compiler.TypedTreeOps.DebugPrint
 open FSharp.Compiler.TypeHierarchy
 open FSharp.Compiler.TypeRelations
 
-let private hotReloadIlxName (g: TcGlobals) basicName m =
-    let state = g.CompilerGlobalState.Value
-
-    let generator () =
-        state.IlxGenNiceNameGenerator.FreshCompilerGeneratedName(basicName, m)
-
-    SynthesizedTypeMaps.nextName state.SynthesizedTypeMaps basicName generator
+let private freshIlxName (g: TcGlobals) name m =
+    g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.FreshCompilerGeneratedName(name, m)
 
 let getEmptyStackGuard () = StackGuard("IlxAssemblyGenerator")
 
@@ -879,12 +873,12 @@ let GenFieldSpecForStaticField (isInteractive, g: TcGlobals, ilContainerTy, vspe
     elif g.realsig then
         assert (g.CompilerGlobalState |> Option.isSome)
 
-        mkILFieldSpecInTy (ilContainerTy, CompilerGeneratedName(hotReloadIlxName g nm m), ilTy)
+        mkILFieldSpecInTy (ilContainerTy, CompilerGeneratedName(freshIlxName g nm m), ilTy)
     else
         let fieldName =
             // Ensure that we have an g.CompilerGlobalState
             assert (g.CompilerGlobalState |> Option.isSome)
-            hotReloadIlxName g nm m
+            freshIlxName g nm m
 
         let ilFieldContainerTy = mkILTyForCompLoc (CompLocForInitClass cloc)
         mkILFieldSpecInTy (ilFieldContainerTy, fieldName, ilTy)
@@ -4770,7 +4764,7 @@ and GenTry cenv cgbuf eenv scopeMarks (e1, m, resultTy, spTry) =
             assert (cenv.g.CompilerGlobalState |> Option.isSome)
 
             let whereToSave, _realloc, eenvinner =
-                AllocLocal cenv cgbuf eenvinner true (hotReloadIlxName cenv.g "tryres" m, ilResultTy, false) (startTryMark, endTryMark)
+                AllocLocal cenv cgbuf eenvinner true (freshIlxName cenv.g "tryres" m, ilResultTy, false) (startTryMark, endTryMark)
 
             Some(whereToSave, ilResultTy), eenvinner
 
@@ -5036,7 +5030,7 @@ and GenIntegerForLoop cenv cgbuf eenv (spFor, spTo, v, e1, dir, e2, loopBody, m)
             // Ensure that we have an g.CompilerGlobalState
             assert (g.CompilerGlobalState |> Option.isSome)
 
-            let vName = hotReloadIlxName g "endLoop" m
+            let vName = freshIlxName g "endLoop" m
 
             let v, _realloc, eenvinner =
                 AllocLocal cenv cgbuf eenvinner true (vName, g.ilg.typ_Int32, false) (start, finish)
@@ -5644,7 +5638,7 @@ and GenDefaultValue cenv cgbuf eenv (ty, m) =
                     // Ensure that we have an g.CompilerGlobalState
                     assert (g.CompilerGlobalState |> Option.isSome)
 
-                    AllocLocal cenv cgbuf eenv true (hotReloadIlxName g "default" m, ilTy, false) scopeMarks
+                    AllocLocal cenv cgbuf eenv true (freshIlxName g "default" m, ilTy, false) scopeMarks
                 // We can normally rely on .NET IL zero-initialization of the temporaries
                 // we create to get zero values for struct types.
                 //
@@ -6302,11 +6296,11 @@ and GenStructStateMachine cenv cgbuf eenvouter (res: LoweredStateMachine) sequel
 
         // The local for the state machine
         let locIdx, realloc, _ =
-            AllocLocal cenv cgbuf eenvouter true (hotReloadIlxName g "machine" m, ilCloTy, false) scopeMarks
+            AllocLocal cenv cgbuf eenvouter true (freshIlxName g "machine" m, ilCloTy, false) scopeMarks
 
         // The local for the state machine address
         let locIdx2, _realloc2, _ =
-            AllocLocal cenv cgbuf eenvouter true (hotReloadIlxName g afterCodeThisVar.DisplayName m, ilMachineAddrTy, false) scopeMarks
+            AllocLocal cenv cgbuf eenvouter true (freshIlxName g afterCodeThisVar.DisplayName m, ilMachineAddrTy, false) scopeMarks
 
         let eenvouter =
             eenvouter
@@ -9985,7 +9979,7 @@ and EmitSaveStack cenv cgbuf eenv m scopeMarks =
                 // Ensure that we have an g.CompilerGlobalState
                 assert (cenv.g.CompilerGlobalState |> Option.isSome)
 
-                AllocLocal cenv cgbuf eenv true (hotReloadIlxName cenv.g "spill" m, ty, false) scopeMarks
+                AllocLocal cenv cgbuf eenv true (freshIlxName cenv.g "spill" m, ty, false) scopeMarks
 
             idx, eenv)
 

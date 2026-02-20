@@ -25,6 +25,7 @@ open FSharp.Compiler.SynthesizedTypeMaps
 open FSharp.Compiler.Syntax.PrettyNaming
 open FSharp.Compiler.TypedTreeDiff
 open Internal.Utilities
+open FSharp.Compiler.EnvironmentHelpers
 
 module MetadataWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 open MetadataWriter
@@ -178,22 +179,14 @@ let private opCodeLookup : Lazy<Dictionary<int, OpCode>> =
                  dict[value] <- op
          dict)
 
-/// Helper to check if an environment variable is set to a truthy value ("1" or "true")
-let private isEnvVarTruthy (name: string) : Lazy<bool> =
-    lazy (
-        match System.Environment.GetEnvironmentVariable(name) with
-        | null -> false
-        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
-        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
-        | _ -> false
-    )
+let private traceFlag name = lazy (isEnvVarTruthy name)
 
 /// Trace flags for hot reload debugging - controlled via environment variables
-let private traceUserStringUpdates = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_STRINGS"
-let private traceSynthesizedMappings = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_SYNTHESIZED"
-let private traceMethodUpdates = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_METHODS"
-let private traceMetadata = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_METADATA"
-let private traceHeapOffsets = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_HEAP_OFFSETS"
+let private traceUserStringUpdates = traceFlag "FSHARP_HOTRELOAD_TRACE_STRINGS"
+let private traceSynthesizedMappings = traceFlag "FSHARP_HOTRELOAD_TRACE_SYNTHESIZED"
+let private traceMethodUpdates = traceFlag "FSHARP_HOTRELOAD_TRACE_METHODS"
+let private traceMetadata = traceFlag "FSHARP_HOTRELOAD_TRACE_METADATA"
+let private traceHeapOffsets = traceFlag "FSHARP_HOTRELOAD_TRACE_HEAP_OFFSETS"
 
 /// Deduplicates method keys while preserving order
 let private dedupeMethodKeys (keys: MethodDefinitionKey list) =

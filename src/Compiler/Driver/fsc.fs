@@ -30,9 +30,7 @@ open FSharp.Compiler.AbstractIL
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryReader
 open FSharp.Compiler.AccessibilityLogic
-open FSharp.Compiler.HotReloadBaseline
-open FSharp.Compiler.HotReloadPdb
-open FSharp.Compiler.HotReload
+open FSharp.Compiler.HotReloadEmitHook
 open FSharp.Compiler.CheckDeclarations
 open FSharp.Compiler.CompilerConfig
 open FSharp.Compiler.CompilerDiagnostics
@@ -43,7 +41,6 @@ open FSharp.Compiler.DependencyManager
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.DiagnosticsLogger
 open FSharp.Compiler.Features
-open FSharp.Compiler.SynthesizedTypeMaps
 open FSharp.Compiler.IlxGen
 open FSharp.Compiler.InfoReader
 open FSharp.Compiler.IO
@@ -977,39 +974,9 @@ let main4
     use _ = UseBuildPhase BuildPhase.IlxGen
 
     let compilerGlobalState = tcGlobals.CompilerGlobalState.Value
+    let hotReloadEmitHook = defaultArg tcConfig.hotReloadEmitHook defaultHotReloadEmitHook
 
-    if tcConfig.hotReloadCapture then
-        match compilerGlobalState.SynthesizedTypeMaps with
-        | Some map -> map.BeginSession()
-        | None ->
-            let map = FSharpSynthesizedTypeMaps()
-            map.BeginSession()
-            compilerGlobalState.SynthesizedTypeMaps <- Some map
-    elif FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
-        // Preserve synthesized-name replay while a hot reload session is active,
-        // even when the output build itself is emitted without capture flags.
-        let activeMap =
-            match compilerGlobalState.SynthesizedTypeMaps with
-            | Some existing -> Some existing
-            | None ->
-                match FSharpEditAndContinueLanguageService.Instance.TryGetSession() with
-                | ValueSome session ->
-                    let restored = FSharpSynthesizedTypeMaps()
-                    session.Baseline.SynthesizedNameSnapshot
-                    |> Map.toSeq
-                    |> Seq.map (fun (k, v) -> struct (k, v))
-                    |> restored.LoadSnapshot
-                    Some restored
-                | ValueNone -> None
-
-        match activeMap with
-        | Some map ->
-            map.BeginSession()
-            compilerGlobalState.SynthesizedTypeMaps <- Some map
-        | None ->
-            compilerGlobalState.SynthesizedTypeMaps <- None
-    else
-        compilerGlobalState.SynthesizedTypeMaps <- None
+    hotReloadEmitHook.PrepareForCodeGeneration(tcConfig.hotReloadCapture, compilerGlobalState)
 
     // Create the Abstract IL generator
     let ilxGenerator =
@@ -1175,14 +1142,11 @@ let main6
             | _ -> aref
         | None -> aref
 
+    let hotReloadEmitHook = defaultArg tcConfig.hotReloadEmitHook defaultHotReloadEmitHook
+
     match dynamicAssemblyCreator with
     | None ->
-        // Only clear the hot reload session when NOT in hot reload capture mode.
-        // In IDE scenarios, MSBuild may run in the background and we don't want
-        // to clear an active hot reload session being used for live editing.
-        if not tcConfig.hotReloadCapture then
-            FSharpEditAndContinueLanguageService.Instance.EndSession()
-            tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps <- None
+        hotReloadEmitHook.BeforeFileEmit(tcConfig.hotReloadCapture, tcGlobals.CompilerGlobalState.Value)
 
         try
             match tcConfig.emitMetadataAssembly with
@@ -1264,26 +1228,15 @@ let main6
                         | Some pdbPath, Some pdbBytes -> File.WriteAllBytes(pdbPath, pdbBytes)
                         | _ -> ()
 
-                        let portablePdbSnapshot = pdbBytesOpt |> Option.map HotReloadPdb.createSnapshot
-
-                        let baseline =
-                            let ilxGenEnvironment =
-                                if obj.ReferenceEquals(ilxGenEnvSnapshot, null) then
-                                    None
-                                else
-                                    Some ilxGenEnvSnapshot
-
-                            HotReloadBaseline.createFromEmittedArtifacts
-                                ilxMainModule
-                                tokenMappings
-                                assemblyBytes
-                                portablePdbSnapshot
-                                ilxGenEnvironment
-
-                        FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, optimizedImpls)
-                        match tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps with
-                        | Some map -> map.BeginSession()
-                        | None -> ()
+                        hotReloadEmitHook.CaptureArtifacts(
+                            tcGlobals.CompilerGlobalState.Value,
+                            { IlxMainModule = ilxMainModule
+                              TokenMappings = tokenMappings
+                              AssemblyBytes = assemblyBytes
+                              PortablePdbBytes = pdbBytesOpt
+                              IlxGenEnvSnapshot = ilxGenEnvSnapshot
+                              OptimizedImpls = optimizedImpls }
+                        )
                     else
                         // Normal compilation without hot reload capture
                         ILBinaryWriter.WriteILBinaryFile(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
@@ -1293,8 +1246,7 @@ let main6
             errorRecoveryNoRange e
             exiter.Exit 1
     | Some da ->
-        FSharpEditAndContinueLanguageService.Instance.EndSession()
-        tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps <- None
+        hotReloadEmitHook.FallbackEmit(tcGlobals.CompilerGlobalState.Value)
         da (tcConfig, tcGlobals, outfile, ilxMainModule)
 
     AbortOnError(diagnosticsLogger, exiter)

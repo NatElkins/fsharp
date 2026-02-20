@@ -114,6 +114,7 @@
     </EmbeddedResource>
     <Compile Include="Utilities\Activity.fsi" />
     <Compile Include="Utilities\Activity.fs" />
+    <Compile Include="Utilities\EnvironmentHelpers.fs" />
 	<Compile Include="Utilities\Caches.fsi" />
     <Compile Include="Utilities\Caches.fs" />
     <Compile Include="Utilities\illib.fsi" />
@@ -345,7 +346,7 @@
     <Compile Include="TypedTree\TypedTreeOps.fs" />
     <Compile Include="TypedTree\TypedTreeDiff.fsi" />
     <Compile Include="TypedTree\TypedTreeDiff.fs" />
-    <Compile Include="TypedTree\DefinitionMap.fs" />
+    <Compile Include="HotReload\DefinitionMap.fs" />
     <Compile Include="TypedTree\TypedTreePickle.fsi" />
     <Compile Include="TypedTree\TypedTreePickle.fs" />
     <Compile Include="TypedTree\UpdatePrettyTyparNames.fsi" />
@@ -438,7 +439,7 @@
     <Compile Include="CodeGen\HotReloadBaseline.fsi" />
     <Compile Include="CodeGen\HotReloadBaseline.fs" />
     <Compile Include="CodeGen\HotReloadPdb.fs" />
-    <Compile Include="CodeGen\FSharpSymbolChanges.fs" />
+    <Compile Include="HotReload\FSharpSymbolChanges.fs" />
     <Compile Include="CodeGen\IlxDeltaStreams.fs" />
     <Compile Include="CodeGen\FSharpDefinitionIndex.fs" />
     <Compile Include="CodeGen\DeltaMetadataTypes.fs" />
@@ -479,6 +480,7 @@
     </Compile>
     <Compile Include="Driver\CompilerConfig.fsi" />
     <Compile Include="Driver\CompilerConfig.fs" />
+    <Compile Include="Driver\HotReloadEmitHook.fs" />
     <Compile Include="Driver\CompilerImports.fsi" />
     <Compile Include="Driver\CompilerImports.fs" />
     <Compile Include="Driver\CompilerDiagnostics.fsi" />

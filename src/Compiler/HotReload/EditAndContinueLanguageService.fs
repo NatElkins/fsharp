@@ -11,6 +11,7 @@ open FSharp.Compiler.IlxDeltaEmitter
 open FSharp.Compiler.HotReload.DeltaBuilder
 open FSharp.Compiler.TypedTree
 open FSharp.Compiler.SynthesizedTypeMaps
+open FSharp.Compiler.EnvironmentHelpers
 
 /// <summary>
 /// Entry point mirroring Roslyn's <c>EditAndContinueLanguageService</c>. It centralises session lifecycle
@@ -19,13 +20,6 @@ open FSharp.Compiler.SynthesizedTypeMaps
 type internal FSharpEditAndContinueLanguageService private () =
 
     static let lazyInstance = lazy FSharpEditAndContinueLanguageService()
-    static let isEnvVarTruthy (name: string) =
-        match Environment.GetEnvironmentVariable(name) with
-        | null -> false
-        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
-        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
-        | _ -> false
-
     static let traceMetadataFlagName = "FSHARP_HOTRELOAD_TRACE_METADATA"
 
     static let traceMethodsFlagName = "FSHARP_HOTRELOAD_TRACE_METHODS"

@@ -12,17 +12,12 @@ open FSharp.Compiler.IlxGen
 
 module ILBaselineReader = FSharp.Compiler.AbstractIL.ILBaselineReader
 open FSharp.Compiler.Syntax.PrettyNaming
+open FSharp.Compiler.EnvironmentHelpers
 
 let private tableCount = DeltaTokens.TableCount
 
 [<Literal>]
 let private TraceHeapOffsetsFlagName = "FSHARP_HOTRELOAD_TRACE_HEAP_OFFSETS"
-
-let private isEnvVarTruthy (name: string) =
-    match Environment.GetEnvironmentVariable(name) with
-    | null
-    | "" -> false
-    | value -> value = "1" || String.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
 
 let private traceHeapOffsets = lazy (isEnvVarTruthy TraceHeapOffsetsFlagName)
 

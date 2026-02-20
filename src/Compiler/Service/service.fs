@@ -38,6 +38,7 @@ open FSharp.Compiler.HotReload.DeltaBuilder
 open FSharp.Compiler.IlxDeltaEmitter
 open FSharp.Compiler.TypedTree
 open FSharp.Compiler.SynthesizedTypeMaps
+open FSharp.Compiler.EnvironmentHelpers
 
 [<RequireQualifiedAccess>]
 type FSharpHotReloadError =
@@ -149,6 +150,223 @@ module CompileHelpers =
 
         diagnostics.ToArray(), result
 
+[<Sealed>]
+type internal FSharpHotReloadService
+    (
+        readIlModule: string -> ILModuleDef,
+        createBaseline: TcGlobals -> ILModuleDef -> string -> FSharpEmitBaseline,
+        getHotReloadDiffInputs: FSharpCheckProjectResults -> TcGlobals * CheckedAssemblyAfterOptimization,
+        getErrorDiagnostics: FSharpDiagnostic[] -> FSharpDiagnostic[],
+        waitForStableFile: string -> unit,
+        tryGetOutputFingerprint: string -> (DateTime * byte[] option) option,
+        hasOutputFingerprintChanged:
+            string -> (DateTime * byte[] option) option -> (DateTime * byte[] option) option -> bool,
+        toPublicDelta: IlxDelta -> FSharpHotReloadDelta,
+        mapHotReloadError: HotReloadError -> FSharpHotReloadError
+    ) =
+
+    let hotReloadGate = obj()
+
+    let mutable currentSynthesizedTypeMaps: FSharpSynthesizedTypeMaps option = None
+
+    // Snapshot of the last committed output assembly. If semantic edits are detected while this
+    // fingerprint remains unchanged, we refuse to emit deltas from stale binaries.
+    let mutable currentOutputFingerprint: (DateTime * byte[] option) option = None
+
+    member _.StartHotReloadSession
+        (parseAndCheckProject: unit -> Async<FSharpCheckProjectResults>)
+        (outputPath: string option)
+        =
+        async {
+            match outputPath with
+            | None -> return Result.Error FSharpHotReloadError.MissingOutputPath
+            | Some outputPath ->
+                let! projectResults = parseAndCheckProject ()
+                let errors = getErrorDiagnostics projectResults.Diagnostics
+
+                if projectResults.HasCriticalErrors || errors.Length > 0 then
+                    return Result.Error(FSharpHotReloadError.CompilationFailed errors)
+                elif not (File.Exists(outputPath)) then
+                    return
+                        Result.Error(
+                            FSharpHotReloadError.DeltaEmissionFailed(
+                                $"Output assembly '{outputPath}' was not found. Build the project before starting a hot reload session."
+                            )
+                        )
+                else
+                    let tcGlobals, implementationFiles = getHotReloadDiffInputs projectResults
+                    waitForStableFile outputPath
+
+                    let baselineResult : Result<_, FSharpHotReloadError> =
+                        try
+                            let ilModule = readIlModule outputPath
+                            let baseline = createBaseline tcGlobals ilModule outputPath
+                            Ok(baseline, implementationFiles)
+                        with ex ->
+                            Result.Error(
+                                FSharpHotReloadError.DeltaEmissionFailed(
+                                    $"Failed to create hot reload baseline: {ex.Message}"
+                                )
+                            )
+
+                    match baselineResult with
+                    | Result.Error error -> return Result.Error error
+                    | Ok(baseline, implementationFiles) ->
+                        lock hotReloadGate (fun () ->
+                            let compilerState = tcGlobals.CompilerGlobalState.Value
+                            let map =
+                                let targetMap =
+                                    match currentSynthesizedTypeMaps with
+                                    | Some existing -> existing
+                                    | None ->
+                                        let created = FSharpSynthesizedTypeMaps()
+                                        currentSynthesizedTypeMaps <- Some created
+                                        created
+
+                                baseline.SynthesizedNameSnapshot
+                                |> Map.toSeq
+                                |> Seq.map (fun (k, v) -> struct (k, v))
+                                |> targetMap.LoadSnapshot
+                                targetMap.BeginSession()
+                                targetMap
+
+                            compilerState.SynthesizedTypeMaps <- Some map
+
+                            FSharpEditAndContinueLanguageService.Instance.EndSession()
+                            FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
+                            currentOutputFingerprint <- tryGetOutputFingerprint outputPath)
+
+                        return Result.Ok ()
+        }
+
+    member _.EmitHotReloadDelta
+        (parseAndCheckProject: unit -> Async<FSharpCheckProjectResults>)
+        (outputPath: string option)
+        =
+        async {
+            match outputPath with
+            | None -> return Result.Error FSharpHotReloadError.MissingOutputPath
+            | Some outputPath ->
+                let! projectResults = parseAndCheckProject ()
+
+                let errors = getErrorDiagnostics projectResults.Diagnostics
+
+                if projectResults.HasCriticalErrors || errors.Length > 0 then
+                    return Result.Error(FSharpHotReloadError.CompilationFailed errors)
+                elif not (File.Exists(outputPath)) then
+                    return
+                        Result.Error(
+                            FSharpHotReloadError.DeltaEmissionFailed(
+                                $"Output assembly '{outputPath}' was not found. Build the project before emitting a hot reload delta."
+                            )
+                        )
+                else
+                    let tcGlobals, implementationFiles = getHotReloadDiffInputs projectResults
+                    waitForStableFile outputPath
+                    let outputFingerprint = tryGetOutputFingerprint outputPath
+
+                    lock hotReloadGate (fun () ->
+                        if not FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
+                            match FSharpEditAndContinueLanguageService.Instance.TryRestoreSession() with
+                            | ValueSome restoredSession ->
+                                let compilerState = tcGlobals.CompilerGlobalState.Value
+
+                                let map =
+                                    match currentSynthesizedTypeMaps with
+                                    | Some existing -> existing
+                                    | None ->
+                                        let created = FSharpSynthesizedTypeMaps()
+                                        currentSynthesizedTypeMaps <- Some created
+                                        created
+
+                                restoredSession.Baseline.SynthesizedNameSnapshot
+                                |> Map.toSeq
+                                |> Seq.map (fun (k, v) -> struct (k, v))
+                                |> map.LoadSnapshot
+                                map.BeginSession()
+                                compilerState.SynthesizedTypeMaps <- Some map
+                            | ValueNone -> ())
+
+                    if not FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
+                        return Result.Error FSharpHotReloadError.NoActiveSession
+                    else
+                        let staleOutputErrorOpt =
+                            lock hotReloadGate (fun () ->
+                                match FSharpEditAndContinueLanguageService.Instance.TryGetSession() with
+                                | ValueNone -> None
+                                | ValueSome session ->
+                                    let symbolChanges = computeSymbolChanges tcGlobals session.ImplementationFiles implementationFiles
+
+                                    let updatedTypes, updatedMethods, accessorUpdates =
+                                        mapSymbolChangesToDelta session.Baseline symbolChanges
+
+                                    let hasUpdates =
+                                        not (List.isEmpty updatedTypes)
+                                        || not (List.isEmpty updatedMethods)
+                                        || not (List.isEmpty accessorUpdates)
+                                        || not (List.isEmpty symbolChanges.Added)
+
+                                    if hasUpdates && not (hasOutputFingerprintChanged outputPath currentOutputFingerprint outputFingerprint) then
+                                        Some(
+                                            FSharpHotReloadError.DeltaEmissionFailed(
+                                                $"Output assembly '{outputPath}' did not change after compilation; refusing to emit a delta from stale build output."
+                                            )
+                                        )
+                                    else
+                                        None)
+
+                        match staleOutputErrorOpt with
+                        | Some staleError -> return Result.Error staleError
+                        | None ->
+                            let ilModuleResult : Result<_, FSharpHotReloadError> =
+                                try
+                                    readIlModule outputPath |> Ok
+                                with ex ->
+                                    Result.Error(
+                                        FSharpHotReloadError.DeltaEmissionFailed(
+                                            $"Failed to read updated assembly '{outputPath}': {ex.Message}"
+                                        )
+                                    )
+
+                            match ilModuleResult with
+                            | Result.Error error -> return Result.Error error
+                            | Ok ilModule ->
+                                lock hotReloadGate (fun () ->
+                                    match currentSynthesizedTypeMaps with
+                                    | Some map ->
+                                        map.BeginSession()
+                                        tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps <- Some map
+                                    | None -> ())
+
+                                match
+                                    FSharpEditAndContinueLanguageService.Instance.EmitDeltaForCompilation(
+                                        tcGlobals,
+                                        implementationFiles,
+                                        ilModule
+                                    )
+                                with
+                                | Ok result ->
+                                    match result.Delta.UpdatedBaseline with
+                                    | Some _ ->
+                                        lock hotReloadGate (fun () ->
+                                            currentOutputFingerprint <- outputFingerprint)
+                                    | None -> ()
+                                    return Result.Ok(toPublicDelta result.Delta)
+                                | Error error -> return Result.Error(mapHotReloadError error)
+        }
+
+    member _.EndSession() =
+        lock hotReloadGate (fun () ->
+            currentSynthesizedTypeMaps <- None
+            currentOutputFingerprint <- None
+            FSharpEditAndContinueLanguageService.Instance.ResetSessionState())
+
+    member _.SessionActive = FSharpEditAndContinueLanguageService.Instance.IsSessionActive
+
+    member _.Capabilities =
+        let capabilities = HotReloadCapability.current
+        FSharpHotReloadCapabilities.FromInternalFlags(capabilities.Flags)
+
 [<Sealed; AutoSerializable(false)>]
 // There is typically only one instance of this type in an IDE process.
 type FSharpChecker
@@ -215,14 +433,6 @@ type FSharpChecker
     // This cache is safe for concurrent access.
     let braceMatchCache =
         MruCache<AnyCallerThreadToken, _, _>(braceMatchCacheSize, areSimilar = AreSimilarForParsing, areSame = AreSameForParsing)
-
-    let hotReloadGate = obj()
-
-    let mutable currentSynthesizedTypeMaps: FSharpSynthesizedTypeMaps option = None
-
-    // Snapshot of the last committed output assembly. If semantic edits are detected while this
-    // fingerprint remains unchanged, we refuse to emit deltas from stale binaries.
-    let mutable currentOutputFingerprint: (DateTime * byte[] option) option = None
 
     static let inferParallelReferenceResolution (parallelReferenceResolution: bool option) =
         let explicitValue =
@@ -331,14 +541,6 @@ type FSharpChecker
 
     [<Literal>]
     let StableFileRequiredStableReads = 2
-
-    let isEnvVarTruthy (name: string) =
-        match Environment.GetEnvironmentVariable(name) with
-        | null
-        | "" -> false
-        | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
-        | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
-        | _ -> false
 
     let traceOutputFingerprint = isEnvVarTruthy HotReloadTraceOutputFlagName
 
@@ -506,6 +708,19 @@ type FSharpChecker
         let tcGlobals, _, _, typedImplFiles = projectResults.TypedImplementationFiles
         tcGlobals, toHotReloadImplementationSnapshot typedImplFiles
 
+    let hotReloadService =
+        FSharpHotReloadService(
+            readIlModule,
+            createBaseline,
+            getHotReloadDiffInputs,
+            getErrorDiagnostics,
+            waitForStableFile,
+            tryGetOutputFingerprint,
+            hasOutputFingerprintChanged,
+            toPublicDelta,
+            mapHotReloadError
+        )
+
     static member getParallelReferenceResolutionFromEnvironment() =
         getParallelReferenceResolutionFromEnvironment ()
 
@@ -582,183 +797,13 @@ type FSharpChecker
         (parseAndCheckProject: unit -> Async<FSharpCheckProjectResults>)
         (outputPath: string option)
         =
-        async {
-            match outputPath with
-            | None -> return Result.Error FSharpHotReloadError.MissingOutputPath
-            | Some outputPath ->
-                let! projectResults = parseAndCheckProject ()
-                let errors = getErrorDiagnostics projectResults.Diagnostics
-
-                if projectResults.HasCriticalErrors || errors.Length > 0 then
-                    return Result.Error(FSharpHotReloadError.CompilationFailed errors)
-                elif not (File.Exists(outputPath)) then
-                    return
-                        Result.Error(
-                            FSharpHotReloadError.DeltaEmissionFailed(
-                                $"Output assembly '{outputPath}' was not found. Build the project before starting a hot reload session."
-                            )
-                        )
-                else
-                    let tcGlobals, implementationFiles = getHotReloadDiffInputs projectResults
-                    waitForStableFile outputPath
-
-                    let baselineResult : Result<_, FSharpHotReloadError> =
-                        try
-                            let ilModule = readIlModule outputPath
-                            let baseline = createBaseline tcGlobals ilModule outputPath
-                            Ok(baseline, implementationFiles)
-                        with ex ->
-                            Result.Error(
-                                FSharpHotReloadError.DeltaEmissionFailed(
-                                    $"Failed to create hot reload baseline: {ex.Message}"
-                                )
-                            )
-
-                    match baselineResult with
-                    | Result.Error error -> return Result.Error error
-                    | Ok(baseline, implementationFiles) ->
-                        lock hotReloadGate (fun () ->
-                            let compilerState = tcGlobals.CompilerGlobalState.Value
-                            let map =
-                                let targetMap =
-                                    match currentSynthesizedTypeMaps with
-                                    | Some existing -> existing
-                                    | None ->
-                                        let created = FSharpSynthesizedTypeMaps()
-                                        currentSynthesizedTypeMaps <- Some created
-                                        created
-
-                                baseline.SynthesizedNameSnapshot
-                                |> Map.toSeq
-                                |> Seq.map (fun (k, v) -> struct (k, v))
-                                |> targetMap.LoadSnapshot
-                                targetMap.BeginSession()
-                                targetMap
-
-                            compilerState.SynthesizedTypeMaps <- Some map
-
-                            FSharpEditAndContinueLanguageService.Instance.EndSession()
-                            FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
-                            currentOutputFingerprint <- tryGetOutputFingerprint outputPath)
-
-                        return Result.Ok ()
-        }
+        hotReloadService.StartHotReloadSession parseAndCheckProject outputPath
 
     member private _.EmitHotReloadDeltaCore
         (parseAndCheckProject: unit -> Async<FSharpCheckProjectResults>)
         (outputPath: string option)
         =
-        async {
-            match outputPath with
-            | None -> return Result.Error FSharpHotReloadError.MissingOutputPath
-            | Some outputPath ->
-                let! projectResults = parseAndCheckProject ()
-
-                let errors = getErrorDiagnostics projectResults.Diagnostics
-
-                if projectResults.HasCriticalErrors || errors.Length > 0 then
-                    return Result.Error(FSharpHotReloadError.CompilationFailed errors)
-                elif not (File.Exists(outputPath)) then
-                    return
-                        Result.Error(
-                            FSharpHotReloadError.DeltaEmissionFailed(
-                                $"Output assembly '{outputPath}' was not found. Build the project before emitting a hot reload delta."
-                            )
-                        )
-                else
-                    let tcGlobals, implementationFiles = getHotReloadDiffInputs projectResults
-                    waitForStableFile outputPath
-                    let outputFingerprint = tryGetOutputFingerprint outputPath
-
-                    lock hotReloadGate (fun () ->
-                        if not FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
-                            match FSharpEditAndContinueLanguageService.Instance.TryRestoreSession() with
-                            | ValueSome restoredSession ->
-                                let compilerState = tcGlobals.CompilerGlobalState.Value
-
-                                let map =
-                                    match currentSynthesizedTypeMaps with
-                                    | Some existing -> existing
-                                    | None ->
-                                        let created = FSharpSynthesizedTypeMaps()
-                                        currentSynthesizedTypeMaps <- Some created
-                                        created
-
-                                restoredSession.Baseline.SynthesizedNameSnapshot
-                                |> Map.toSeq
-                                |> Seq.map (fun (k, v) -> struct (k, v))
-                                |> map.LoadSnapshot
-                                map.BeginSession()
-                                compilerState.SynthesizedTypeMaps <- Some map
-                            | ValueNone -> ())
-
-                    if not FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
-                        return Result.Error FSharpHotReloadError.NoActiveSession
-                    else
-                        let staleOutputErrorOpt =
-                            lock hotReloadGate (fun () ->
-                                match FSharpEditAndContinueLanguageService.Instance.TryGetSession() with
-                                | ValueNone -> None
-                                | ValueSome session ->
-                                    let symbolChanges = computeSymbolChanges tcGlobals session.ImplementationFiles implementationFiles
-
-                                    let updatedTypes, updatedMethods, accessorUpdates =
-                                        mapSymbolChangesToDelta session.Baseline symbolChanges
-
-                                    let hasUpdates =
-                                        not (List.isEmpty updatedTypes)
-                                        || not (List.isEmpty updatedMethods)
-                                        || not (List.isEmpty accessorUpdates)
-                                        || not (List.isEmpty symbolChanges.Added)
-
-                                    if hasUpdates && not (hasOutputFingerprintChanged outputPath currentOutputFingerprint outputFingerprint) then
-                                        Some(
-                                            FSharpHotReloadError.DeltaEmissionFailed(
-                                                $"Output assembly '{outputPath}' did not change after compilation; refusing to emit a delta from stale build output."
-                                            )
-                                        )
-                                    else
-                                        None)
-
-                        match staleOutputErrorOpt with
-                        | Some staleError -> return Result.Error staleError
-                        | None ->
-                            let ilModuleResult : Result<_, FSharpHotReloadError> =
-                                try
-                                    readIlModule outputPath |> Ok
-                                with ex ->
-                                    Result.Error(
-                                        FSharpHotReloadError.DeltaEmissionFailed(
-                                            $"Failed to read updated assembly '{outputPath}': {ex.Message}"
-                                        )
-                                    )
-
-                            match ilModuleResult with
-                            | Result.Error error -> return Result.Error error
-                            | Ok ilModule ->
-                                lock hotReloadGate (fun () ->
-                                    match currentSynthesizedTypeMaps with
-                                    | Some map ->
-                                        map.BeginSession()
-                                        tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps <- Some map
-                                    | None -> ())
-
-                                match
-                                    FSharpEditAndContinueLanguageService.Instance.EmitDeltaForCompilation(
-                                        tcGlobals,
-                                        implementationFiles,
-                                        ilModule
-                                    )
-                                with
-                                | Ok result ->
-                                    match result.Delta.UpdatedBaseline with
-                                    | Some _ ->
-                                        lock hotReloadGate (fun () ->
-                                            currentOutputFingerprint <- outputFingerprint)
-                                    | None -> ()
-                                    return Result.Ok(toPublicDelta result.Delta)
-                                | Error error -> return Result.Error(mapHotReloadError error)
-        }
+        hotReloadService.EmitHotReloadDelta parseAndCheckProject outputPath
 
     member this.StartHotReloadSession(projectOptions: FSharpProjectOptions, ?userOpName: string) =
         async {
@@ -829,16 +874,11 @@ type FSharpChecker
         }
 
     member _.EndHotReloadSession() =
-        lock hotReloadGate (fun () ->
-            currentSynthesizedTypeMaps <- None
-            currentOutputFingerprint <- None
-            FSharpEditAndContinueLanguageService.Instance.ResetSessionState())
+        hotReloadService.EndSession()
 
-    member _.HotReloadSessionActive = FSharpEditAndContinueLanguageService.Instance.IsSessionActive
+    member _.HotReloadSessionActive = hotReloadService.SessionActive
 
-    member _.HotReloadCapabilities =
-        let capabilities = HotReloadCapability.current
-        FSharpHotReloadCapabilities.FromInternalFlags(capabilities.Flags)
+    member _.HotReloadCapabilities = hotReloadService.Capabilities
 
     member _.UsesTransparentCompiler = useTransparentCompiler = Some true
 

@@ -2,6 +2,7 @@ module internal FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
 open System
 open System.Collections.Generic
+open FSharp.Compiler.EnvironmentHelpers
 open Microsoft.FSharp.Collections
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.AbstractIL.BinaryConstants
@@ -21,13 +22,6 @@ let private TraceHeapsFlagName = "FSHARP_HOTRELOAD_TRACE_HEAPS"
 
 [<Literal>]
 let private TraceMethodsFlagName = "FSHARP_HOTRELOAD_TRACE_METHODS"
-
-let private isEnvVarTruthy (name: string) =
-    match Environment.GetEnvironmentVariable(name) with
-    | null -> false
-    | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
-    | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
-    | _ -> false
 
 let private shouldTraceMetadata () = isEnvVarTruthy TraceMetadataFlagName
 

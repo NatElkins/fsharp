@@ -1,6 +1,7 @@
 module internal FSharp.Compiler.HotReload.DeltaBuilder
 
 open System
+open FSharp.Compiler.EnvironmentHelpers
 open FSharp.Compiler
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.HotReload
@@ -10,13 +11,6 @@ open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.TypedTree
 open FSharp.Compiler.TypedTreeDiff
-
-let private isEnvVarTruthy (name: string) =
-    match Environment.GetEnvironmentVariable(name) with
-    | null -> false
-    | value when String.Equals(value, "1", StringComparison.OrdinalIgnoreCase) -> true
-    | value when String.Equals(value, "true", StringComparison.OrdinalIgnoreCase) -> true
-    | _ -> false
 
 let private traceMethodResolution = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_METHODS"
 
