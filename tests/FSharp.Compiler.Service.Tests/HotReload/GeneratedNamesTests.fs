@@ -68,3 +68,35 @@ module GeneratedNamesTests =
 
         Assert.Equal("test@1", first)
         Assert.Equal("test@1-1", second)
+
+    [<Fact>]
+    let ``NiceNameGenerator without map keys ordinals by file index`` () =
+        let generator = NiceNameGenerator(fun () -> None)
+        let start = Position.mkPos 42 0
+        let fileOneRange = Range.mkRange "/tmp/generated-names-file-one.fs" start start
+        let fileTwoRange = Range.mkRange "/tmp/generated-names-file-two.fs" start start
+
+        let fileOneFirst = generator.FreshCompilerGeneratedName("closure", fileOneRange)
+        let fileOneSecond = generator.FreshCompilerGeneratedName("closure", fileOneRange)
+        let fileTwoFirst = generator.FreshCompilerGeneratedName("closure", fileTwoRange)
+        let fileOneThird = generator.FreshCompilerGeneratedName("closure", fileOneRange)
+
+        Assert.Equal("closure@42", fileOneFirst)
+        Assert.Equal("closure@42-1", fileOneSecond)
+        Assert.Equal("closure@42", fileTwoFirst)
+        Assert.Equal("closure@42-2", fileOneThird)
+
+    [<Fact>]
+    let ``IncrementOnly remains one-based and file-index scoped`` () =
+        let generator = NiceNameGenerator(fun () -> None)
+        let start = Position.mkPos 7 0
+        let fileOneRange = Range.mkRange "/tmp/increment-only-one.fs" start start
+        let fileTwoRange = Range.mkRange "/tmp/increment-only-two.fs" start start
+
+        let first = generator.IncrementOnly("@T", fileOneRange)
+        let second = generator.IncrementOnly("@T", fileOneRange)
+        let third = generator.IncrementOnly("@T", fileTwoRange)
+
+        Assert.Equal(1, first)
+        Assert.Equal(2, second)
+        Assert.Equal(1, third)
