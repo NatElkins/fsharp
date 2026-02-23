@@ -62,6 +62,40 @@ let computeSymbolChanges
 
 let private joinPath (segments: string list) = String.concat "." segments
 
+// Normalize nested type separators ("+" vs ".") so symbol/baseline matching is resilient
+// to representation differences while still using canonical baseline names in emitted deltas.
+let private splitTypePath (typeName: string) =
+    typeName.Split([| '.'; '+' |], StringSplitOptions.RemoveEmptyEntries)
+    |> Array.toList
+
+let private buildTypePathLookup (typeTokens: Map<string, int>) =
+    typeTokens
+    |> Map.toSeq
+    |> Seq.fold
+        (fun acc (name, _) ->
+            let key = splitTypePath name
+            let existing = acc |> Map.tryFind key |> Option.defaultValue []
+            acc |> Map.add key (name :: existing))
+        Map.empty
+
+let private tryResolveTypeNameByPath
+    (typeTokens: Map<string, int>)
+    (typePathLookup: Map<string list, string list>)
+    (names: string list)
+    =
+    names
+    |> List.tryPick (fun name ->
+        match typePathLookup |> Map.tryFind (splitTypePath name) with
+        | Some [ resolved ] -> Some resolved
+        | Some resolvedNames ->
+            resolvedNames
+            |> List.tryFind (fun candidate -> typeTokens |> Map.containsKey candidate)
+        | None -> None)
+
+let private typeNamesEquivalent (left: string) (right: string) =
+    String.Equals(left, right, StringComparison.Ordinal)
+    || splitTypePath left = splitTypePath right
+
 let private deduplicate list = list |> List.fold (fun acc item -> if List.contains item acc then acc else item :: acc) [] |> List.rev
 
 let private deduplicateSymbols symbols =
@@ -190,8 +224,12 @@ let mapSymbolChangesToDelta
 
         tails [] segments
 
+    let typePathLookup = buildTypePathLookup baseline.TypeTokens
+
     let tryResolveTypeName (names: string list) =
-        names |> List.tryFind (fun name -> Map.containsKey name baseline.TypeTokens)
+        names
+        |> List.tryFind (fun name -> Map.containsKey name baseline.TypeTokens)
+        |> Option.orElseWith (fun () -> tryResolveTypeNameByPath baseline.TypeTokens typePathLookup names)
 
     let updatedTypes =
         changes
@@ -223,7 +261,7 @@ let mapSymbolChangesToDelta
             baseline.MethodTokens
             |> Map.toSeq
             |> Seq.choose (fun (key, _) ->
-                if key.DeclaringType = typeName && methodKeyMatchesSymbol symbol key then
+                if typeNamesEquivalent key.DeclaringType typeName && methodKeyMatchesSymbol symbol key then
                     Some key
                 else
                     None)
