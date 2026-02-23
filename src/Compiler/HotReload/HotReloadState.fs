@@ -19,6 +19,8 @@ and PendingHotReloadUpdate =
         Baseline: FSharpEmitBaseline
     }
 
+// Session state is intentionally process-scoped today. The checker/service APIs expose
+// this as a single active session per process, and starting a new session replaces the old one.
 let private sessionLock = obj ()
 let mutable private session: HotReloadSession voption = ValueNone
 let mutable private lastCommittedSession: HotReloadSession voption = ValueNone

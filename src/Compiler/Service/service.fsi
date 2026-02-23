@@ -99,17 +99,35 @@ type public FSharpChecker =
             CacheSizes ->
             FSharpChecker
 
+    /// <summary>
+    /// Starts a hot reload session using project options.
+    /// </summary>
+    /// <remarks>
+    /// Hot reload session state is process-wide: only one session can be active per compiler process.
+    /// Starting a new session replaces the previously active session.
+    /// This API is opt-in and requires compilation with <c>--enable:hotreloaddeltas</c>.
+    /// </remarks>
     member StartHotReloadSession:
         projectOptions: FSharpProjectOptions * ?userOpName: string -> Async<Result<unit, FSharpHotReloadError>>
 
     /// <summary>
     /// Starts a hot reload session using a workspace project snapshot.
     /// </summary>
+    /// <remarks>
+    /// Session scope is process-wide and single-active-session only.
+    /// Starting from a snapshot also replaces any existing active session.
+    /// </remarks>
     [<Experimental("This FCS API is experimental and subject to change.")>]
     member StartHotReloadSession:
         projectSnapshot: FSharpProjectSnapshot * ?userOpName: string ->
             Async<Result<unit, FSharpHotReloadError>>
 
+    /// <summary>
+    /// Emits a hot reload delta using project options against the active session baseline.
+    /// </summary>
+    /// <remarks>
+    /// Returns <c>NoActiveSession</c> when no process-wide session is currently active.
+    /// </remarks>
     member EmitHotReloadDelta:
         projectOptions: FSharpProjectOptions * ?userOpName: string ->
             Async<Result<FSharpHotReloadDelta, FSharpHotReloadError>>
@@ -117,13 +135,18 @@ type public FSharpChecker =
     /// <summary>
     /// Emits a hot reload delta using a workspace project snapshot.
     /// </summary>
+    /// <remarks>
+    /// Uses the same single process-wide active session as other hot reload APIs.
+    /// </remarks>
     [<Experimental("This FCS API is experimental and subject to change.")>]
     member EmitHotReloadDelta:
         projectSnapshot: FSharpProjectSnapshot * ?userOpName: string ->
             Async<Result<FSharpHotReloadDelta, FSharpHotReloadError>>
 
+    /// <summary>Ends the active process-wide hot reload session, if any.</summary>
     member EndHotReloadSession: unit -> unit
 
+    /// <summary>Indicates whether a process-wide hot reload session is currently active.</summary>
     member HotReloadSessionActive: bool
 
     member HotReloadCapabilities: FSharpHotReloadCapabilities

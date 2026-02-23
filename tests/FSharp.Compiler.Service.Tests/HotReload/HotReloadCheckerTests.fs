@@ -479,6 +479,73 @@ type Type =
         with _ -> ()
 
     [<Fact>]
+    let ``StartHotReloadSession replaces existing process-wide session`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-checker-single-session", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath1 = Path.Combine(projectDir, "LibraryOne.fs")
+        let fsPath2 = Path.Combine(projectDir, "LibraryTwo.fs")
+        let dllPath1 = Path.Combine(projectDir, "LibraryOne.dll")
+        let dllPath2 = Path.Combine(projectDir, "LibraryTwo.dll")
+
+        let sourceOne =
+            """
+namespace SessionOne
+
+type Type =
+    static member GetValue() = 1
+"""
+
+        let sourceTwo =
+            """
+namespace SessionTwo
+
+type Type =
+    static member GetValue() = 2
+"""
+
+        File.WriteAllText(fsPath1, sourceOne)
+        File.WriteAllText(fsPath2, sourceTwo)
+
+        let checker = createChecker ()
+        let projectOptions1 = prepareProjectOptions checker fsPath1 dllPath1 sourceOne
+        let projectOptions2 = prepareProjectOptions checker fsPath2 dllPath2 sourceTwo
+
+        checker.InvalidateAll()
+
+        compileProject checker projectOptions1 true
+
+        match checker.StartHotReloadSession(projectOptions1) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start first hot reload session: %A" error
+        | Ok () -> ()
+
+        let firstSession =
+            match FSharp.Compiler.HotReloadState.tryGetSession () with
+            | ValueSome session -> session
+            | ValueNone -> failwith "Expected the first hot reload session to be active."
+
+        compileProject checker projectOptions2 true
+
+        match checker.StartHotReloadSession(projectOptions2) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start replacement hot reload session: %A" error
+        | Ok () -> ()
+
+        let secondSession =
+            match FSharp.Compiler.HotReloadState.tryGetSession () with
+            | ValueSome session -> session
+            | ValueNone -> failwith "Expected replacement hot reload session to be active."
+
+        Assert.True(checker.HotReloadSessionActive)
+        Assert.NotEqual<Guid>(firstSession.Baseline.ModuleId, secondSession.Baseline.ModuleId)
+
+        checker.EndHotReloadSession()
+        Assert.False(checker.HotReloadSessionActive)
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
     let ``StartHotReloadSession and EmitHotReloadDelta accept project snapshots`` () =
         let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-checker-snapshot", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(projectDir) |> ignore
