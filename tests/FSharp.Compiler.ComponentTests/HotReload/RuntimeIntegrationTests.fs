@@ -775,11 +775,32 @@ type Type =
         parts.[0] + ", " + parts.[1]
 """
 
+        let quotationBaseline =
+            """
+namespace Sample
+
+open Microsoft.FSharp.Quotations
+open Microsoft.FSharp.Quotations.Patterns
+
+type Type =
+    static member GetMessage() =
+        let prefix = "Hello"
+        let quotation = <@ "watch" @>
+
+        let suffix =
+            match quotation with
+            | Value(value, _) -> value :?> string
+            | _ -> "watch"
+
+        prefix + ", " + suffix
+"""
+
         let scenarios =
             [ ("tier2-anon-record", anonymousRecordBaseline)
               ("tier2-active-pattern", activePatternBaseline)
               ("tier2-object-expression", objectExpressionBaseline)
-              ("tier2-loop", loopBaseline) ]
+              ("tier2-loop", loopBaseline)
+              ("tier2-quotation", quotationBaseline) ]
 
         for (label, baseline) in scenarios do
             let updated = baseline.Replace("Hello", "Welcome")
