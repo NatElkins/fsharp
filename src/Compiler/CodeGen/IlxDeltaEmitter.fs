@@ -416,6 +416,51 @@ let private buildUpdatedBaseline
         EventMapEntries = updatedEventMapEntries
         MethodSemanticsEntries = updatedMethodSemanticsEntries }
 
+
+let private tryBuildMethodUpdateInput
+    (traceMethodUpdates: bool)
+    (metadataReader: MetadataReader)
+    (peReader: PEReader)
+    (baselineMethodTokens: Map<MethodDefinitionKey, int>)
+    (addedMethodTokens: Dictionary<MethodDefinitionKey, int>)
+    (addedMethodDeltaTokens: Dictionary<MethodDefinitionKey, int>)
+    (key: MethodDefinitionKey)
+    : struct (MethodDefinitionKey * int * MethodDefinitionHandle * MethodDefinition * MethodBodyBlock) option =
+
+    let tryCreateInput (methodToken: int) (deltaToken: int) (isAddedMethod: bool) =
+        let methodHandle = MetadataTokens.MethodDefinitionHandle methodToken
+
+        if methodHandle.IsNil then
+            None
+        else
+            let methodDef = metadataReader.GetMethodDefinition methodHandle
+            let body = peReader.GetMethodBody(methodDef.RelativeVirtualAddress)
+
+            if traceMethodUpdates then
+                if isAddedMethod then
+                    printfn
+                        "[fsharp-hotreload][method-add] %s::%s token=0x%08X"
+                        key.DeclaringType
+                        key.Name
+                        deltaToken
+                else
+                    printfn
+                        "[fsharp-hotreload][method-update] %s::%s token=0x%08X"
+                        key.DeclaringType
+                        key.Name
+                        methodToken
+
+            Some(struct (key, deltaToken, methodHandle, methodDef, body))
+
+    match baselineMethodTokens |> Map.tryFind key with
+    | Some methodToken ->
+        tryCreateInput methodToken methodToken false
+    | None ->
+        match addedMethodTokens.TryGetValue key, addedMethodDeltaTokens.TryGetValue key with
+        | (true, methodToken), (true, deltaToken) ->
+            tryCreateInput methodToken deltaToken true
+        | _ ->
+            None
 /// Emits the delta artifacts for a request. The current implementation populates token projections
 /// while leaving the raw metadata/IL/PDB payload empty; future work will replace the placeholders
 /// with fully emitted heaps.
@@ -1083,39 +1128,14 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     let methodUpdateInputs =
         resolvedMethods
         |> List.choose (fun (_, _, _, key) ->
-            match request.Baseline.MethodTokens |> Map.tryFind key with
-            | Some methodToken ->
-                let methodHandle = MetadataTokens.MethodDefinitionHandle methodToken
-                if methodHandle.IsNil then
-                    None
-                else
-                    let methodDef = metadataReader.GetMethodDefinition methodHandle
-                    let body = peReader.GetMethodBody(methodDef.RelativeVirtualAddress)
-                    if traceMethodUpdates.Value then
-                        printfn
-                            "[fsharp-hotreload][method-update] %s::%s token=0x%08X"
-                            key.DeclaringType
-                            key.Name
-                            methodToken
-                    Some(struct (key, methodToken, methodHandle, methodDef, body))
-            | None ->
-                match addedMethodTokens.TryGetValue key with
-                | true, newMethodToken when addedMethodDeltaTokens.ContainsKey(key) ->
-                    let methodHandle = MetadataTokens.MethodDefinitionHandle newMethodToken
-                    if methodHandle.IsNil then
-                        None
-                    else
-                        let methodDef = metadataReader.GetMethodDefinition methodHandle
-                        let body = peReader.GetMethodBody(methodDef.RelativeVirtualAddress)
-                        let deltaToken = addedMethodDeltaTokens[key]
-                        if traceMethodUpdates.Value then
-                            printfn
-                                "[fsharp-hotreload][method-add] %s::%s token=0x%08X"
-                                key.DeclaringType
-                                key.Name
-                                deltaToken
-                        Some(struct (key, deltaToken, methodHandle, methodDef, body))
-                | _ -> None)
+            tryBuildMethodUpdateInput
+                traceMethodUpdates.Value
+                metadataReader
+                peReader
+                request.Baseline.MethodTokens
+                addedMethodTokens
+                addedMethodDeltaTokens
+                key)
 
     let parameterRowLookup = Dictionary<ParameterDefinitionKey, int>()
     let parameterHandleLookup = Dictionary<ParameterDefinitionKey, ParameterHandle>()
