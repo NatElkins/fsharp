@@ -34,3 +34,29 @@ let ``compiler config exposes generic emit hook contract only`` () =
     Assert.DoesNotContain("HotReloadEmitArtifacts", source)
     Assert.Contains("type ICompilerEmitHook", source)
     Assert.Contains("val defaultCompilerEmitHook", source)
+
+let private sliceBetween (source: string) (startMarker: string) (endMarker: string) =
+    let startIndex = source.IndexOf(startMarker, System.StringComparison.Ordinal)
+    Assert.True(startIndex >= 0, $"Could not find marker '{startMarker}'.")
+
+    let endIndex = source.IndexOf(endMarker, startIndex, System.StringComparison.Ordinal)
+    Assert.True(endIndex > startIndex, $"Could not find end marker '{endMarker}' after '{startMarker}'.")
+
+    source.Substring(startIndex, endIndex - startIndex)
+
+[<Fact>]
+let ``typed tree diff opDigest stays wildcard free`` () =
+    let source = readCompilerFile "src/Compiler/TypedTree/TypedTreeDiff.fs"
+    let opDigestSource = sliceBetween source "let private opDigest" "type private LoweredShapeCollector"
+
+    Assert.DoesNotContain("| _ ->", opDigestSource)
+
+[<Fact>]
+let ``typed tree diff no longer relies on state-machine declaring-type string heuristic`` () =
+    let source = readCompilerFile "src/Compiler/TypedTree/TypedTreeDiff.fs"
+
+    Assert.DoesNotContain("isLikelyStateMachineDeclaringType", source)
+    Assert.DoesNotContain("\"AsyncBuilder\"", source)
+    Assert.DoesNotContain("\"TaskBuilder\"", source)
+    Assert.DoesNotContain("\"Resumable\"", source)
+    Assert.DoesNotContain("\"QueryBuilder\"", source)
