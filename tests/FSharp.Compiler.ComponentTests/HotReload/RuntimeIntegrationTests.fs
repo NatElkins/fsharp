@@ -204,7 +204,7 @@ type Type =
 
             let service = FSharpEditAndContinueLanguageService.Instance
             service.EndSession()
-            service.StartSession(baseline, baselineImplementation)
+            service.StartSession(baseline, baselineImplementation) |> ignore
 
             // Updated compilation
             let updatedResults = compileProject checker fsPath dllPath updatedSource
@@ -221,7 +221,7 @@ type Type =
 
             // The build pipeline clears the active session once the new binary is written; rehydrate it
             // with the previously captured baseline before emitting the delta.
-            service.StartSession(baseline, baselineImplementation)
+            service.StartSession(baseline, baselineImplementation) |> ignore
             Assert.True(service.IsSessionActive)
 
             match service.EmitDeltaForCompilation(updatedTcGlobals, updatedImplementation, updatedModule) with
@@ -259,7 +259,7 @@ type Type =
 
             let service = FSharpEditAndContinueLanguageService.Instance
             service.EndSession()
-            service.StartSession(baseline, baselineImplementation)
+            service.StartSession(baseline, baselineImplementation) |> ignore
 
             let updatedResults = compileProject checker fsPath dllPath insertedMethodSource
             let updatedTcGlobals, updatedImplementation = getTypedAssembly updatedResults
@@ -274,7 +274,7 @@ type Type =
                 reader.ILModuleDef
 
             // The build pipeline may clear session state during writes; restore the baseline snapshot before emit.
-            service.StartSession(baseline, baselineImplementation)
+            service.StartSession(baseline, baselineImplementation) |> ignore
 
             match service.EmitDeltaForCompilation(updatedTcGlobals, updatedImplementation, updatedModule) with
             | Error error -> failwithf "EmitDeltaForCompilation failed for method insertion: %A" error

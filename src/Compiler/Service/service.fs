@@ -174,6 +174,13 @@ type internal FSharpHotReloadService
     // fingerprint remains unchanged, we refuse to emit deltas from stale binaries.
     let mutable currentOutputFingerprint: (DateTime * byte[] option) option = None
 
+    let traceSessionTransitions = isEnvVarTruthy "FSHARP_HOTRELOAD_TRACE_SESSIONS"
+
+    let describeSessionStartTransition transition =
+        match transition with
+        | FSharp.Compiler.HotReloadState.HotReloadSessionStart.StartedFresh -> "started-fresh"
+        | FSharp.Compiler.HotReloadState.HotReloadSessionStart.ReplacedExisting -> "replaced-existing"
+
     member _.StartHotReloadSession
         (parseAndCheckProject: unit -> Async<FSharpCheckProjectResults>)
         (outputPath: string option)
@@ -234,7 +241,15 @@ type internal FSharpHotReloadService
                             compilerState.CompilerGeneratedNameMap <- Some(map :> ICompilerGeneratedNameMap)
 
                             FSharpEditAndContinueLanguageService.Instance.EndSession()
-                            FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
+                            let startTransition = FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
+
+                            if traceSessionTransitions then
+                                printfn
+                                    "[fsharp-hotreload][session] start transition=%s moduleId=%O output=%s"
+                                    (describeSessionStartTransition startTransition)
+                                    baseline.ModuleId
+                                    outputPath
+
                             currentOutputFingerprint <- tryGetOutputFingerprint outputPath)
 
                         return Result.Ok ()

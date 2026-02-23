@@ -918,7 +918,7 @@ type Greeter =
             let baseline = createBaseline tcGlobals dllPath
 
             service.EndSession()
-            service.StartSession(baseline, baselineImpl)
+            service.StartSession(baseline, baselineImpl) |> ignore
 
             // Updated compilation
             let _, updatedResults = compileProject checker fsPath dllPath updatedSource

@@ -19,6 +19,11 @@ and PendingHotReloadUpdate =
         Baseline: FSharpEmitBaseline
     }
 
+/// Records whether starting a baseline session replaced an already-active process-wide session.
+type HotReloadSessionStart =
+    | StartedFresh
+    | ReplacedExisting
+
 // Session state is intentionally process-scoped today. The checker/service APIs expose
 // this as a single active session per process, and starting a new session replaces the old one.
 let private sessionLock = obj ()
@@ -31,6 +36,8 @@ let private toCommittedSnapshot (value: HotReloadSession) =
 
 let setBaseline (value: FSharpEmitBaseline) (implementationFiles: CheckedAssemblyAfterOptimization) =
     lock sessionLock (fun () ->
+        let hadExistingSession = session.IsSome
+
         let previousGenerationId =
             if value.EncId = Guid.Empty then
                 None
@@ -50,7 +57,12 @@ let setBaseline (value: FSharpEmitBaseline) (implementationFiles: CheckedAssembl
             ValueSome
                 newSession
 
-        lastCommittedSession <- ValueSome(toCommittedSnapshot newSession))
+        lastCommittedSession <- ValueSome(toCommittedSnapshot newSession)
+
+        if hadExistingSession then
+            ReplacedExisting
+        else
+            StartedFresh)
 
 let clearBaseline () =
     lock sessionLock (fun () -> session <- ValueNone)

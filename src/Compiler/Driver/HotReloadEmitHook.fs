@@ -85,7 +85,7 @@ type internal DefaultHotReloadEmitHook() =
                     portablePdbSnapshot
                     ilxGenEnvironment
 
-            FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, artifacts.OptimizedImpls)
+            FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, artifacts.OptimizedImpls) |> ignore
 
             match compilerGlobalState.CompilerGeneratedNameMap with
             | Some map -> map.BeginSession()

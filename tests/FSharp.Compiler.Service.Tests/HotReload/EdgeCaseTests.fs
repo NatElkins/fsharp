@@ -397,7 +397,7 @@ module EdgeCaseTests =
             // Arrange
             clearBaseline ()
             let baseline = createMinimalBaseline ()
-            setBaseline baseline (CheckedAssemblyAfterOptimization [])
+            setBaseline baseline (CheckedAssemblyAfterOptimization []) |> ignore
 
             let initialSession = tryGetSession ()
             let initialGen = initialSession.Value.CurrentGeneration

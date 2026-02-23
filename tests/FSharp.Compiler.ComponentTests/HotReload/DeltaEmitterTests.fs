@@ -1622,7 +1622,7 @@ module DeltaEmitterTests =
 
         service.EndSession()
         let _, baseline = createBaseline ()
-        service.StartSession baseline
+        service.StartSession baseline |> ignore
 
         let session0 =
             match service.TryGetSession() with
@@ -1679,7 +1679,7 @@ module DeltaEmitterTests =
         let service = FSharpEditAndContinueLanguageService.Instance
         service.EndSession()
         let _, baseline = createBaseline ()
-        service.StartSession baseline
+        service.StartSession baseline |> ignore
 
         let request : DeltaEmissionRequest =
             { IlModule = createModule 85 |> TestHelpers.withDebuggableAttribute
@@ -1719,7 +1719,7 @@ module DeltaEmitterTests =
         service.ResetSessionState()
 
         let _, baseline = createBaseline ()
-        service.StartSession baseline
+        service.StartSession baseline |> ignore
         service.EndSession()
 
         let restored =
@@ -1740,7 +1740,7 @@ module DeltaEmitterTests =
         let service = FSharpEditAndContinueLanguageService.Instance
         service.EndSession()
         let _, baseline = createBaseline ()
-        service.StartSession baseline
+        service.StartSession baseline |> ignore
 
         let request : DeltaEmissionRequest =
             { IlModule = createModule 101 |> TestHelpers.withDebuggableAttribute

@@ -128,7 +128,7 @@ type internal FSharpEditAndContinueLanguageService private () =
     static member Instance = lazyInstance.Value
 
     /// <summary>Initialise or replace the current baseline and reset the generation counters.</summary>
-    member _.StartSession(baseline: FSharpEmitBaseline) =
+    member _.StartSession(baseline: FSharpEmitBaseline) : HotReloadState.HotReloadSessionStart =
         use _ =
             Activity.start "HotReload.StartSession" [|
                 Activity.Tags.project, baseline.ModuleId.ToString()
@@ -137,7 +137,7 @@ type internal FSharpEditAndContinueLanguageService private () =
 
         FSharp.Compiler.HotReloadState.setBaseline baseline (CheckedAssemblyAfterOptimization [])
 
-    member _.StartSession(baseline: FSharpEmitBaseline, implementationFiles: CheckedAssemblyAfterOptimization) =
+    member _.StartSession(baseline: FSharpEmitBaseline, implementationFiles: CheckedAssemblyAfterOptimization) : HotReloadState.HotReloadSessionStart =
         use _ =
             Activity.start "HotReload.StartSession" [|
                 Activity.Tags.project, baseline.ModuleId.ToString()
