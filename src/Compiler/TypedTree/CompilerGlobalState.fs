@@ -9,7 +9,6 @@ open System.Collections.Concurrent
 open System.Threading
 open FSharp.Compiler.Syntax.PrettyNaming
 open FSharp.Compiler.Text
-open FSharp.Compiler.SynthesizedTypeMaps
 open FSharp.Compiler.GeneratedNames
 
 /// Generates compiler-generated names. Each name generated also includes the StartLine number of the range passed in
@@ -19,7 +18,7 @@ open FSharp.Compiler.GeneratedNames
 /// It is made concurrency-safe since a global instance of the type is allocated in tast.fs, and it is good
 /// policy to make all globally-allocated objects concurrency safe in case future versions of the compiler
 /// are used to host multiple concurrent instances of compilation.
-type NiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMaps option) =
+type NiceNameGenerator(getCompilerGeneratedNameMap: unit -> ICompilerGeneratedNameMap option) =
     let basicNameCounts = ConcurrentDictionary<struct (string * int), int ref>(max Environment.ProcessorCount 1, 127)
     // Cache this as a delegate.
     let basicNameCountsAddDelegate = Func<struct (string * int), int ref>(fun _ -> ref 0)
@@ -30,7 +29,7 @@ type NiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMaps opti
         Interlocked.Increment(countCell)
 
     member _.FreshCompilerGeneratedNameOfBasicName (basicName, m: range) =
-        match getSynthesizedMap() with
+        match getCompilerGeneratedNameMap() with
         | Some map ->
             map.GetOrAddName basicName
         | None ->
@@ -50,10 +49,10 @@ type NiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMaps opti
 ///
 /// This type may be accessed concurrently, though in practice it is only used from the compilation thread.
 /// It is made concurrency-safe since a global instance of the type is allocated in tast.fs.
-type StableNiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMaps option) =
+type StableNiceNameGenerator(getCompilerGeneratedNameMap: unit -> ICompilerGeneratedNameMap option) =
 
     let niceNames = ConcurrentDictionary<string * int64, string>(max Environment.ProcessorCount 1, 127)
-    let innerGenerator = new NiceNameGenerator(getSynthesizedMap)
+    let innerGenerator = new NiceNameGenerator(getCompilerGeneratedNameMap)
 
     member x.GetUniqueCompilerGeneratedName (name, m: range, uniq) =
         let basicName = GetBasicNameOfPossibleCompilerGeneratedName name
@@ -64,19 +63,19 @@ type StableNiceNameGenerator(getSynthesizedMap: unit -> FSharpSynthesizedTypeMap
 
 type internal CompilerGlobalState () =
     /// A global generator of compiler generated names
-    let synthesizedTypeMapsLock = obj ()
-    let mutable synthesizedTypeMaps: FSharpSynthesizedTypeMaps option = None
+    let compilerGeneratedNameMapLock = obj ()
+    let mutable compilerGeneratedNameMap: ICompilerGeneratedNameMap option = None
 
-    let getSynthesizedMap () =
-        lock synthesizedTypeMapsLock (fun () -> synthesizedTypeMaps)
+    let getCompilerGeneratedNameMap () =
+        lock compilerGeneratedNameMapLock (fun () -> compilerGeneratedNameMap)
 
-    let globalNng = NiceNameGenerator(getSynthesizedMap)
+    let globalNng = NiceNameGenerator(getCompilerGeneratedNameMap)
 
     /// A global generator of stable compiler generated names
-    let globalStableNameGenerator = StableNiceNameGenerator(getSynthesizedMap)
+    let globalStableNameGenerator = StableNiceNameGenerator(getCompilerGeneratedNameMap)
 
     /// A name generator used by IlxGen for static fields, some generated arguments and other things.
-    let ilxgenGlobalNng = NiceNameGenerator(getSynthesizedMap)
+    let ilxgenGlobalNng = NiceNameGenerator(getCompilerGeneratedNameMap)
 
     member _.NiceNameGenerator = globalNng
 
@@ -84,9 +83,9 @@ type internal CompilerGlobalState () =
 
     member _.IlxGenNiceNameGenerator = ilxgenGlobalNng
 
-    member _.SynthesizedTypeMaps
-        with get () = lock synthesizedTypeMapsLock (fun () -> synthesizedTypeMaps)
-        and set value = lock synthesizedTypeMapsLock (fun () -> synthesizedTypeMaps <- value)
+    member _.CompilerGeneratedNameMap
+        with get () = lock compilerGeneratedNameMapLock (fun () -> compilerGeneratedNameMap)
+        and set value = lock compilerGeneratedNameMapLock (fun () -> compilerGeneratedNameMap <- value)
 
 /// Unique name generator for stamps attached to lambdas and object expressions
 type Unique = int64

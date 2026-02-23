@@ -3,6 +3,7 @@ module internal FSharp.Compiler.HotReloadEmitHook
 open System
 open FSharp.Compiler.CompilerConfig
 open FSharp.Compiler.CompilerGlobalState
+open FSharp.Compiler.GeneratedNames
 open FSharp.Compiler.HotReload
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.HotReloadPdb
@@ -13,17 +14,17 @@ type internal DefaultHotReloadEmitHook() =
     interface IHotReloadEmitHook with
         member _.PrepareForCodeGeneration(hotReloadCapture, compilerGlobalState) =
             if hotReloadCapture then
-                match compilerGlobalState.SynthesizedTypeMaps with
+                match compilerGlobalState.CompilerGeneratedNameMap with
                 | Some map -> map.BeginSession()
                 | None ->
                     let map = FSharpSynthesizedTypeMaps()
                     map.BeginSession()
-                    compilerGlobalState.SynthesizedTypeMaps <- Some map
+                    compilerGlobalState.CompilerGeneratedNameMap <- Some(map :> ICompilerGeneratedNameMap)
             elif FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
                 // Preserve synthesized-name replay while a hot reload session is active,
                 // even when the output build itself is emitted without capture flags.
                 let activeMap =
-                    match compilerGlobalState.SynthesizedTypeMaps with
+                    match compilerGlobalState.CompilerGeneratedNameMap with
                     | Some existing -> Some existing
                     | None ->
                         match FSharpEditAndContinueLanguageService.Instance.TryGetSession() with
@@ -35,17 +36,17 @@ type internal DefaultHotReloadEmitHook() =
                             |> Seq.map (fun (k, v) -> struct (k, v))
                             |> restored.LoadSnapshot
 
-                            Some restored
+                            Some(restored :> ICompilerGeneratedNameMap)
                         | ValueNone -> None
 
                 match activeMap with
                 | Some map ->
                     map.BeginSession()
-                    compilerGlobalState.SynthesizedTypeMaps <- Some map
+                    compilerGlobalState.CompilerGeneratedNameMap <- Some map
                 | None ->
-                    compilerGlobalState.SynthesizedTypeMaps <- None
+                    compilerGlobalState.CompilerGeneratedNameMap <- None
             else
-                compilerGlobalState.SynthesizedTypeMaps <- None
+                compilerGlobalState.CompilerGeneratedNameMap <- None
 
         member _.BeforeFileEmit(hotReloadCapture, compilerGlobalState) =
             // Only clear the hot reload session when NOT in hot reload capture mode.
@@ -53,7 +54,7 @@ type internal DefaultHotReloadEmitHook() =
             // to clear an active hot reload session being used for live editing.
             if not hotReloadCapture then
                 FSharpEditAndContinueLanguageService.Instance.EndSession()
-                compilerGlobalState.SynthesizedTypeMaps <- None
+                compilerGlobalState.CompilerGeneratedNameMap <- None
 
         member _.CaptureArtifacts(compilerGlobalState, artifacts) =
             let portablePdbSnapshot = artifacts.PortablePdbBytes |> Option.map HotReloadPdb.createSnapshot
@@ -74,13 +75,13 @@ type internal DefaultHotReloadEmitHook() =
 
             FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, artifacts.OptimizedImpls)
 
-            match compilerGlobalState.SynthesizedTypeMaps with
+            match compilerGlobalState.CompilerGeneratedNameMap with
             | Some map -> map.BeginSession()
             | None -> ()
 
         member _.FallbackEmit(compilerGlobalState) =
             FSharpEditAndContinueLanguageService.Instance.EndSession()
-            compilerGlobalState.SynthesizedTypeMaps <- None
+            compilerGlobalState.CompilerGeneratedNameMap <- None
 
 let defaultHotReloadEmitHook : IHotReloadEmitHook =
     DefaultHotReloadEmitHook() :> IHotReloadEmitHook

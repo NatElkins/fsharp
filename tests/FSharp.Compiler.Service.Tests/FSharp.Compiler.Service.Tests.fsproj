@@ -82,6 +82,7 @@
     <Compile Include="HotReload/TypedTreeDiffTests.fs" />
     <Compile Include="HotReload/HotReloadCheckerTests.fs" />
     <Compile Include="HotReload/GeneratedNamesTests.fs" />
+    <Compile Include="HotReload/ArchitectureGuardTests.fs" />
     <Compile Include="HotReload/DefinitionIndexTests.fs" />
     <Compile Include="HotReload/MetadataDeltaTestHelpers.fs" />
     <Compile Include="HotReload/FSharpDeltaMetadataWriterTests.fs" />

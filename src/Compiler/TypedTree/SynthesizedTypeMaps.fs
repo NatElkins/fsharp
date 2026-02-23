@@ -105,8 +105,14 @@ type FSharpSynthesizedTypeMaps() =
                 buckets[basicName] <- bucket
                 ordinals[basicName] <- 0)
 
+    interface ICompilerGeneratedNameMap with
+        member this.BeginSession() = this.BeginSession()
+        member this.GetOrAddName(basicName) = this.GetOrAddName(basicName)
+        member this.Snapshot = this.Snapshot
+        member this.LoadSnapshot(snapshot) = this.LoadSnapshot(snapshot)
+
 /// <summary>Retrieves a stable compiler-generated name or falls back to the provided generator.</summary>
-let nextName mapOpt basicName generate =
+let nextName (mapOpt: ICompilerGeneratedNameMap option) basicName generate =
     match mapOpt with
-    | Some(map: FSharpSynthesizedTypeMaps) -> map.GetOrAddName basicName
+    | Some (map: ICompilerGeneratedNameMap) -> map.GetOrAddName(basicName)
     | None -> generate ()

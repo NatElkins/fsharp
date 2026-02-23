@@ -37,6 +37,7 @@ open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.HotReload.DeltaBuilder
 open FSharp.Compiler.IlxDeltaEmitter
 open FSharp.Compiler.TypedTree
+open FSharp.Compiler.GeneratedNames
 open FSharp.Compiler.SynthesizedTypeMaps
 open FSharp.Compiler.EnvironmentHelpers
 
@@ -230,7 +231,7 @@ type internal FSharpHotReloadService
                                 targetMap.BeginSession()
                                 targetMap
 
-                            compilerState.SynthesizedTypeMaps <- Some map
+                            compilerState.CompilerGeneratedNameMap <- Some(map :> ICompilerGeneratedNameMap)
 
                             FSharpEditAndContinueLanguageService.Instance.EndSession()
                             FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
@@ -284,7 +285,7 @@ type internal FSharpHotReloadService
                                 |> Seq.map (fun (k, v) -> struct (k, v))
                                 |> map.LoadSnapshot
                                 map.BeginSession()
-                                compilerState.SynthesizedTypeMaps <- Some map
+                                compilerState.CompilerGeneratedNameMap <- Some(map :> ICompilerGeneratedNameMap)
                             | ValueNone -> ())
 
                     if not FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
@@ -335,7 +336,7 @@ type internal FSharpHotReloadService
                                     match currentSynthesizedTypeMaps with
                                     | Some map ->
                                         map.BeginSession()
-                                        tcGlobals.CompilerGlobalState.Value.SynthesizedTypeMaps <- Some map
+                                        tcGlobals.CompilerGlobalState.Value.CompilerGeneratedNameMap <- Some(map :> ICompilerGeneratedNameMap)
                                     | None -> ())
 
                                 match

@@ -75,6 +75,9 @@ echo "logs: ${LOG_DIR}"
 run_step "build" "${DOTNET}" build FSharp.sln -c Debug -v minimal
 assert_contains "build" "Build succeeded"
 
+run_step "main-fsi-drift" bash tests/scripts/check-main-fsi-drift.sh origin/main
+assert_contains "main-fsi-drift" "allowlist:"
+
 run_step "service-tests" \
   "${DOTNET}" test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj \
   -c Debug --no-build --filter FullyQualifiedName~HotReload -v minimal
