@@ -115,6 +115,47 @@ type IlxDeltaRequest =
         SynthesizedNames: FSharpSynthesizedTypeMaps option
     }
 
+[<RequireQualifiedAccess>]
+type internal EntityTokenRemapKind =
+    | TypeDef
+    | FieldDef
+    | MethodDef
+    | MemberRef
+    | MethodSpec
+    | TypeRef
+    | Event
+    | Property
+    | AssemblyRef
+    | Passthrough
+
+let internal classifyEntityTokenRemapKind (token: int) : EntityTokenRemapKind =
+    match token &&& 0xFF000000 with
+    | 0x02000000 -> EntityTokenRemapKind.TypeDef
+    | 0x04000000 -> EntityTokenRemapKind.FieldDef
+    | 0x06000000 -> EntityTokenRemapKind.MethodDef
+    | 0x0A000000 -> EntityTokenRemapKind.MemberRef
+    | 0x2B000000 -> EntityTokenRemapKind.MethodSpec
+    | 0x01000000 -> EntityTokenRemapKind.TypeRef
+    | 0x14000000 -> EntityTokenRemapKind.Event
+    | 0x17000000 -> EntityTokenRemapKind.Property
+    | 0x23000000 -> EntityTokenRemapKind.AssemblyRef
+    // Existing baseline tables that can legitimately appear in IL but do not participate
+    // in delta remapping. Keep these explicit so new table tags fail closed by default.
+    | 0x00000000
+    | 0x11000000
+    | 0x1A000000
+    | 0x1B000000 ->
+        EntityTokenRemapKind.Passthrough
+    | tableTag ->
+        raise (
+            HotReloadUnsupportedEditException(
+                sprintf
+                    "Unsupported metadata token table 0x%02X in method-body remap (token=0x%08X). Please rebuild."
+                    (tableTag >>> 24)
+                    token
+            )
+        )
+
 /// Helper that produces an empty delta payload.
 let private emptyDelta: IlxDelta =
     {
@@ -1027,17 +1068,17 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                     mapped
 
     and remapEntityToken token =
-        match token &&& 0xFF000000 with
-        | 0x02000000 -> remapWith typeTokenMap token
-        | 0x04000000 -> remapWith fieldTokenMap token
-        | 0x06000000 -> remapWith methodTokenMap token
-        | 0x0A000000 -> remapMemberRefToken token
-        | 0x2B000000 -> remapMethodSpecToken token
-        | 0x01000000 -> remapTypeRefToken token
-        | 0x14000000 -> remapWith eventTokenMap token
-        | 0x17000000 -> remapWith propertyTokenMap token
-        | 0x23000000 -> remapAssemblyRefToken token
-        | _ -> token
+        match classifyEntityTokenRemapKind token with
+        | EntityTokenRemapKind.TypeDef -> remapWith typeTokenMap token
+        | EntityTokenRemapKind.FieldDef -> remapWith fieldTokenMap token
+        | EntityTokenRemapKind.MethodDef -> remapWith methodTokenMap token
+        | EntityTokenRemapKind.MemberRef -> remapMemberRefToken token
+        | EntityTokenRemapKind.MethodSpec -> remapMethodSpecToken token
+        | EntityTokenRemapKind.TypeRef -> remapTypeRefToken token
+        | EntityTokenRemapKind.Event -> remapWith eventTokenMap token
+        | EntityTokenRemapKind.Property -> remapWith propertyTokenMap token
+        | EntityTokenRemapKind.AssemblyRef -> remapAssemblyRefToken token
+        | EntityTokenRemapKind.Passthrough -> token
 
     let methodUpdateInputs =
         resolvedMethods

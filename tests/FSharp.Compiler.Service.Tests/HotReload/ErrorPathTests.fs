@@ -249,3 +249,21 @@ module ErrorPathTests =
             Assert.True(baseline.PropertyTokens.IsEmpty)
             Assert.True(baseline.EventTokens.IsEmpty)
 
+
+    module TokenRemapGuardTests =
+
+        [<Fact>]
+        let ``classifyEntityTokenRemapKind fails closed for unknown table tags`` () =
+            let ex =
+                Assert.Throws<FSharp.Compiler.IlxDeltaEmitter.HotReloadUnsupportedEditException>(fun () ->
+                    FSharp.Compiler.IlxDeltaEmitter.classifyEntityTokenRemapKind 0x7F000001 |> ignore)
+
+            Assert.Contains("Unsupported metadata token table 0x7F", ex.Message)
+
+        [<Fact>]
+        let ``classifyEntityTokenRemapKind keeps known passthrough tables explicit`` () =
+            let typeSpec = FSharp.Compiler.IlxDeltaEmitter.classifyEntityTokenRemapKind 0x1B000001
+            let standaloneSig = FSharp.Compiler.IlxDeltaEmitter.classifyEntityTokenRemapKind 0x11000001
+
+            Assert.Equal(FSharp.Compiler.IlxDeltaEmitter.EntityTokenRemapKind.Passthrough, typeSpec)
+            Assert.Equal(FSharp.Compiler.IlxDeltaEmitter.EntityTokenRemapKind.Passthrough, standaloneSig)
