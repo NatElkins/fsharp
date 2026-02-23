@@ -461,6 +461,135 @@ let private tryBuildMethodUpdateInput
             tryCreateInput methodToken deltaToken true
         | _ ->
             None
+let private buildReferenceRows
+    (traceMetadata: bool)
+    (typeReferenceRows: ResizeArray<TypeReferenceRowInfo>)
+    (memberReferenceRows: ResizeArray<MemberReferenceRowInfo>)
+    (assemblyReferenceRows: ResizeArray<AssemblyReferenceRowInfo>)
+    (methodSpecificationRowsSnapshot: MethodSpecificationRowInfo list)
+    (customAttributeRowList: CustomAttributeRowInfo list)
+    =
+    let typeReferenceRowList =
+        typeReferenceRows
+        |> Seq.sortBy (fun row -> row.RowId)
+        |> Seq.toList
+
+    let memberReferenceRowList =
+        memberReferenceRows
+        |> Seq.sortBy (fun row -> row.RowId)
+        |> Seq.toList
+
+    let assemblyReferenceRowList =
+        assemblyReferenceRows
+        |> Seq.sortBy (fun row -> row.RowId)
+        |> Seq.toList
+
+    if traceMetadata then
+        printfn
+            "[fsharp-hotreload][metadata] row-counts typeRef=%d memberRef=%d methodSpec=%d assemblyRef=%d customAttr=%d"
+            typeReferenceRowList.Length
+            memberReferenceRowList.Length
+            methodSpecificationRowsSnapshot.Length
+            assemblyReferenceRowList.Length
+            customAttributeRowList.Length
+
+        for row in typeReferenceRowList do
+            printfn
+                "[fsharp-hotreload][metadata] typeref rowId=%d name=%s scope=%A row=%d"
+                row.RowId
+                row.Name
+                row.ResolutionScope
+                row.ResolutionScope.RowId
+
+        for row in memberReferenceRowList do
+            printfn
+                "[fsharp-hotreload][metadata] memberref rowId=%d name=%s parent=%A row=%d"
+                row.RowId
+                row.Name
+                row.Parent
+                row.Parent.RowId
+
+        for row in methodSpecificationRowsSnapshot do
+            printfn
+                "[fsharp-hotreload][metadata] methodspec rowId=%d methodTag=%d methodRow=%d"
+                row.RowId
+                row.Method.CodedTag
+                row.Method.RowId
+
+        for row in assemblyReferenceRowList do
+            printfn "[fsharp-hotreload][metadata] assemblyref rowId=%d name=%s" row.RowId row.Name
+
+    typeReferenceRowList, memberReferenceRowList, assemblyReferenceRowList
+
+let private emitMetadataDelta
+    (traceMetadata: bool)
+    (moduleName: string)
+    (baselineModuleNameOffset: StringOffset option)
+    (currentGeneration: int)
+    (encId: Guid)
+    (encBaseId: Guid)
+    (moduleMvid: Guid)
+    (methodDefinitionRowsSnapshot: MethodDefinitionRowInfo list)
+    (parameterDefinitionRowsSnapshot: ParameterDefinitionRowInfo list)
+    (typeReferenceRowList: TypeReferenceRowInfo list)
+    (memberReferenceRowList: MemberReferenceRowInfo list)
+    (methodSpecificationRowsSnapshot: MethodSpecificationRowInfo list)
+    (assemblyReferenceRowList: AssemblyReferenceRowInfo list)
+    (propertyDefinitionRowsSnapshot: PropertyDefinitionRowInfo list)
+    (eventDefinitionRowsSnapshot: EventDefinitionRowInfo list)
+    (propertyMapRowsSnapshot: PropertyMapRowInfo list)
+    (eventMapRowsSnapshot: EventMapRowInfo list)
+    (methodSemanticsRowsSnapshot: MethodSemanticsMetadataUpdate list)
+    (standaloneSignatures: StandaloneSignatureUpdate list)
+    (customAttributeRowList: CustomAttributeRowInfo list)
+    (userStringEntries: (int * int * string) list)
+    (methodUpdates: MethodMetadataUpdate list)
+    (baselineHeapOffsets: MetadataHeapOffsets)
+    (baselineTableRowCounts: int[])
+    =
+    let metadataDelta =
+        MetadataWriter.emitWithReferences
+            moduleName
+            baselineModuleNameOffset
+            currentGeneration
+            encId
+            encBaseId
+            moduleMvid
+            methodDefinitionRowsSnapshot
+            parameterDefinitionRowsSnapshot
+            typeReferenceRowList
+            memberReferenceRowList
+            methodSpecificationRowsSnapshot
+            assemblyReferenceRowList
+            propertyDefinitionRowsSnapshot
+            eventDefinitionRowsSnapshot
+            propertyMapRowsSnapshot
+            eventMapRowsSnapshot
+            methodSemanticsRowsSnapshot
+            standaloneSignatures
+            customAttributeRowList
+            userStringEntries
+            methodUpdates
+            baselineHeapOffsets
+            baselineTableRowCounts
+
+    if traceMetadata then
+        let count idx = metadataDelta.TableRowCounts.[idx]
+
+        printfn
+            "[fsharp-hotreload][metadata] table-counts module=%d method=%d param=%d typeRef=%d memberRef=%d methodSpec=%d assemblyRef=%d customAttr=%d standAloneSig=%d"
+            (count TableNames.Module.Index)
+            (count TableNames.Method.Index)
+            (count TableNames.Param.Index)
+            (count TableNames.TypeRef.Index)
+            (count TableNames.MemberRef.Index)
+            (count TableNames.MethodSpec.Index)
+            (count TableNames.AssemblyRef.Index)
+            (count TableNames.CustomAttribute.Index)
+            (count TableNames.StandAloneSig.Index)
+
+    metadataDelta
+
 /// Emits the delta artifacts for a request. The current implementation populates token projections
 /// while leaving the raw metadata/IL/PDB payload empty; future work will replace the placeholders
 /// with fully emitted heaps.
@@ -2341,56 +2470,20 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 printfn "[fsharp-hotreload][metadata] custom-attributes rows=%d" (List.length rowList)
             rowList
 
-        let typeReferenceRowList =
-            typeReferenceRows
-            |> Seq.sortBy (fun row -> row.RowId)
-            |> Seq.toList
-
-        let memberReferenceRowList =
-            memberReferenceRows
-            |> Seq.sortBy (fun row -> row.RowId)
-            |> Seq.toList
-
-        let assemblyReferenceRowList =
-            assemblyReferenceRows
-            |> Seq.sortBy (fun row -> row.RowId)
-            |> Seq.toList
-
-        if traceMetadata.Value then
-            printfn
-                "[fsharp-hotreload][metadata] row-counts typeRef=%d memberRef=%d methodSpec=%d assemblyRef=%d customAttr=%d"
-                typeReferenceRowList.Length
-                memberReferenceRowList.Length
-                methodSpecificationRowsSnapshot.Length
-                assemblyReferenceRowList.Length
-                customAttributeRowList.Length
-            for row in typeReferenceRowList do
-                printfn
-                    "[fsharp-hotreload][metadata] typeref rowId=%d name=%s scope=%A row=%d"
-                    row.RowId
-                    row.Name
-                    row.ResolutionScope
-                    row.ResolutionScope.RowId
-            for row in memberReferenceRowList do
-                printfn
-                    "[fsharp-hotreload][metadata] memberref rowId=%d name=%s parent=%A row=%d"
-                    row.RowId
-                    row.Name
-                    row.Parent
-                    row.Parent.RowId
-            for row in methodSpecificationRowsSnapshot do
-                printfn
-                    "[fsharp-hotreload][metadata] methodspec rowId=%d methodTag=%d methodRow=%d"
-                    row.RowId
-                    row.Method.CodedTag
-                    row.Method.RowId
-            for row in assemblyReferenceRowList do
-                printfn "[fsharp-hotreload][metadata] assemblyref rowId=%d name=%s" row.RowId row.Name
+        let typeReferenceRowList, memberReferenceRowList, assemblyReferenceRowList =
+            buildReferenceRows
+                traceMetadata.Value
+                typeReferenceRows
+                memberReferenceRows
+                assemblyReferenceRows
+                methodSpecificationRowsSnapshot
+                customAttributeRowList
 
         let streams = builder.Build()
 
         let metadataDelta =
-            MetadataWriter.emitWithReferences
+            emitMetadataDelta
+                traceMetadata.Value
                 moduleName
                 baselineModuleNameOffset
                 request.CurrentGeneration
@@ -2414,20 +2507,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 methodUpdates
                 baselineHeapOffsets
                 request.Baseline.Metadata.TableRowCounts
-
-        if traceMetadata.Value then
-            let count idx = metadataDelta.TableRowCounts.[idx]
-            printfn
-                "[fsharp-hotreload][metadata] table-counts module=%d method=%d param=%d typeRef=%d memberRef=%d methodSpec=%d assemblyRef=%d customAttr=%d standAloneSig=%d"
-                (count TableNames.Module.Index)
-                (count TableNames.Method.Index)
-                (count TableNames.Param.Index)
-                (count TableNames.TypeRef.Index)
-                (count TableNames.MemberRef.Index)
-                (count TableNames.MethodSpec.Index)
-                (count TableNames.AssemblyRef.Index)
-                (count TableNames.CustomAttribute.Index)
-                (count TableNames.StandAloneSig.Index)
 
         let addedOrChangedMethods =
             streams.MethodBodies
