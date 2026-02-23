@@ -30,7 +30,6 @@ open FSharp.Compiler.AbstractIL
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryReader
 open FSharp.Compiler.AccessibilityLogic
-open FSharp.Compiler.HotReloadEmitHook
 open FSharp.Compiler.CheckDeclarations
 open FSharp.Compiler.CompilerConfig
 open FSharp.Compiler.CompilerDiagnostics
@@ -959,13 +958,8 @@ let main4
     if tcConfig.standalone && generatedCcu.UsesFSharp20PlusQuotations then
         error (Error(FSComp.SR.fscQuotationLiteralsStaticLinking0 (), rangeStartup))
 
-    // Validate hot reload option compatibility
-    if tcConfig.hotReloadCapture then
-        if not tcConfig.debuginfo then
-            error (Error(FSComp.SR.fscHotReloadRequiresDebugInfo (), rangeStartup))
-
-        if tcConfig.optSettings.LocalOptimizationsEnabled then
-            error (Error(FSComp.SR.fscHotReloadIncompatibleWithOptimization (), rangeStartup))
+    let compilerEmitHook = resolveCompilerEmitHook tcConfig.compilerEmitHook
+    compilerEmitHook.ValidateConfiguration(tcConfig.emitCaptureArtifacts, tcConfig.debuginfo, tcConfig.optSettings.LocalOptimizationsEnabled)
 
     // Compute a static linker, it gets called later.
     let staticLinker = StaticLink(ctok, tcConfig, tcImports, tcGlobals)
@@ -974,9 +968,8 @@ let main4
     use _ = UseBuildPhase BuildPhase.IlxGen
 
     let compilerGlobalState = tcGlobals.CompilerGlobalState.Value
-    let hotReloadEmitHook = defaultArg tcConfig.hotReloadEmitHook defaultHotReloadEmitHook
 
-    hotReloadEmitHook.PrepareForCodeGeneration(tcConfig.hotReloadCapture, compilerGlobalState)
+    compilerEmitHook.PrepareForCodeGeneration(tcConfig.emitCaptureArtifacts, compilerGlobalState)
 
     // Create the Abstract IL generator
     let ilxGenerator =
@@ -1142,11 +1135,11 @@ let main6
             | _ -> aref
         | None -> aref
 
-    let hotReloadEmitHook = defaultArg tcConfig.hotReloadEmitHook defaultHotReloadEmitHook
+    let compilerEmitHook = resolveCompilerEmitHook tcConfig.compilerEmitHook
 
     match dynamicAssemblyCreator with
     | None ->
-        hotReloadEmitHook.BeforeFileEmit(tcConfig.hotReloadCapture, tcGlobals.CompilerGlobalState.Value)
+        compilerEmitHook.BeforeFileEmit(tcConfig.emitCaptureArtifacts, tcGlobals.CompilerGlobalState.Value)
 
         try
             match tcConfig.emitMetadataAssembly with
@@ -1216,7 +1209,7 @@ let main6
                             pathMap = tcConfig.pathMap
                         }
 
-                    if tcConfig.hotReloadCapture then
+                    if tcConfig.emitCaptureArtifacts then
                         // Emit once in-memory, write to disk, and use same artifacts for baseline.
                         // This avoids double emission (previously WriteILBinaryFile then WriteILBinaryInMemoryWithArtifacts).
                         let assemblyBytes, pdbBytesOpt, tokenMappings, _ =
@@ -1228,7 +1221,7 @@ let main6
                         | Some pdbPath, Some pdbBytes -> File.WriteAllBytes(pdbPath, pdbBytes)
                         | _ -> ()
 
-                        hotReloadEmitHook.CaptureArtifacts(
+                        compilerEmitHook.CaptureArtifacts(
                             tcGlobals.CompilerGlobalState.Value,
                             { IlxMainModule = ilxMainModule
                               TokenMappings = tokenMappings
@@ -1246,7 +1239,7 @@ let main6
             errorRecoveryNoRange e
             exiter.Exit 1
     | Some da ->
-        hotReloadEmitHook.FallbackEmit(tcGlobals.CompilerGlobalState.Value)
+        compilerEmitHook.FallbackEmit(tcGlobals.CompilerGlobalState.Value)
         da (tcConfig, tcGlobals, outfile, ilxMainModule)
 
     AbortOnError(diagnosticsLogger, exiter)

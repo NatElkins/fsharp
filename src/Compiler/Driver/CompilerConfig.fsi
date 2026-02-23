@@ -226,7 +226,7 @@ type TypeCheckingConfig =
     }
 
 
-type HotReloadEmitArtifacts =
+type CompilerEmitArtifacts =
     { IlxMainModule: ILModuleDef
       TokenMappings: FSharp.Compiler.AbstractIL.ILBinaryWriter.ILTokenMappings
       AssemblyBytes: byte[]
@@ -234,18 +234,25 @@ type HotReloadEmitArtifacts =
       IlxGenEnvSnapshot: FSharp.Compiler.IlxGen.IlxGenEnvSnapshot
       OptimizedImpls: TypedTree.CheckedAssemblyAfterOptimization }
 
-type IHotReloadEmitHook =
+type ICompilerEmitHook =
+    abstract ValidateConfiguration:
+        emitCaptureArtifacts: bool * debugInfo: bool * localOptimizationsEnabled: bool -> unit
+
     abstract PrepareForCodeGeneration:
-        hotReloadCapture: bool * compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
+        emitCaptureArtifacts: bool * compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
 
     abstract BeforeFileEmit:
-        hotReloadCapture: bool * compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
+        emitCaptureArtifacts: bool * compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
 
     abstract CaptureArtifacts:
-        compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState * artifacts: HotReloadEmitArtifacts -> unit
+        compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState * artifacts: CompilerEmitArtifacts -> unit
 
     abstract FallbackEmit:
         compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
+
+val defaultCompilerEmitHook: ICompilerEmitHook
+val setAmbientCompilerEmitHook: hook: ICompilerEmitHook -> unit
+val resolveCompilerEmitHook: explicitHook: ICompilerEmitHook option -> ICompilerEmitHook
 
 [<NoEquality; NoComparison>]
 type TcConfigBuilder =
@@ -496,8 +503,8 @@ type TcConfigBuilder =
         isInvalidationSupported: bool
 
         mutable emitDebugInfoInQuotations: bool
-        mutable hotReloadCapture: bool
-        mutable hotReloadEmitHook: IHotReloadEmitHook option
+        mutable emitCaptureArtifacts: bool
+        mutable compilerEmitHook: ICompilerEmitHook option
 
         mutable strictIndentation: bool option
 
@@ -874,8 +881,8 @@ type TcConfig =
     member legacyReferenceResolver: LegacyReferenceResolver
 
     member emitDebugInfoInQuotations: bool
-    member hotReloadCapture: bool
-    member hotReloadEmitHook: IHotReloadEmitHook option
+    member emitCaptureArtifacts: bool
+    member compilerEmitHook: ICompilerEmitHook option
 
     member langVersion: LanguageVersion
 

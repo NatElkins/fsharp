@@ -450,7 +450,7 @@ type TypeCheckingConfig =
         DumpGraph: bool
     }
 
-type HotReloadEmitArtifacts =
+type CompilerEmitArtifacts =
     { IlxMainModule: ILModuleDef
       TokenMappings: FSharp.Compiler.AbstractIL.ILBinaryWriter.ILTokenMappings
       AssemblyBytes: byte[]
@@ -458,18 +458,44 @@ type HotReloadEmitArtifacts =
       IlxGenEnvSnapshot: FSharp.Compiler.IlxGen.IlxGenEnvSnapshot
       OptimizedImpls: CheckedAssemblyAfterOptimization }
 
-type IHotReloadEmitHook =
+type ICompilerEmitHook =
+    abstract ValidateConfiguration:
+        emitCaptureArtifacts: bool * debugInfo: bool * localOptimizationsEnabled: bool -> unit
+
     abstract PrepareForCodeGeneration:
-        hotReloadCapture: bool * compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
+        emitCaptureArtifacts: bool * compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
 
     abstract BeforeFileEmit:
-        hotReloadCapture: bool * compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
+        emitCaptureArtifacts: bool * compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
 
     abstract CaptureArtifacts:
-        compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState * artifacts: HotReloadEmitArtifacts -> unit
+        compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState * artifacts: CompilerEmitArtifacts -> unit
 
     abstract FallbackEmit:
         compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
+
+type private NoOpCompilerEmitHook() =
+    interface ICompilerEmitHook with
+        member _.ValidateConfiguration(_emitCaptureArtifacts, _debugInfo, _localOptimizationsEnabled) = ()
+        member _.PrepareForCodeGeneration(_emitCaptureArtifacts, _compilerGlobalState) = ()
+        member _.BeforeFileEmit(_emitCaptureArtifacts, _compilerGlobalState) = ()
+        member _.CaptureArtifacts(_compilerGlobalState, _artifacts) = ()
+        member _.FallbackEmit(_compilerGlobalState) = ()
+
+let defaultCompilerEmitHook : ICompilerEmitHook =
+    NoOpCompilerEmitHook() :> ICompilerEmitHook
+
+let mutable private ambientCompilerEmitHook: ICompilerEmitHook option = None
+
+/// Register an ambient emit hook for follow-up compiler invocations in the same process.
+let setAmbientCompilerEmitHook (hook: ICompilerEmitHook) =
+    ambientCompilerEmitHook <- Some hook
+
+/// Resolve the emit hook from explicit config first, then ambient registration, then no-op default.
+let resolveCompilerEmitHook (explicitHook: ICompilerEmitHook option) =
+    explicitHook
+    |> Option.orElse ambientCompilerEmitHook
+    |> Option.defaultValue defaultCompilerEmitHook
 
 [<NoEquality; NoComparison>]
 type TcConfigBuilder =
@@ -626,8 +652,8 @@ type TcConfigBuilder =
         /// If true - every expression in quotations will be augmented with full debug info (fileName, location in file)
         mutable emitDebugInfoInQuotations: bool
 
-        mutable hotReloadCapture: bool
-        mutable hotReloadEmitHook: IHotReloadEmitHook option
+        mutable emitCaptureArtifacts: bool
+        mutable compilerEmitHook: ICompilerEmitHook option
 
         mutable strictIndentation: bool option
 
@@ -849,8 +875,8 @@ type TcConfigBuilder =
             noDebugAttributes = false
             useReflectionFreeCodeGen = false
             emitDebugInfoInQuotations = false
-            hotReloadCapture = false
-            hotReloadEmitHook = None
+            emitCaptureArtifacts = false
+            compilerEmitHook = None
             exename = None
             shadowCopyReferences = false
             useSdkRefs = true
@@ -1422,8 +1448,8 @@ type TcConfig private (data: TcConfigBuilder, validate: bool) =
     member _.isInvalidationSupported = data.isInvalidationSupported
     member _.emitDebugInfoInQuotations = data.emitDebugInfoInQuotations
 
-    member _.hotReloadCapture = data.hotReloadCapture
-    member _.hotReloadEmitHook = data.hotReloadEmitHook
+    member _.emitCaptureArtifacts = data.emitCaptureArtifacts
+    member _.compilerEmitHook = data.compilerEmitHook
     member _.copyFSharpCore = data.copyFSharpCore
     member _.shadowCopyReferences = data.shadowCopyReferences
     member _.useSdkRefs = data.useSdkRefs

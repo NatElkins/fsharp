@@ -1,19 +1,31 @@
 module internal FSharp.Compiler.HotReloadEmitHook
 
 open System
+open FSharp.Compiler
 open FSharp.Compiler.CompilerConfig
 open FSharp.Compiler.CompilerGlobalState
+open FSharp.Compiler.Diagnostics
+open FSharp.Compiler.DiagnosticsLogger
 open FSharp.Compiler.GeneratedNames
 open FSharp.Compiler.HotReload
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.HotReloadPdb
 open FSharp.Compiler.SynthesizedTypeMaps
+open FSharp.Compiler.Text.Range
 
-/// Default hot reload hook used by compiler entry points when no explicit hook is provided.
+/// Hot reload emit hook implementation used when --enable:hotreloaddeltas is active.
 type internal DefaultHotReloadEmitHook() =
-    interface IHotReloadEmitHook with
-        member _.PrepareForCodeGeneration(hotReloadCapture, compilerGlobalState) =
-            if hotReloadCapture then
+    interface ICompilerEmitHook with
+        member _.ValidateConfiguration(emitCaptureArtifacts, debugInfo, localOptimizationsEnabled) =
+            if emitCaptureArtifacts then
+                if not debugInfo then
+                    error (Error(FSComp.SR.fscHotReloadRequiresDebugInfo (), rangeStartup))
+
+                if localOptimizationsEnabled then
+                    error (Error(FSComp.SR.fscHotReloadIncompatibleWithOptimization (), rangeStartup))
+
+        member _.PrepareForCodeGeneration(emitCaptureArtifacts, compilerGlobalState) =
+            if emitCaptureArtifacts then
                 match compilerGlobalState.CompilerGeneratedNameMap with
                 | Some map -> map.BeginSession()
                 | None ->
@@ -48,11 +60,11 @@ type internal DefaultHotReloadEmitHook() =
             else
                 compilerGlobalState.CompilerGeneratedNameMap <- None
 
-        member _.BeforeFileEmit(hotReloadCapture, compilerGlobalState) =
-            // Only clear the hot reload session when NOT in hot reload capture mode.
+        member _.BeforeFileEmit(emitCaptureArtifacts, compilerGlobalState) =
+            // Only clear the hot reload session when NOT in capture mode.
             // In IDE scenarios, MSBuild may run in the background and we don't want
             // to clear an active hot reload session being used for live editing.
-            if not hotReloadCapture then
+            if not emitCaptureArtifacts then
                 FSharpEditAndContinueLanguageService.Instance.EndSession()
                 compilerGlobalState.CompilerGeneratedNameMap <- None
 
@@ -83,5 +95,5 @@ type internal DefaultHotReloadEmitHook() =
             FSharpEditAndContinueLanguageService.Instance.EndSession()
             compilerGlobalState.CompilerGeneratedNameMap <- None
 
-let defaultHotReloadEmitHook : IHotReloadEmitHook =
-    DefaultHotReloadEmitHook() :> IHotReloadEmitHook
+let hotReloadCompilerEmitHook : ICompilerEmitHook =
+    DefaultHotReloadEmitHook() :> ICompilerEmitHook
