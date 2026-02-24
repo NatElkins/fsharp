@@ -48,6 +48,12 @@ open FSharp.Compiler.TypeRelations
 let private freshIlxName (g: TcGlobals) name m =
     g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.FreshCompilerGeneratedName(name, m)
 
+let private freshCoreName (g: TcGlobals) name m =
+    g.CompilerGlobalState.Value.NiceNameGenerator.FreshCompilerGeneratedName(name, m)
+
+let private nextIlxOrdinal (g: TcGlobals) name m =
+    g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.IncrementOnly(name, m)
+
 let getEmptyStackGuard () = StackGuard("IlxAssemblyGenerator")
 
 let IsNonErasedTypar (tp: Typar) = not tp.IsErased
@@ -2338,7 +2344,7 @@ and AssemblyBuilder(cenv: cenv, anonTypeTable: AnonTypeGenerationTable) as mgbuf
             (fun (cloc, size) ->
 
                 let unique =
-                    g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.IncrementOnly("@T", cloc.Range)
+                    nextIlxOrdinal g "@T" cloc.Range
 
                 let name = CompilerGeneratedName $"T{unique}_{size}Bytes" // Type names ending ...$T<unique>_37Bytes
 
@@ -2767,7 +2773,7 @@ let GenConstArray cenv (cgbuf: CodeGenBuffer) eenv ilElementType (data: 'a[]) (w
         let vtspec = cgbuf.mgbuf.GenerateRawDataValueType(eenv.cloc, bytes.Length)
 
         let unique =
-            g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.IncrementOnly("@field", eenv.cloc.Range)
+            nextIlxOrdinal g "@field" eenv.cloc.Range
 
         let ilFieldName = CompilerGeneratedName $"field{unique}"
         let fty = ILType.Value vtspec
@@ -4432,7 +4438,7 @@ and GenApp (cenv: cenv) cgbuf eenv (f, fty, tyargs, curriedArgs, m) sequel =
                             let locName =
                                 // Ensure that we have an g.CompilerGlobalState
                                 assert (g.CompilerGlobalState |> Option.isSome)
-                                g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.FreshCompilerGeneratedName("arg", m), ilTy, false
+                                freshIlxName g "arg" m, ilTy, false
 
                             let loc, _realloc, eenv = AllocLocal cenv cgbuf eenv true locName scopeMarks
                             GenExpr cenv cgbuf eenv laterArg Continue
@@ -8985,7 +8991,7 @@ and GenParams
                         if takenNames.Contains(id.idText) then
                             // Ensure that we have an g.CompilerGlobalState
                             assert (g.CompilerGlobalState |> Option.isSome)
-                            g.CompilerGlobalState.Value.NiceNameGenerator.FreshCompilerGeneratedName(id.idText, id.idRange)
+                            freshCoreName g id.idText id.idRange
                         else
                             id.idText
 
