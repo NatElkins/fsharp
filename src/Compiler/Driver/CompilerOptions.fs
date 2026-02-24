@@ -13,7 +13,7 @@ open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILPdbWriter
 open FSharp.Compiler.AbstractIL.Diagnostics
 open FSharp.Compiler.CompilerConfig
-open FSharp.Compiler.HotReloadEmitHook
+open FSharp.Compiler.CompilerEmitHookBootstrap
 open FSharp.Compiler.CompilerDiagnostics
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.Features
@@ -1290,10 +1290,7 @@ let advancedFlagsBoth tcConfigB =
                 match arg.ToLowerInvariant() with
                 | "hotreloaddeltas" ->
                     tcConfigB.emitCaptureArtifacts <- true
-                    tcConfigB.compilerEmitHook <- Some hotReloadCompilerEmitHook
-                    // Keep the hot reload hook available for follow-up emits in the same process,
-                    // even when those invocations omit --enable:hotreloaddeltas.
-                    setAmbientCompilerEmitHook hotReloadCompilerEmitHook
+                    configureHotReloadEmitHook tcConfigB
                 | _ -> error (Error(FSComp.SR.optsUnknownArgumentToTheTestSwitch arg, rangeCmdArgs))),
             None,
             Some "Enable experimental compiler features."
