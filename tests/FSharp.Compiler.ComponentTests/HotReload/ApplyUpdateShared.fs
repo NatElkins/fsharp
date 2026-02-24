@@ -85,3 +85,98 @@ namespace Sample
     }
 }
 """
+
+open System
+open System.Reflection
+open System.Reflection.Metadata
+open FSharp.Compiler.ComponentTests.HotReload.TestHelpers
+open FSharp.Compiler.IlxDeltaEmitter
+
+type internal ApplyUpdateDeltaArtifacts =
+    { BaselineArtifacts: BaselineArtifacts
+      TypeName: string
+      UpdatedMessage: string
+      Delta: IlxDelta }
+
+let internal createApplyUpdateDeltaArtifacts (updatedMessage: string) : ApplyUpdateDeltaArtifacts =
+    let baselineArtifacts = createBaselineFromRealCompiler baselineSourceText
+    let typeName = "Sample.MethodDemo"
+    let methodKey = methodKeyByName baselineArtifacts.Baseline typeName "GetMessage"
+    let updatedModule = createMethodModule updatedMessage |> withDebuggableAttribute
+
+    let request : IlxDeltaRequest =
+        { Baseline = baselineArtifacts.Baseline
+          UpdatedTypes = [ typeName ]
+          UpdatedMethods = [ methodKey ]
+          UpdatedAccessors = []
+          Module = updatedModule
+          SymbolChanges = None
+          CurrentGeneration = 1
+          PreviousGenerationId = None
+          SynthesizedNames = None }
+
+    let delta = emitDelta request
+
+    { BaselineArtifacts = baselineArtifacts
+      TypeName = typeName
+      UpdatedMessage = updatedMessage
+      Delta = delta }
+
+let internal probeApplyUpdateAssembly (tracePrefix: string) (assemblyPath: string) (assembly: Assembly) =
+    let moduleType = assembly.ManifestModule.GetType()
+
+    moduleType.GetMethod("SetDebuggerInfoBits", BindingFlags.Instance ||| BindingFlags.NonPublic)
+    |> Option.ofObj
+    |> Option.iter (fun m ->
+        let paramType = m.GetParameters().[0].ParameterType
+        let bitsObj = System.Enum.ToObject(paramType, 0x0C)
+        m.Invoke(assembly.ManifestModule, [| bitsObj |]) |> ignore
+        printfn "[%s] SetDebuggerInfoBits invoked with 0x0C" tracePrefix)
+
+    match DebuggerFlagProbe.tryComputeFlags assemblyPath with
+    | Some flags -> printfn "[%s] Debugger flags (computed)=%A" tracePrefix flags
+    | None -> printfn "[%s] Debugger flags (computed)=<unavailable>" tracePrefix
+
+    let dbgBits =
+        moduleType.GetMethod("GetDebuggerInfoBits", BindingFlags.Instance ||| BindingFlags.NonPublic)
+        |> Option.ofObj
+        |> Option.map (fun m -> m.Invoke(assembly.ManifestModule, [||]) :?> int)
+        |> Option.orElseWith (fun () ->
+            [ "m_debuggerInfoBits"; "m_debuggerBits" ]
+            |> Seq.tryPick (fun name ->
+                moduleType.GetField(name, BindingFlags.Instance ||| BindingFlags.NonPublic)
+                |> Option.ofObj
+                |> Option.map (fun f -> f.GetValue(assembly.ManifestModule) :?> int)))
+
+    match dbgBits with
+    | Some bits -> printfn "[%s] DebuggerInfoBits=0x%X" tracePrefix bits
+    | None -> printfn "[%s] DebuggerInfoBits=<unavailable>" tracePrefix
+
+    try
+        let moduleInfo = assembly.GetType("Sample.ModuleInfo", throwOnError = true)
+        let bitsFromHelper = moduleInfo.GetMethod("TryGetDebuggerInfoBits", BindingFlags.Public ||| BindingFlags.Static).Invoke(null, [||])
+        let encCapableHelper = moduleInfo.GetMethod("TryIsEditAndContinueCapable", BindingFlags.Public ||| BindingFlags.Static).Invoke(null, [||])
+        let encEnabledHelper = moduleInfo.GetMethod("TryIsEditAndContinueEnabled", BindingFlags.Public ||| BindingFlags.Static).Invoke(null, [||])
+        let peFlags = moduleInfo.GetMethod("TryPeFlags", BindingFlags.Public ||| BindingFlags.Static).Invoke(null, [||])
+        printfn "[%s] DebuggerInfoBits(ModuleInfo)=%A" tracePrefix bitsFromHelper
+        printfn "[%s] ModuleInfo.TryIsEditAndContinueCapable=%A" tracePrefix encCapableHelper
+        printfn "[%s] ModuleInfo.TryIsEditAndContinueEnabled=%A" tracePrefix encEnabledHelper
+        printfn "[%s] ModuleInfo.TryPeFlags=%A" tracePrefix peFlags
+    with ex ->
+        printfn "[%s] ModuleInfo helpers unavailable: %s" tracePrefix (ex.ToString())
+
+    let encMethod = moduleType.GetMethod("IsEditAndContinueCapable", BindingFlags.Instance ||| BindingFlags.NonPublic)
+    let encCapable =
+        match encMethod with
+        | null ->
+            printfn "[%s] IsEditAndContinueCapable not found on %s" tracePrefix moduleType.FullName
+            false
+        | m ->
+            let result = m.Invoke(assembly.ManifestModule, [||]) :?> bool
+            printfn "[%s] IsEditAndContinueCapable=%b" tracePrefix result
+            result
+
+    moduleType, encCapable
+
+let internal pdbBytesOrEmpty (pdbOpt: byte[] option) =
+    defaultArg pdbOpt Array.empty

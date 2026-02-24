@@ -1,18 +1,12 @@
 module FSharp.Compiler.ComponentTests.HotReload.ApplyUpdateChild
 
 open System
-open System.IO
 open System.Reflection
 open System.Reflection.Metadata
 open System.Runtime.Loader
 open System.Diagnostics
 open Xunit
-open Xunit.Sdk
-open Xunit.Sdk
-open FSharp.Compiler.ComponentTests.HotReload
-open FSharp.Compiler.ComponentTests.HotReload.TestHelpers
 open FSharp.Compiler.ComponentTests.HotReload.ApplyUpdateShared
-open FSharp.Compiler.IlxDeltaEmitter
 
 [<Fact>]
 let ``ApplyUpdate child process`` () =
@@ -21,31 +15,10 @@ let ``ApplyUpdate child process`` () =
 
     printfn "[applyupdate-child] MetadataUpdater.IsSupported=%b" (MetadataUpdater.IsSupported)
 
-    // Baseline compiled with the real compiler (Debug) so the runtime sees EnC capability.
-    let baselineSource = baselineSourceText
-    let baselineArtifacts = createBaselineFromRealCompiler baselineSource
-    match DebuggerFlagProbe.tryComputeFlags baselineArtifacts.AssemblyPath with
-    | Some flags -> printfn "[applyupdate-child] Debugger flags (computed)=%A" flags
-    | None -> printfn "[applyupdate-child] Debugger flags (computed)=<unavailable>"
-
-    let typeName = "Sample.MethodDemo"
-    let methodKey = methodKeyByName baselineArtifacts.Baseline typeName "GetMessage"
-
-    // Updated body emitted via IL helper (signature matches compiled baseline)
-    let updatedModule = createMethodModule updatedMessage |> withDebuggableAttribute
-
-    let request : IlxDeltaRequest =
-        { Baseline = baselineArtifacts.Baseline
-          UpdatedTypes = [ typeName ]
-          UpdatedMethods = [ methodKey ]
-          UpdatedAccessors = []
-          Module = updatedModule
-          SymbolChanges = None
-          CurrentGeneration = 1
-          PreviousGenerationId = None
-          SynthesizedNames = None }
-
-    let delta = emitDelta request
+    let artifacts = createApplyUpdateDeltaArtifacts updatedMessage
+    let baselineArtifacts = artifacts.BaselineArtifacts
+    let typeName = artifacts.TypeName
+    let delta = artifacts.Delta
 
     // Load baseline into a fresh collectible ALC to avoid collisions.
     let alc = new AssemblyLoadContext("ApplyUpdateChild_" + Guid.NewGuid().ToString("N"), isCollectible = true)
@@ -53,76 +26,30 @@ let ``ApplyUpdate child process`` () =
     let sampleType = assembly.GetType(typeName, throwOnError = true)
     let method = sampleType.GetMethod("GetMessage", BindingFlags.Public ||| BindingFlags.Static)
 
-    // Dump debugger bits and EnC capability
-    let moduleType = assembly.ManifestModule.GetType()
-    // Force-enable EnC by setting debugger bits: DACF_OBSOLETE_TRACK_JIT_INFO (0x4) | DACF_ENC_ENABLED (0x8)
-    moduleType.GetMethod("SetDebuggerInfoBits", BindingFlags.Instance ||| BindingFlags.NonPublic)
-    |> Option.ofObj
-    |> Option.iter (fun m ->
-        let paramType = m.GetParameters().[0].ParameterType
-        let bitsObj = System.Enum.ToObject(paramType, 0x0C)
-        m.Invoke(assembly.ManifestModule, [| bitsObj |]) |> ignore
-        printfn "[applyupdate-child] SetDebuggerInfoBits invoked with 0x0C"
-    )
-    let dbgBits =
-        moduleType.GetMethod("GetDebuggerInfoBits", BindingFlags.Instance ||| BindingFlags.NonPublic)
-        |> ValueOption.ofObj
-        |> ValueOption.map (fun m -> m.Invoke(assembly.ManifestModule, [||]) :?> int)
-        |> ValueOption.orElseWith (fun () ->
-            [ "m_debuggerInfoBits"; "m_debuggerBits" ]
-            |> Seq.tryPick (fun name ->
-                moduleType.GetField(name, BindingFlags.Instance ||| BindingFlags.NonPublic)
-                |> Option.ofObj
-                |> Option.map (fun f -> f.GetValue(assembly.ManifestModule) :?> int))
-            |> ValueOption.ofOption)
+    let moduleType, encCapable =
+        probeApplyUpdateAssembly "applyupdate-child" baselineArtifacts.AssemblyPath assembly
 
-    match dbgBits with
-    | ValueSome bits -> printfn "[applyupdate-child] DebuggerInfoBits=0x%X" bits
-    | ValueNone -> printfn "[applyupdate-child] DebuggerInfoBits: <unavailable>"
     assembly.GetCustomAttributes<DebuggableAttribute>()
-    |> Seq.iter (fun a -> printfn "[applyupdate-child] Debuggable: tracking=%b disableOpt=%b modes=%A" a.IsJITTrackingEnabled a.IsJITOptimizerDisabled a.DebuggingFlags)
-    try
-        let moduleInfo = assembly.GetType("Sample.ModuleInfo", throwOnError = true)
-        let bitsFromHelper = moduleInfo.GetMethod("TryGetDebuggerInfoBits", BindingFlags.Public ||| BindingFlags.Static).Invoke(null, [||])
-        let encCapableHelper = moduleInfo.GetMethod("TryIsEditAndContinueCapable", BindingFlags.Public ||| BindingFlags.Static).Invoke(null, [||])
-        let encEnabledHelper = moduleInfo.GetMethod("TryIsEditAndContinueEnabled", BindingFlags.Public ||| BindingFlags.Static).Invoke(null, [||])
-        let peFlags = moduleInfo.GetMethod("TryPeFlags", BindingFlags.Public ||| BindingFlags.Static).Invoke(null, [||])
-        printfn "[applyupdate-child] DebuggerInfoBits(ModuleInfo)=%A" bitsFromHelper
-        printfn "[applyupdate-child] ModuleInfo.TryIsEditAndContinueCapable=%A" encCapableHelper
-        printfn "[applyupdate-child] ModuleInfo.TryIsEditAndContinueEnabled=%A" encEnabledHelper
-        printfn "[applyupdate-child] ModuleInfo.TryPeFlags=%A" peFlags
-    with ex ->
-        printfn "[applyupdate-child] ModuleInfo helpers unavailable: %s" (ex.ToString())
+    |> Seq.iter (fun a ->
+        printfn "[applyupdate-child] Debuggable: tracking=%b disableOpt=%b modes=%A" a.IsJITTrackingEnabled a.IsJITOptimizerDisabled a.DebuggingFlags)
+
     printfn "[applyupdate-child] AssemblyName=%s Path=%s" assembly.FullName assembly.Location
+
     [ "m_debuggerInfoBits"; "m_debuggerBits"; "m_dwTransientFlags" ]
     |> List.iter (fun name ->
         match moduleType.GetField(name, BindingFlags.Instance ||| BindingFlags.NonPublic) with
         | null -> ()
-        | f ->
-            let value = f.GetValue(assembly.ManifestModule)
+        | field ->
+            let value = field.GetValue(assembly.ManifestModule)
             printfn "[applyupdate-child] %s=%A" name value)
 
-    let encMethod = moduleType.GetMethod("IsEditAndContinueCapable", BindingFlags.Instance ||| BindingFlags.NonPublic)
-    let encCapable =
-        match encMethod with
-        | null ->
-            printfn "[applyupdate-child] IsEditAndContinueCapable not found on %s" moduleType.FullName
-            false
-        | m ->
-            let r = m.Invoke(assembly.ManifestModule, [||]) :?> bool
-            printfn "[applyupdate-child] IsEditAndContinueCapable=%b" r
-            r
     if not encCapable then
         printfn "[applyupdate-child] Skipping body: module not EnC-capable."
     else
         let before = method.Invoke(null, [||]) :?> string
         Assert.Equal(originalMessage, before)
 
-        let pdbBytes =
-            match delta.Pdb with
-            | Some bytes -> bytes
-            | None -> Array.empty
-
+        let pdbBytes = pdbBytesOrEmpty delta.Pdb
         MetadataUpdater.ApplyUpdate(assembly, delta.Metadata.AsSpan(), delta.IL.AsSpan(), pdbBytes.AsSpan())
 
         let after = method.Invoke(null, [||]) :?> string
