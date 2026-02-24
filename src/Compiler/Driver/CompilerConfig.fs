@@ -450,6 +450,10 @@ type TypeCheckingConfig =
         DumpGraph: bool
     }
 
+/// Artifacts captured from a single baseline emit pass.
+///
+/// These bytes/maps are reused to start or refresh a hot reload baseline without
+/// running a second IL writer pass that could diverge from what hit disk.
 type CompilerEmitArtifacts =
     { IlxMainModule: ILModuleDef
       TokenMappings: FSharp.Compiler.AbstractIL.ILBinaryWriter.ILTokenMappings
@@ -458,6 +462,8 @@ type CompilerEmitArtifacts =
       IlxGenEnvSnapshot: FSharp.Compiler.IlxGen.IlxGenEnvSnapshot
       OptimizedImpls: CheckedAssemblyAfterOptimization }
 
+/// Adapter interface that lets the core emit pipeline remain unaware of hot reload
+/// implementation details while still offering extension points for capture/fallback flows.
 type ICompilerEmitHook =
     abstract ValidateConfiguration:
         emitCaptureArtifacts: bool * debugInfo: bool * localOptimizationsEnabled: bool -> unit
@@ -468,6 +474,8 @@ type ICompilerEmitHook =
     abstract BeforeFileEmit:
         emitCaptureArtifacts: bool * compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
 
+    /// Attempts to perform the final emit phase and capture baseline artifacts in one pass.
+    /// Returns true when the hook handled emission; false means caller must use normal emit.
     abstract TryEmitWithArtifacts:
         emitCaptureArtifacts: bool *
         compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState *
@@ -479,9 +487,11 @@ type ICompilerEmitHook =
         outputFile: string *
         pdbfile: string option -> bool
 
+    /// Captures baseline artifacts after emission when emit happened outside TryEmitWithArtifacts.
     abstract CaptureArtifacts:
         compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState * artifacts: CompilerEmitArtifacts -> unit
 
+    /// Resets hook-owned state when the compiler falls back to dynamic assembly emission.
     abstract FallbackEmit:
         compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
 

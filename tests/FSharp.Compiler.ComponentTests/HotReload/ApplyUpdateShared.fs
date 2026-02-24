@@ -92,12 +92,16 @@ open System.Reflection.Metadata
 open FSharp.Compiler.ComponentTests.HotReload.TestHelpers
 open FSharp.Compiler.IlxDeltaEmitter
 
+// Shared artifacts for runtime ApplyUpdate tests so child/runner/console flows
+// exercise identical baseline and delta construction logic.
 type internal ApplyUpdateDeltaArtifacts =
     { BaselineArtifacts: BaselineArtifacts
       TypeName: string
       UpdatedMessage: string
       Delta: IlxDelta }
 
+// Compile a baseline with real compiler settings and produce a single-generation
+// method-body delta that all ApplyUpdate hosts can reuse.
 let internal createApplyUpdateDeltaArtifacts (updatedMessage: string) : ApplyUpdateDeltaArtifacts =
     let baselineArtifacts = createBaselineFromRealCompiler baselineSourceText
     let typeName = "Sample.MethodDemo"
@@ -122,6 +126,8 @@ let internal createApplyUpdateDeltaArtifacts (updatedMessage: string) : ApplyUpd
       UpdatedMessage = updatedMessage
       Delta = delta }
 
+// Probe runtime debugger/EnC flags using multiple reflection fallbacks so test logs stay
+// actionable across runtime variations where individual private APIs may be absent.
 let internal probeApplyUpdateAssembly (tracePrefix: string) (assemblyPath: string) (assembly: Assembly) =
     let moduleType = assembly.ManifestModule.GetType()
 
@@ -178,5 +184,6 @@ let internal probeApplyUpdateAssembly (tracePrefix: string) (assemblyPath: strin
 
     moduleType, encCapable
 
+// MetadataUpdater.ApplyUpdate expects a span even when no PDB delta was emitted.
 let internal pdbBytesOrEmpty (pdbOpt: byte[] option) =
     defaultArg pdbOpt Array.empty

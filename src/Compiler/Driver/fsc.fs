@@ -1209,6 +1209,8 @@ let main6
                             pathMap = tcConfig.pathMap
                         }
 
+                    // Give the emit hook first chance to perform a single-pass emit+capture flow.
+                    // If it declines, preserve the upstream file-emission path unchanged.
                     let emittedByHook =
                         compilerEmitHook.TryEmitWithArtifacts(
                             tcConfig.emitCaptureArtifacts,

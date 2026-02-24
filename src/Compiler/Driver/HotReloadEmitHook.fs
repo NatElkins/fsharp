@@ -19,6 +19,8 @@ open FSharp.Compiler.Text.Range
 /// Hot reload emit hook implementation used when --enable:hotreloaddeltas is active.
 type internal DefaultHotReloadEmitHook() =
 
+    // Build and register a baseline snapshot from the exact emitted artifacts, then
+    // activate synthesized-name replay for subsequent deltas in the same process.
     let captureArtifacts
         (compilerGlobalState: CompilerGlobalState)
         (artifacts: CompilerEmitArtifacts)
@@ -98,6 +100,8 @@ type internal DefaultHotReloadEmitHook() =
                 FSharpEditAndContinueLanguageService.Instance.EndSession()
                 compilerGlobalState.CompilerGeneratedNameMap <- None
 
+        // Emit through the in-memory writer first so disk bytes and baseline capture share
+        // identical inputs; this avoids subtle drift from a second writer invocation.
         member _.TryEmitWithArtifacts(
             emitCaptureArtifacts,
             compilerGlobalState,

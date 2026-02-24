@@ -45,6 +45,9 @@ open FSharp.Compiler.TypedTreeOps.DebugPrint
 open FSharp.Compiler.TypeHierarchy
 open FSharp.Compiler.TypeRelations
 
+// Centralized naming wrappers used by both ILX generation and the naming-path guard script.
+// New direct calls to CompilerGlobalState name generators should be routed through
+// these helpers so hot reload naming replay stays enforceable.
 let private freshIlxName (g: TcGlobals) name m =
     g.CompilerGlobalState.Value.IlxGenNiceNameGenerator.FreshCompilerGeneratedName(name, m)
 

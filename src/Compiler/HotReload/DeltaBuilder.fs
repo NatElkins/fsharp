@@ -187,6 +187,8 @@ let private describeMethodKey (key: MethodDefinitionKey) =
     let parameterCount = key.ParameterTypes.Length
     $"{key.DeclaringType}::{key.Name}/{parameterCount}`{key.GenericArity}"
 
+// Maps typed-tree symbol changes to baseline tokens using fail-closed matching:
+// unresolved or ambiguous bindings return errors instead of silently dropping edits.
 let mapSymbolChangesToDelta
     (baseline: FSharpEmitBaseline)
     (changes: FSharpSymbolChanges)
