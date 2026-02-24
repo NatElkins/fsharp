@@ -313,23 +313,24 @@ type internal FSharpHotReloadService
                                 | ValueSome session ->
                                     let symbolChanges = computeSymbolChanges tcGlobals session.ImplementationFiles implementationFiles
 
-                                    let updatedTypes, updatedMethods, accessorUpdates =
-                                        mapSymbolChangesToDelta session.Baseline symbolChanges
+                                    match mapSymbolChangesToDelta session.Baseline symbolChanges with
+                                    | Error mappingErrors ->
+                                        Some(FSharpHotReloadError.UnsupportedEdit(String.concat Environment.NewLine mappingErrors))
+                                    | Ok(updatedTypes, updatedMethods, accessorUpdates) ->
+                                        let hasUpdates =
+                                            not (List.isEmpty updatedTypes)
+                                            || not (List.isEmpty updatedMethods)
+                                            || not (List.isEmpty accessorUpdates)
+                                            || not (List.isEmpty symbolChanges.Added)
 
-                                    let hasUpdates =
-                                        not (List.isEmpty updatedTypes)
-                                        || not (List.isEmpty updatedMethods)
-                                        || not (List.isEmpty accessorUpdates)
-                                        || not (List.isEmpty symbolChanges.Added)
-
-                                    if hasUpdates && not (hasOutputFingerprintChanged outputPath currentOutputFingerprint outputFingerprint) then
-                                        Some(
-                                            FSharpHotReloadError.DeltaEmissionFailed(
-                                                $"Output assembly '{outputPath}' did not change after compilation; refusing to emit a delta from stale build output."
+                                        if hasUpdates && not (hasOutputFingerprintChanged outputPath currentOutputFingerprint outputFingerprint) then
+                                            Some(
+                                                FSharpHotReloadError.DeltaEmissionFailed(
+                                                    $"Output assembly '{outputPath}' did not change after compilation; refusing to emit a delta from stale build output."
+                                                )
                                             )
-                                        )
-                                    else
-                                        None)
+                                        else
+                                            None)
 
                         match staleOutputErrorOpt with
                         | Some staleError -> return Result.Error staleError

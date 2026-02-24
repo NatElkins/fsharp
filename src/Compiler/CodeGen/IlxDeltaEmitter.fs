@@ -1014,12 +1014,48 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             |> Array.filter (fun name -> not (String.IsNullOrWhiteSpace name))
             |> Array.distinct
 
-        let baselineNameOpt =
+        let baselineMatches =
             candidateNames
-            |> Array.tryPick (fun candidate ->
+            |> Array.choose (fun candidate ->
                 match request.Baseline.TypeTokens |> Map.tryFind candidate with
                 | Some token -> Some(candidate, token)
                 | None -> None)
+            |> Array.distinctBy fst
+
+        let baselineNameOpt =
+            match baselineMatches with
+            | [||] -> None
+            | [| single |] -> Some single
+            | matches ->
+                let exactMatch =
+                    matches
+                    |> Array.tryFind (fun (matchedName, _) -> String.Equals(matchedName, newFullName, StringComparison.Ordinal))
+
+                match exactMatch with
+                | Some matchResult -> Some matchResult
+                | None ->
+                    let normalizeTypePath (name: string) =
+                        name.Split([|'.'; '+'|], StringSplitOptions.RemoveEmptyEntries)
+                        |> String.concat "."
+
+                    let normalizedTarget = normalizeTypePath newFullName
+
+                    let normalizedMatches =
+                        matches
+                        |> Array.filter (fun (matchedName, _) ->
+                            String.Equals(normalizeTypePath matchedName, normalizedTarget, StringComparison.Ordinal))
+
+                    match normalizedMatches with
+                    | [| normalizedMatch |] -> Some normalizedMatch
+                    | _ ->
+                        let matchedNames = matches |> Array.map fst |> String.concat "; "
+                        let allCandidates = candidateNames |> String.concat "; "
+
+                        raise (
+                            HotReloadUnsupportedEditException(
+                                $"Ambiguous synthesized type mapping for '{newFullName}' (candidates=[{allCandidates}], baselineMatches=[{matchedNames}]); full rebuild required."
+                            )
+                        )
 
         if traceSynthesizedMappings.Value then
             match baselineNameOpt with

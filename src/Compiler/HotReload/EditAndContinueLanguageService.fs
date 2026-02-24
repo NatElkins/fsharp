@@ -274,35 +274,39 @@ type internal FSharpEditAndContinueLanguageService private () =
             elif not (List.isEmpty symbolChanges.Deleted) then
                 Error(HotReloadError.UnsupportedEdit "Deleted symbols detected; full rebuild required.")
             else
-                let updatedTypes, updatedMethods, accessorUpdates = mapSymbolChangesToDelta session.Baseline symbolChanges
-                let updatedMethods = augmentWithCompilerGeneratedCompanions session.Baseline updatedMethods
+                match mapSymbolChangesToDelta session.Baseline symbolChanges with
+                | Error mappingErrors ->
+                    let details = String.concat Environment.NewLine mappingErrors
+                    Error(HotReloadError.UnsupportedEdit details)
+                | Ok(updatedTypes, updatedMethods, accessorUpdates) ->
+                    let updatedMethods = augmentWithCompilerGeneratedCompanions session.Baseline updatedMethods
 
-                // Insert-only edits (for example, adding an allowed non-virtual method) may not produce
-                // method-body updates, but still need to flow to IlxDeltaEmitter so new MethodDef rows are emitted.
-                let hasUpdates =
-                    not (List.isEmpty updatedTypes)
-                    || not (List.isEmpty updatedMethods)
-                    || not (List.isEmpty accessorUpdates)
-                    || not (List.isEmpty symbolChanges.Added)
+                    // Insert-only edits (for example, adding an allowed non-virtual method) may not produce
+                    // method-body updates, but still need to flow to IlxDeltaEmitter so new MethodDef rows are emitted.
+                    let hasUpdates =
+                        not (List.isEmpty updatedTypes)
+                        || not (List.isEmpty updatedMethods)
+                        || not (List.isEmpty accessorUpdates)
+                        || not (List.isEmpty symbolChanges.Added)
 
-                if not hasUpdates then
-                    Error HotReloadError.NoChanges
-                else
-                    let request : DeltaEmissionRequest =
-                        { IlModule = ilModule
-                          UpdatedTypes = updatedTypes
-                          UpdatedMethods = updatedMethods
-                          UpdatedAccessors = accessorUpdates
-                          SymbolChanges = Some symbolChanges }
+                    if not hasUpdates then
+                        Error HotReloadError.NoChanges
+                    else
+                        let request : DeltaEmissionRequest =
+                            { IlModule = ilModule
+                              UpdatedTypes = updatedTypes
+                              UpdatedMethods = updatedMethods
+                              UpdatedAccessors = accessorUpdates
+                              SymbolChanges = Some symbolChanges }
 
-                    match this.EmitDelta request with
-                    | Ok result ->
-                        if result.Delta.UpdatedBaseline.IsSome then
-                            this.CommitPendingUpdate(result.Delta.GenerationId)
+                        match this.EmitDelta request with
+                        | Ok result ->
+                            if result.Delta.UpdatedBaseline.IsSome then
+                                this.CommitPendingUpdate(result.Delta.GenerationId)
 
-                        FSharp.Compiler.HotReloadState.updateImplementationFiles updatedImplementation
-                        Ok result
-                    | Error error -> Error error
+                            FSharp.Compiler.HotReloadState.updateImplementationFiles updatedImplementation
+                            Ok result
+                        | Error error -> Error error
 
     /// <summary>Explicit commit hook mirroring Roslyn's service contract.</summary>
     member this.CommitPendingUpdate(generationId: Guid) =

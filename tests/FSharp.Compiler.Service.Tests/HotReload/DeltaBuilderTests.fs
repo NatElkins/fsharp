@@ -100,7 +100,10 @@ module DeltaBuilderTests =
               Synthesized = []
               RudeEdits = [] }
 
-        let updatedTypes, updatedMethods, accessorUpdates = mapSymbolChangesToDelta baseline changes
+        let updatedTypes, updatedMethods, accessorUpdates =
+            match mapSymbolChangesToDelta baseline changes with
+            | Ok result -> result
+            | Error errors -> failwithf "Expected successful mapping, got %A" errors
 
         Assert.Equal<string list>([ baselineTypeName ], updatedTypes)
         Assert.Empty(updatedMethods)
@@ -140,8 +143,53 @@ module DeltaBuilderTests =
               Synthesized = []
               RudeEdits = [] }
 
-        let updatedTypes, updatedMethods, accessorUpdates = mapSymbolChangesToDelta baseline changes
+        let updatedTypes, updatedMethods, accessorUpdates =
+            match mapSymbolChangesToDelta baseline changes with
+            | Ok result -> result
+            | Error errors -> failwithf "Expected successful mapping, got %A" errors
 
         Assert.Empty(updatedTypes)
         Assert.Equal<MethodDefinitionKey list>([ methodKey ], updatedMethods)
         Assert.Empty(accessorUpdates)
+
+    [<Fact>]
+    let ``mapSymbolChangesToDelta fails closed on ambiguous method mapping`` () =
+        let baselineTypeName = "Sample.Container+Nested"
+
+        let overloadA: MethodDefinitionKey =
+            { DeclaringType = baselineTypeName
+              Name = "Run"
+              GenericArity = 0
+              ParameterTypes = [ ILType.TypeVar 0us ]
+              ReturnType = ILType.Void }
+
+        let overloadB: MethodDefinitionKey =
+            { DeclaringType = baselineTypeName
+              Name = "Run"
+              GenericArity = 0
+              ParameterTypes = [ ILType.TypeVar 1us ]
+              ReturnType = ILType.Void }
+
+        let baseline =
+            createBaseline
+                (Map.ofList [ baselineTypeName, 0x02000002 ])
+                (Map.ofList [ overloadA, 0x06000002; overloadB, 0x06000003 ])
+
+        let methodSymbol =
+            { mkSymbol [ "Sample"; "Container"; "Nested" ] "Run" 3L SymbolKind.Value (Some SymbolMemberKind.Method) with
+                CompiledName = Some "Run" }
+
+        let changes: FSharpSymbolChanges =
+            { Added = []
+              Updated =
+                [ { UpdatedSymbolChange.Symbol = methodSymbol
+                    Kind = SemanticEditKind.MethodBody
+                    ContainingEntity = None } ]
+              Deleted = []
+              Synthesized = []
+              RudeEdits = [] }
+
+        match mapSymbolChangesToDelta baseline changes with
+        | Ok _ -> failwith "Expected ambiguous method mapping to fail closed"
+        | Error errors ->
+            Assert.Contains(errors, fun message -> message.Contains("Ambiguous baseline method mapping", StringComparison.Ordinal))

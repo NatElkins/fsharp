@@ -169,10 +169,28 @@ let private methodReturnTypeMatchesSymbol (symbol: SymbolId) (key: MethodDefinit
     | Some returnTypeIdentity -> ilTypeIdentity key.ReturnType = returnTypeIdentity
     | None -> false
 
+let private formatSymbolIdentity (symbol: SymbolId) =
+    let path =
+        match symbol.Path with
+        | [] -> "<global>"
+        | _ -> joinPath symbol.Path
+
+    let memberName = methodNameOfSymbol symbol
+    $"{path}::{memberName}"
+
+type private MethodResolutionResult =
+    | MethodResolved of MethodDefinitionKey
+    | MethodMissing
+    | MethodAmbiguous of MethodDefinitionKey list
+
+let private describeMethodKey (key: MethodDefinitionKey) =
+    let parameterCount = key.ParameterTypes.Length
+    $"{key.DeclaringType}::{key.Name}/{parameterCount}`{key.GenericArity}"
+
 let mapSymbolChangesToDelta
     (baseline: FSharpEmitBaseline)
     (changes: FSharpSymbolChanges)
-    : string list * MethodDefinitionKey list * AccessorUpdate list =
+    : Result<string list * MethodDefinitionKey list * AccessorUpdate list, string list> =
 
     if traceMethodResolution then
         let formatSymbol (symbol: SymbolId) =
@@ -231,14 +249,23 @@ let mapSymbolChangesToDelta
         |> List.tryFind (fun name -> Map.containsKey name baseline.TypeTokens)
         |> Option.orElseWith (fun () -> tryResolveTypeNameByPath baseline.TypeTokens typePathLookup names)
 
-    let updatedTypes =
+    let updatedTypes, typeResolutionErrors =
         changes
         |> FSharpSymbolChanges.entitySymbolsWithChanges
-        |> List.choose (fun symbol ->
-            symbol
-            |> candidateEntityNames
-            |> tryResolveTypeName)
-        |> deduplicate
+        |> List.fold (fun (resolvedTypes, errors) symbol ->
+            let candidates = symbol |> candidateEntityNames
+
+            match candidates |> tryResolveTypeName with
+            | Some resolvedTypeName -> resolvedTypeName :: resolvedTypes, errors
+            | None ->
+                let errorMessage =
+                    $"Unable to resolve changed type symbol '{formatSymbolIdentity symbol}' to a baseline type token (candidates={candidates}); full rebuild required."
+
+                resolvedTypes, errorMessage :: errors)
+            ([], [])
+
+    let updatedTypes = updatedTypes |> List.rev |> deduplicate
+    let typeResolutionErrors = typeResolutionErrors |> List.rev
 
     let candidateContainingTypeNames (change: UpdatedSymbolChange) =
         let pathSuffixes =
@@ -256,20 +283,21 @@ let mapSymbolChangesToDelta
 
         deduplicate (explicitEntity @ pathSuffixes)
 
-    let tryResolveMethodKey symbol typeName =
+    let resolveMethodKey (symbol: SymbolId) (typeNames: string list) =
         let candidates =
             baseline.MethodTokens
             |> Map.toSeq
             |> Seq.choose (fun (key, _) ->
-                if typeNamesEquivalent key.DeclaringType typeName && methodKeyMatchesSymbol symbol key then
+                if (typeNames |> List.exists (typeNamesEquivalent key.DeclaringType)) && methodKeyMatchesSymbol symbol key then
                     Some key
                 else
                     None)
+            |> Seq.distinct
             |> Seq.toList
 
         match candidates with
-        | [] -> None
-        | [ candidate ] -> Some candidate
+        | [] -> MethodMissing
+        | [ candidate ] -> MethodResolved candidate
         | _ ->
             let parameterMatchedCandidates =
                 if symbol.ParameterTypeIdentities.IsSome then
@@ -278,8 +306,8 @@ let mapSymbolChangesToDelta
                     candidates
 
             match parameterMatchedCandidates with
-            | [ candidate ] -> Some candidate
-            | [] -> None
+            | [ candidate ] -> MethodResolved candidate
+            | [] -> MethodMissing
             | _ ->
                 // Return type disambiguation mirrors Roslyn's signature equality only after parameter matching.
                 let returnMatchedCandidates =
@@ -289,20 +317,21 @@ let mapSymbolChangesToDelta
                         parameterMatchedCandidates
 
                 match returnMatchedCandidates with
-                | [ candidate ] -> Some candidate
-                | _ -> None
+                | [ candidate ] -> MethodResolved candidate
+                | [] -> MethodMissing
+                | ambiguous -> MethodAmbiguous ambiguous
 
-    let updatedMethods =
+    let updatedMethods, methodResolutionErrors =
         changes.Updated
-        |> List.choose (fun change ->
+        |> List.fold (fun (resolvedMethods, errors) change ->
             match change.Kind with
             | SemanticEditKind.MethodBody when change.Symbol.Kind = SymbolKind.Value ->
                 let candidates = candidateContainingTypeNames change
-                let resolved = candidates |> List.tryPick (fun typeName -> tryResolveMethodKey change.Symbol typeName)
+                let resolution = resolveMethodKey change.Symbol candidates
 
                 if traceMethodResolution then
                     printfn
-                        "[fsharp-hotreload][delta-builder] symbol=%s compiledName=%A args=%A genericArity=%A parameterTypes=%A returnType=%A path=%A containingEntity=%A candidates=%A resolved=%A"
+                        "[fsharp-hotreload][delta-builder] symbol=%s compiledName=%A args=%A genericArity=%A parameterTypes=%A returnType=%A path=%A containingEntity=%A candidates=%A resolution=%A"
                         change.Symbol.LogicalName
                         change.Symbol.CompiledName
                         change.Symbol.TotalArgCount
@@ -312,11 +341,26 @@ let mapSymbolChangesToDelta
                         change.Symbol.Path
                         change.ContainingEntity
                         candidates
-                        (resolved |> Option.map (fun key -> sprintf "%s::%s" key.DeclaringType key.Name))
+                        resolution
 
-                resolved
-            | _ -> None)
-        |> deduplicate
+                match resolution with
+                | MethodResolved methodKey -> methodKey :: resolvedMethods, errors
+                | MethodMissing ->
+                    let errorMessage =
+                        $"Unable to resolve changed method symbol '{formatSymbolIdentity change.Symbol}' to a unique baseline method token (containingTypeCandidates={candidates}); full rebuild required."
+
+                    resolvedMethods, errorMessage :: errors
+                | MethodAmbiguous ambiguous ->
+                    let ambiguousText = ambiguous |> List.map describeMethodKey |> String.concat "; "
+                    let errorMessage =
+                        $"Ambiguous baseline method mapping for '{formatSymbolIdentity change.Symbol}' (containingTypeCandidates={candidates}, matches=[{ambiguousText}]); full rebuild required."
+
+                    resolvedMethods, errorMessage :: errors
+            | _ -> resolvedMethods, errors)
+            ([], [])
+
+    let updatedMethods = updatedMethods |> List.rev |> deduplicate
+    let methodResolutionErrors = methodResolutionErrors |> List.rev
 
     let accessorSymbols =
         [ yield! FSharpSymbolChanges.propertyAccessorsAdded changes
@@ -332,17 +376,40 @@ let mapSymbolChangesToDelta
             | None -> false)
         |> deduplicateSymbols
 
-    let accessorUpdates =
+    let accessorUpdates, accessorResolutionErrors =
         accessorSymbols
-        |> List.choose (fun symbol ->
-            symbol
-            |> candidateEntityNames
-            |> tryResolveTypeName
-            |> Option.map (fun typeName ->
-                let methodKey = tryResolveMethodKey symbol typeName
+        |> List.fold (fun (resolvedAccessors, errors) symbol ->
+            let containingTypeCandidates = symbol |> candidateEntityNames
+
+            match containingTypeCandidates |> tryResolveTypeName with
+            | None -> resolvedAccessors, errors
+            | Some typeName ->
+                let method, updatedErrors =
+                    match resolveMethodKey symbol [ typeName ] with
+                    | MethodResolved methodKey -> Some methodKey, errors
+                    | MethodMissing -> None, errors
+                    | MethodAmbiguous ambiguous ->
+                        let ambiguousText = ambiguous |> List.map describeMethodKey |> String.concat "; "
+                        let errorMessage =
+                            $"Ambiguous accessor method mapping for '{formatSymbolIdentity symbol}' (type={typeName}, matches=[{ambiguousText}]); full rebuild required."
+
+                        None, errorMessage :: errors
+
                 { AccessorUpdate.Symbol = symbol
                   ContainingType = typeName
                   MemberKind = symbol.MemberKind.Value
-                  Method = methodKey }))
+                  Method = method }
+                :: resolvedAccessors, updatedErrors)
+            ([], [])
 
-    updatedTypes, updatedMethods, accessorUpdates
+    let accessorUpdates = accessorUpdates |> List.rev
+    let accessorResolutionErrors = accessorResolutionErrors |> List.rev
+
+    let resolutionErrors =
+        typeResolutionErrors @ methodResolutionErrors @ accessorResolutionErrors
+        |> deduplicate
+
+    if List.isEmpty resolutionErrors then
+        Ok(updatedTypes, updatedMethods, accessorUpdates)
+    else
+        Error resolutionErrors
