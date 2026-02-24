@@ -115,6 +115,9 @@ type IlxDeltaRequest =
         SynthesizedNames: FSharpSynthesizedTypeMaps option
     }
 
+type private MethodMetadataInfo =
+    MethodAttributes * MethodImplAttributes * string * byte[] * StringOffset option * BlobOffset option
+
 [<RequireQualifiedAccess>]
 type internal EntityTokenRemapKind =
     | TypeDef
@@ -589,6 +592,238 @@ let private emitMetadataDelta
             (count TableNames.StandAloneSig.Index)
 
     metadataDelta
+let private buildMethodUpdatesWithMetadata
+    (orderedMethodInputs: struct (MethodDefinitionKey * int * MethodDefinitionHandle * MethodDefinition * MethodBodyBlock) list)
+    (metadataReader: MetadataReader)
+    (builder: IlDeltaStreamBuilder)
+    (remapUserString: int -> int)
+    (remapEntityToken: int -> int)
+    =
+    let methodUpdatesWithDefs =
+        orderedMethodInputs
+        |> List.map (fun struct (key, methodToken, methodHandle, methodDef, body) ->
+            let ilBytes, referencedMethodSpecs = rewriteMethodBody remapUserString remapEntityToken body
+            let localSigToken =
+                if body.LocalSignature.IsNil then
+                    0
+                else
+                    let standalone = metadataReader.GetStandaloneSignature body.LocalSignature
+                    let signatureBytes = metadataReader.GetBlobBytes standalone.Signature
+                    builder.AddStandaloneSignature(signatureBytes)
+
+            let bodyUpdate =
+                builder.AddMethodBody(
+                    methodToken,
+                    localSigToken,
+                    ilBytes,
+                    body.MaxStack,
+                    body.LocalVariablesInitialized,
+                    convertExceptionRegions body.ExceptionRegions,
+                    remapEntityToken
+                )
+
+            // Convert SRM MethodDefinitionHandle to F# MethodDefHandle
+            let methodHandleEntity: EntityHandle = methodHandle
+            let methodRowId = MetadataTokens.GetRowNumber(methodHandleEntity)
+            ({ MethodKey = key
+               MethodToken = methodToken
+               MethodHandle = MethodDefHandle methodRowId
+               Body = bodyUpdate }, methodDef, referencedMethodSpecs))
+
+    let methodMetadataLookup =
+        let dict: Dictionary<MethodDefinitionKey, MethodMetadataInfo> = Dictionary(HashIdentity.Structural)
+        for update, methodDef, _ in methodUpdatesWithDefs do
+            let name = metadataReader.GetString methodDef.Name
+            let signature = metadataReader.GetBlobBytes methodDef.Signature
+            let nameOffset = if methodDef.Name.IsNil then None else Some (StringOffset (MetadataTokens.GetHeapOffset methodDef.Name))
+            let signatureOffset = if methodDef.Signature.IsNil then None else Some (BlobOffset (MetadataTokens.GetHeapOffset methodDef.Signature))
+            dict[update.MethodKey] <-
+                (methodDef.Attributes, methodDef.ImplAttributes, name, signature, nameOffset, signatureOffset)
+        dict
+
+    methodUpdatesWithDefs, methodMetadataLookup
+
+let private buildParameterDefinitionRowsSnapshot
+    (parameterDefinitionRowsRaw: struct (int * ParameterDefinitionKey * bool) list)
+    (parameterHandleLookup: Dictionary<ParameterDefinitionKey, ParameterHandle>)
+    (baselineParameterHandles: Map<ParameterDefinitionKey, ParameterDefinitionMetadataHandles>)
+    (syntheticParameterInfo: Dictionary<ParameterDefinitionKey, ParameterAttributes>)
+    (firstParamRowByMethod: Dictionary<MethodDefinitionKey, int>)
+    (returnParameterKeys: HashSet<ParameterDefinitionKey>)
+    (metadataReader: MetadataReader)
+    : ParameterDefinitionRowInfo list =
+    let rows =
+        parameterDefinitionRowsRaw
+        |> List.choose (fun struct (rowId, key, isAdded) ->
+            if rowId = 0 then
+                None
+            else
+                let attrs, sequence, nameOpt, resolvedOffsetOpt =
+                    match parameterHandleLookup.TryGetValue key with
+                    | true, handle when not handle.IsNil ->
+                        let parameter = metadataReader.GetParameter handle
+                        let name =
+                            if parameter.Name.IsNil then
+                                None
+                            else
+                                metadataReader.GetString parameter.Name |> Some
+                        let resolvedOffset =
+                            match baselineParameterHandles |> Map.tryFind key |> Option.bind (fun info -> info.NameOffset) with
+                            | Some offset -> Some offset
+                            | None -> if parameter.Name.IsNil then None else Some (StringOffset (MetadataTokens.GetHeapOffset parameter.Name))
+                        parameter.Attributes, int parameter.SequenceNumber, name, resolvedOffset
+                    | _ ->
+                        let attrs =
+                            match syntheticParameterInfo.TryGetValue key with
+                            | true, value -> value
+                            | _ -> ParameterAttributes.None
+                        attrs, key.SequenceNumber, None, None
+
+                match firstParamRowByMethod.TryGetValue key.Method with
+                | true, existing when existing <= rowId -> ()
+                | _ -> firstParamRowByMethod[key.Method] <- rowId
+
+                // Treat synthesized return parameter rows as added so EncLog/EncMap
+                // reflect the new Param table entry, mirroring Roslyn ENC behavior.
+                let effectiveIsAdded =
+                    if returnParameterKeys.Contains key then true else isAdded
+
+                Some
+                    { ParameterDefinitionRowInfo.Key = key
+                      RowId = rowId
+                      IsAdded = effectiveIsAdded
+                      Attributes = attrs
+                      SequenceNumber = sequence
+                      Name = nameOpt
+                      NameOffset = resolvedOffsetOpt })
+
+    if traceMethodUpdates.Value then
+        printfn "[fsharp-hotreload][param-rows] count=%d" rows.Length
+
+    rows
+
+let private buildMethodDefinitionRowsSnapshot
+    (methodDefinitionRowsRaw: struct (int * MethodDefinitionKey * bool) list)
+    (methodUpdatesWithDefs: (MethodMetadataUpdate * MethodDefinition * int list) list)
+    (methodMetadataLookup: Dictionary<MethodDefinitionKey, MethodMetadataInfo>)
+    (baselineMethodHandles: Map<MethodDefinitionKey, MethodDefinitionMetadataHandles>)
+    (firstParamRowByMethod: Dictionary<MethodDefinitionKey, int>)
+    (baselineMethodTokens: Map<MethodDefinitionKey, int>)
+    (methodDefinitionIndex: DefinitionIndex<MethodDefinitionKey>)
+    : MethodDefinitionRowInfo list =
+
+    let tryBuildMethodRow rowId key isAdded =
+        match methodMetadataLookup.TryGetValue key with
+        | true, (attrs, implAttrs, name, signature, emittedNameOffset, emittedSignatureOffset) ->
+            let baselineHandles = baselineMethodHandles |> Map.tryFind key
+            let resolvedNameOffset =
+                match baselineHandles |> Option.bind (fun info -> info.NameOffset) with
+                | Some offset -> Some offset
+                | None -> emittedNameOffset
+            let resolvedSignatureOffset =
+                match baselineHandles |> Option.bind (fun info -> info.SignatureOffset) with
+                | Some offset -> Some offset
+                | None -> emittedSignatureOffset
+            let resolvedAttributes =
+                match baselineHandles |> Option.bind (fun info -> info.Attributes) with
+                | Some value -> value
+                | None -> attrs
+            let resolvedImplAttributes =
+                match baselineHandles |> Option.bind (fun info -> info.ImplAttributes) with
+                | Some value -> value
+                | None -> implAttrs
+            let resolvedCodeRva = baselineHandles |> Option.bind (fun info -> info.Rva)
+            let baselineFirstParam =
+                baselineHandles
+                |> Option.bind (fun info -> info.FirstParameterRowId)
+
+            let firstParam =
+                match firstParamRowByMethod.TryGetValue key with
+                | true, value when value > 0 -> Some value
+                | _ ->
+                    match baselineFirstParam with
+                    | Some _ as baselineRow -> baselineRow
+                    | None -> None
+
+            Some
+                { MethodDefinitionRowInfo.Key = key
+                  RowId = rowId
+                  IsAdded = isAdded
+                  Attributes = resolvedAttributes
+                  ImplAttributes = resolvedImplAttributes
+                  Name = name
+                  NameOffset = resolvedNameOffset
+                  Signature = signature
+                  SignatureOffset = resolvedSignatureOffset
+                  FirstParameterRowId = firstParam
+                  CodeRva = resolvedCodeRva }
+        | _ -> None
+
+    let initialRows =
+        methodDefinitionRowsRaw
+        |> List.choose (fun struct (rowId, key, isAdded) -> tryBuildMethodRow rowId key isAdded)
+
+    let existingKeys = HashSet<MethodDefinitionKey>(initialRows |> Seq.map (fun row -> row.Key), HashIdentity.Structural)
+
+    let missingRows =
+        methodUpdatesWithDefs
+        |> List.choose (fun (update, _, _) ->
+            if existingKeys.Contains update.MethodKey then
+                None
+            else
+                let rowId =
+                    match baselineMethodTokens |> Map.tryFind update.MethodKey with
+                    | Some token -> token &&& 0x00FFFFFF
+                    | None -> methodDefinitionIndex.GetRowId update.MethodKey
+
+                tryBuildMethodRow rowId update.MethodKey false)
+
+    let rows = initialRows @ missingRows
+
+    if traceMethodUpdates.Value then
+        printfn "[fsharp-hotreload][method-rows] count=%d (missing=%d)" rows.Length missingRows.Length
+        printfn "[fsharp-hotreload][params] firstParamRowByMethod entries:"
+        for KeyValue(k, v) in firstParamRowByMethod do
+            printfn "  %s::%s firstParamRowId=%d" k.DeclaringType k.Name v
+        printfn "[fsharp-hotreload][methods] FirstParameterRowId after merge:"
+        for row in rows do
+            let fp = defaultArg row.FirstParameterRowId 0
+            printfn "  method=%s::%s rowId=%d firstParam=%d isAdded=%b" row.Key.DeclaringType row.Key.Name row.RowId fp row.IsAdded
+
+    rows
+
+let private buildMethodSpecificationRowsSnapshot
+    (traceMetadata: bool)
+    (methodUpdatesWithDefs: (MethodMetadataUpdate * MethodDefinition * int list) list)
+    (baselineMethodSpecRowCount: int)
+    (methodSpecRowsByToken: Dictionary<int, MethodSpecificationRowInfo>)
+    : MethodSpecificationRowInfo list =
+
+    let referencedMethodSpecTokens =
+        methodUpdatesWithDefs
+        |> List.collect (fun (_, _, methodSpecs) -> methodSpecs)
+        |> List.distinct
+
+    if traceMetadata then
+        printfn
+            "[fsharp-hotreload][metadata] methodspec candidates=%d baselineRows=%d tokens=%s"
+            referencedMethodSpecTokens.Length
+            baselineMethodSpecRowCount
+            (referencedMethodSpecTokens |> List.map (fun token -> sprintf "0x%08X" token) |> String.concat ",")
+
+    referencedMethodSpecTokens
+    |> List.choose (fun methodSpecToken ->
+        match methodSpecRowsByToken.TryGetValue methodSpecToken with
+        | true, row -> Some row
+        | _ ->
+            if traceMetadata then
+                printfn
+                    "[fsharp-hotreload][metadata] missing mapped methodspec token=0x%08X"
+                    methodSpecToken
+
+            None)
+    |> Seq.sortBy _.RowId
+    |> Seq.toList
 
 /// Emits the delta artifacts for a request. The current implementation populates token projections
 /// while leaving the raw metadata/IL/PDB payload empty; future work will replace the placeholders
@@ -1583,202 +1818,38 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     if List.isEmpty methodUpdateInputs && List.isEmpty updatedTypeTokens then
         emptyDelta
     else
-        let methodUpdatesWithDefs =
-            orderedMethodInputs
-            |> List.map (fun struct (key, methodToken, methodHandle, methodDef, body) ->
-                let ilBytes, referencedMethodSpecs = rewriteMethodBody remapUserString remapEntityToken body
-                let localSigToken =
-                    if body.LocalSignature.IsNil then
-                        0
-                    else
-                        let standalone = metadataReader.GetStandaloneSignature body.LocalSignature
-                        let signatureBytes = metadataReader.GetBlobBytes standalone.Signature
-                        builder.AddStandaloneSignature(signatureBytes)
-
-                let bodyUpdate =
-                    builder.AddMethodBody(
-                        methodToken,
-                        localSigToken,
-                        ilBytes,
-                        body.MaxStack,
-                        body.LocalVariablesInitialized,
-                        convertExceptionRegions body.ExceptionRegions,
-                        remapEntityToken
-                    )
-
-                // Convert SRM MethodDefinitionHandle to F# MethodDefHandle
-                let methodHandleEntity: EntityHandle = methodHandle
-                let methodRowId = MetadataTokens.GetRowNumber(methodHandleEntity)
-                ({ MethodKey = key
-                   MethodToken = methodToken
-                   MethodHandle = MethodDefHandle methodRowId
-                   Body = bodyUpdate }, methodDef, referencedMethodSpecs))
-
-        let methodMetadataLookup =
-            let dict : Dictionary<MethodDefinitionKey, struct (MethodAttributes * MethodImplAttributes * string * byte[] * StringOffset option * BlobOffset option)> =
-                Dictionary(HashIdentity.Structural)
-            for update, methodDef, _ in methodUpdatesWithDefs do
-                let name = metadataReader.GetString methodDef.Name
-                let signature = metadataReader.GetBlobBytes methodDef.Signature
-                let nameOffset = if methodDef.Name.IsNil then None else Some (StringOffset (MetadataTokens.GetHeapOffset methodDef.Name))
-                let signatureOffset = if methodDef.Signature.IsNil then None else Some (BlobOffset (MetadataTokens.GetHeapOffset methodDef.Signature))
-                dict[update.MethodKey] <-
-                    struct (methodDef.Attributes, methodDef.ImplAttributes, name, signature, nameOffset, signatureOffset)
-            dict
+        let methodUpdatesWithDefs, methodMetadataLookup =
+            buildMethodUpdatesWithMetadata
+                orderedMethodInputs
+                metadataReader
+                builder
+                remapUserString
+                remapEntityToken
 
         let parameterDefinitionRowsSnapshot =
-            parameterDefinitionIndex.Rows
-            |> List.choose (fun struct (rowId, key, isAdded) ->
-                if rowId = 0 then
-                    None
-                else
-                    let attrs, sequence, nameOpt, resolvedOffsetOpt =
-                        match parameterHandleLookup.TryGetValue key with
-                        | true, handle when not handle.IsNil ->
-                            let parameter = metadataReader.GetParameter handle
-                            let name =
-                                if parameter.Name.IsNil then
-                                    None
-                                else
-                                    metadataReader.GetString parameter.Name |> Some
-                            let resolvedOffset =
-                                match baselineParameterHandles |> Map.tryFind key |> Option.bind (fun info -> info.NameOffset) with
-                                | Some offset -> Some offset
-                                | None -> if parameter.Name.IsNil then None else Some (StringOffset (MetadataTokens.GetHeapOffset parameter.Name))
-                            parameter.Attributes, int parameter.SequenceNumber, name, resolvedOffset
-                        | _ ->
-                            let attrs =
-                                match syntheticParameterInfo.TryGetValue key with
-                                | true, value -> value
-                                | _ -> ParameterAttributes.None
-                            attrs, key.SequenceNumber, None, None
-
-                    match firstParamRowByMethod.TryGetValue key.Method with
-                    | true, existing when existing <= rowId -> ()
-                    | _ -> firstParamRowByMethod[key.Method] <- rowId
-
-                    // Treat synthesized return parameter rows as added so EncLog/EncMap
-                    // reflect the new Param table entry, mirroring Roslyn ENC behavior.
-                    let effectiveIsAdded =
-                        if returnParameterKeys.Contains key then true else isAdded
-                    Some
-                        { ParameterDefinitionRowInfo.Key = key
-                          RowId = rowId
-                          IsAdded = effectiveIsAdded
-                          Attributes = attrs
-                          SequenceNumber = sequence
-                          Name = nameOpt
-                          NameOffset = resolvedOffsetOpt })
-        if traceMethodUpdates.Value then
-            printfn "[fsharp-hotreload][param-rows] count=%d" parameterDefinitionRowsSnapshot.Length
-
-        let tryBuildMethodRow rowId key isAdded =
-                match methodMetadataLookup.TryGetValue key with
-                | true, struct (attrs, implAttrs, name, signature, emittedNameOffset, emittedSignatureOffset) ->
-                    let baselineHandles = baselineMethodHandles |> Map.tryFind key
-                    let resolvedNameOffset =
-                        match baselineHandles |> Option.bind (fun info -> info.NameOffset) with
-                        | Some offset -> Some offset
-                        | None -> emittedNameOffset
-                    let resolvedSignatureOffset =
-                        match baselineHandles |> Option.bind (fun info -> info.SignatureOffset) with
-                        | Some offset -> Some offset
-                        | None -> emittedSignatureOffset
-                    let resolvedAttributes =
-                        match baselineHandles |> Option.bind (fun info -> info.Attributes) with
-                        | Some value -> value
-                        | None -> attrs
-                    let resolvedImplAttributes =
-                        match baselineHandles |> Option.bind (fun info -> info.ImplAttributes) with
-                        | Some value -> value
-                        | None -> implAttrs
-                    let resolvedCodeRva = baselineHandles |> Option.bind (fun info -> info.Rva)
-                    let baselineFirstParam =
-                        baselineHandles
-                        |> Option.bind (fun info -> info.FirstParameterRowId)
-
-                    let firstParam =
-                        match firstParamRowByMethod.TryGetValue key with
-                        | true, value when value > 0 -> Some value
-                        | _ ->
-                            match baselineFirstParam with
-                            | Some _ as baselineRow -> baselineRow
-                            | None -> None
-                    Some
-                        { MethodDefinitionRowInfo.Key = key
-                          RowId = rowId
-                          IsAdded = isAdded
-                          Attributes = resolvedAttributes
-                          ImplAttributes = resolvedImplAttributes
-                          Name = name
-                          NameOffset = resolvedNameOffset
-                          Signature = signature
-                          SignatureOffset = resolvedSignatureOffset
-                          FirstParameterRowId = firstParam
-                          CodeRva = resolvedCodeRva }
-                | _ -> None
-
+            buildParameterDefinitionRowsSnapshot
+                parameterDefinitionIndex.Rows
+                parameterHandleLookup
+                baselineParameterHandles
+                syntheticParameterInfo
+                firstParamRowByMethod
+                returnParameterKeys
+                metadataReader
         let methodDefinitionRowsSnapshot =
-            let initialRows =
+            buildMethodDefinitionRowsSnapshot
                 methodDefinitionRowsRaw
-                |> List.choose (fun struct (rowId, key, isAdded) -> tryBuildMethodRow rowId key isAdded)
-
-            let existingKeys = HashSet<MethodDefinitionKey>(initialRows |> Seq.map (fun row -> row.Key), HashIdentity.Structural)
-
-            let missingRows =
                 methodUpdatesWithDefs
-                |> List.choose (fun (update, _, _) ->
-                    if existingKeys.Contains update.MethodKey then
-                        None
-                    else
-                        let rowId =
-                            match request.Baseline.MethodTokens |> Map.tryFind update.MethodKey with
-                            | Some token -> token &&& 0x00FFFFFF
-                            | None -> methodDefinitionIndex.GetRowId update.MethodKey
-
-                        tryBuildMethodRow rowId update.MethodKey false)
-
-            let rows = initialRows @ missingRows
-
-            if traceMethodUpdates.Value then
-                printfn "[fsharp-hotreload][method-rows] count=%d (missing=%d)" rows.Length missingRows.Length
-                printfn "[fsharp-hotreload][params] firstParamRowByMethod entries:"
-                for KeyValue(k, v) in firstParamRowByMethod do
-                    printfn "  %s::%s firstParamRowId=%d" k.DeclaringType k.Name v
-                printfn "[fsharp-hotreload][methods] FirstParameterRowId after merge:"
-                for row in rows do
-                    let fp = defaultArg row.FirstParameterRowId 0
-                    printfn "  method=%s::%s rowId=%d firstParam=%d isAdded=%b" row.Key.DeclaringType row.Key.Name row.RowId fp row.IsAdded
-
-            rows
-
+                methodMetadataLookup
+                baselineMethodHandles
+                firstParamRowByMethod
+                request.Baseline.MethodTokens
+                methodDefinitionIndex
         let methodSpecificationRowsSnapshot =
-            let referencedMethodSpecTokens =
+            buildMethodSpecificationRowsSnapshot
+                traceMetadata.Value
                 methodUpdatesWithDefs
-                |> List.collect (fun (_, _, methodSpecs) -> methodSpecs)
-                |> List.distinct
-
-            if traceMetadata.Value then
-                printfn
-                    "[fsharp-hotreload][metadata] methodspec candidates=%d baselineRows=%d tokens=%s"
-                    referencedMethodSpecTokens.Length
-                    baselineMethodSpecRowCount
-                    (referencedMethodSpecTokens |> List.map (fun token -> sprintf "0x%08X" token) |> String.concat ",")
-
-            referencedMethodSpecTokens
-            |> List.choose (fun methodSpecToken ->
-                match methodSpecRowsByToken.TryGetValue methodSpecToken with
-                | true, row -> Some row
-                | _ ->
-                    if traceMetadata.Value then
-                        printfn
-                            "[fsharp-hotreload][metadata] missing mapped methodspec token=0x%08X"
-                            methodSpecToken
-
-                    None)
-            |> Seq.sortBy _.RowId
-            |> Seq.toList
-
+                baselineMethodSpecRowCount
+                methodSpecRowsByToken
         let propertyDefinitionRowsSnapshot =
             propertyDefinitionIndex.Rows
             |> List.choose (fun struct (rowId, key, isAdded) ->
