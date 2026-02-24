@@ -1,0 +1,4 @@
+# SHA256 fingerprints for allowed .fsi drift relative to origin/main.
+# Format: <path> <sha256(git diff --no-color BASE_REF...HEAD -- <path>)>
+
+src/Compiler/AbstractIL/ilwrite.fsi 9b267b6a8036bf3ae7d11c6cf62964801ed17a9af24afcc5f04ca620607c0c32

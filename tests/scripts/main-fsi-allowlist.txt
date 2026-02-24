@@ -3,6 +3,7 @@
 # entries as invasive surface changes are refactored away.
 
 src/Compiler/AbstractIL/ilbinary.fsi
+# ilwrite.fsi is additionally hash-locked in main-fsi-drift-hashes.txt
 src/Compiler/AbstractIL/ilwrite.fsi
 src/Compiler/AbstractIL/ilwritepdb.fsi
 src/Compiler/CodeGen/HotReloadBaseline.fsi
