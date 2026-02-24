@@ -468,6 +468,17 @@ type ICompilerEmitHook =
     abstract BeforeFileEmit:
         emitCaptureArtifacts: bool * compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
 
+    abstract TryEmitWithArtifacts:
+        emitCaptureArtifacts: bool *
+        compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState *
+        ilWriteOptions: FSharp.Compiler.AbstractIL.ILBinaryWriter.options *
+        ilxMainModule: ILModuleDef *
+        normalizeAssemblyRefs: (ILAssemblyRef -> ILAssemblyRef) *
+        optimizedImpls: CheckedAssemblyAfterOptimization *
+        ilxGenEnvSnapshot: FSharp.Compiler.IlxGen.IlxGenEnvSnapshot *
+        outputFile: string *
+        pdbfile: string option -> bool
+
     abstract CaptureArtifacts:
         compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState * artifacts: CompilerEmitArtifacts -> unit
 
@@ -479,6 +490,20 @@ type private NoOpCompilerEmitHook() =
         member _.ValidateConfiguration(_emitCaptureArtifacts, _debugInfo, _localOptimizationsEnabled) = ()
         member _.PrepareForCodeGeneration(_emitCaptureArtifacts, _compilerGlobalState) = ()
         member _.BeforeFileEmit(_emitCaptureArtifacts, _compilerGlobalState) = ()
+
+        member _.TryEmitWithArtifacts(
+            _emitCaptureArtifacts,
+            _compilerGlobalState,
+            _ilWriteOptions,
+            _ilxMainModule,
+            _normalizeAssemblyRefs,
+            _optimizedImpls,
+            _ilxGenEnvSnapshot,
+            _outputFile,
+            _pdbfile
+        ) =
+            false
+
         member _.CaptureArtifacts(_compilerGlobalState, _artifacts) = ()
         member _.FallbackEmit(_compilerGlobalState) = ()
 

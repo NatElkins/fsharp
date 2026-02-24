@@ -1209,29 +1209,20 @@ let main6
                             pathMap = tcConfig.pathMap
                         }
 
-                    if tcConfig.emitCaptureArtifacts then
-                        // Emit once in-memory, write to disk, and use same artifacts for baseline.
-                        // This avoids double emission (previously WriteILBinaryFile then WriteILBinaryInMemoryWithArtifacts).
-                        let assemblyBytes, pdbBytesOpt, tokenMappings, _ =
-                            ILBinaryWriter.WriteILBinaryInMemoryWithArtifacts(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
-
-                        // Write the emitted bytes to disk
-                        File.WriteAllBytes(outfile, assemblyBytes)
-                        match pdbfile, pdbBytesOpt with
-                        | Some pdbPath, Some pdbBytes -> File.WriteAllBytes(pdbPath, pdbBytes)
-                        | _ -> ()
-
-                        compilerEmitHook.CaptureArtifacts(
+                    let emittedByHook =
+                        compilerEmitHook.TryEmitWithArtifacts(
+                            tcConfig.emitCaptureArtifacts,
                             tcGlobals.CompilerGlobalState.Value,
-                            { IlxMainModule = ilxMainModule
-                              TokenMappings = tokenMappings
-                              AssemblyBytes = assemblyBytes
-                              PortablePdbBytes = pdbBytesOpt
-                              IlxGenEnvSnapshot = ilxGenEnvSnapshot
-                              OptimizedImpls = optimizedImpls }
+                            ilWriteOptions,
+                            ilxMainModule,
+                            normalizeAssemblyRefs,
+                            optimizedImpls,
+                            ilxGenEnvSnapshot,
+                            outfile,
+                            pdbfile
                         )
-                    else
-                        // Normal compilation without hot reload capture
+
+                    if not emittedByHook then
                         ILBinaryWriter.WriteILBinaryFile(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
                 with Failure msg ->
                     error (Error(FSComp.SR.fscProblemWritingBinary (outfile, msg), rangeCmdArgs))

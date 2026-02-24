@@ -1,7 +1,10 @@
 module internal FSharp.Compiler.HotReloadEmitHook
 
 open System
+open System.IO
 open FSharp.Compiler
+open FSharp.Compiler.AbstractIL.IL
+open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.CompilerConfig
 open FSharp.Compiler.CompilerGlobalState
 open FSharp.Compiler.Diagnostics
@@ -15,6 +18,33 @@ open FSharp.Compiler.Text.Range
 
 /// Hot reload emit hook implementation used when --enable:hotreloaddeltas is active.
 type internal DefaultHotReloadEmitHook() =
+
+    let captureArtifacts
+        (compilerGlobalState: CompilerGlobalState)
+        (artifacts: CompilerEmitArtifacts)
+        =
+        let portablePdbSnapshot = artifacts.PortablePdbBytes |> Option.map HotReloadPdb.createSnapshot
+
+        let ilxGenEnvironment =
+            if obj.ReferenceEquals(artifacts.IlxGenEnvSnapshot, null) then
+                None
+            else
+                Some artifacts.IlxGenEnvSnapshot
+
+        let baseline =
+            HotReloadBaseline.createFromEmittedArtifacts
+                artifacts.IlxMainModule
+                artifacts.TokenMappings
+                artifacts.AssemblyBytes
+                portablePdbSnapshot
+                ilxGenEnvironment
+
+        FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, artifacts.OptimizedImpls) |> ignore
+
+        match compilerGlobalState.CompilerGeneratedNameMap with
+        | Some map -> map.BeginSession()
+        | None -> ()
+
     interface ICompilerEmitHook with
         member _.ValidateConfiguration(emitCaptureArtifacts, debugInfo, localOptimizationsEnabled) =
             if emitCaptureArtifacts then
@@ -68,28 +98,44 @@ type internal DefaultHotReloadEmitHook() =
                 FSharpEditAndContinueLanguageService.Instance.EndSession()
                 compilerGlobalState.CompilerGeneratedNameMap <- None
 
+        member _.TryEmitWithArtifacts(
+            emitCaptureArtifacts,
+            compilerGlobalState,
+            ilWriteOptions,
+            ilxMainModule,
+            normalizeAssemblyRefs,
+            optimizedImpls,
+            ilxGenEnvSnapshot,
+            outputFile,
+            pdbfile
+        ) =
+            if not emitCaptureArtifacts then
+                false
+            else
+                let assemblyBytes, pdbBytesOpt, tokenMappings, _ =
+                    WriteILBinaryInMemoryWithArtifacts(ilWriteOptions, ilxMainModule, normalizeAssemblyRefs)
+
+                // Emit once in-memory and persist those exact artifacts to disk to avoid
+                // a second write pass diverging from the captured baseline input.
+                File.WriteAllBytes(outputFile, assemblyBytes)
+
+                match pdbfile, pdbBytesOpt with
+                | Some pdbPath, Some pdbBytes -> File.WriteAllBytes(pdbPath, pdbBytes)
+                | _ -> ()
+
+                captureArtifacts
+                    compilerGlobalState
+                    { IlxMainModule = ilxMainModule
+                      TokenMappings = tokenMappings
+                      AssemblyBytes = assemblyBytes
+                      PortablePdbBytes = pdbBytesOpt
+                      IlxGenEnvSnapshot = ilxGenEnvSnapshot
+                      OptimizedImpls = optimizedImpls }
+
+                true
+
         member _.CaptureArtifacts(compilerGlobalState, artifacts) =
-            let portablePdbSnapshot = artifacts.PortablePdbBytes |> Option.map HotReloadPdb.createSnapshot
-
-            let ilxGenEnvironment =
-                if obj.ReferenceEquals(artifacts.IlxGenEnvSnapshot, null) then
-                    None
-                else
-                    Some artifacts.IlxGenEnvSnapshot
-
-            let baseline =
-                HotReloadBaseline.createFromEmittedArtifacts
-                    artifacts.IlxMainModule
-                    artifacts.TokenMappings
-                    artifacts.AssemblyBytes
-                    portablePdbSnapshot
-                    ilxGenEnvironment
-
-            FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, artifacts.OptimizedImpls) |> ignore
-
-            match compilerGlobalState.CompilerGeneratedNameMap with
-            | Some map -> map.BeginSession()
-            | None -> ()
+            captureArtifacts compilerGlobalState artifacts
 
         member _.FallbackEmit(compilerGlobalState) =
             FSharpEditAndContinueLanguageService.Instance.EndSession()

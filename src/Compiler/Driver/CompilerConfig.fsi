@@ -244,6 +244,17 @@ type ICompilerEmitHook =
     abstract BeforeFileEmit:
         emitCaptureArtifacts: bool * compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
 
+    abstract TryEmitWithArtifacts:
+        emitCaptureArtifacts: bool *
+        compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState *
+        ilWriteOptions: FSharp.Compiler.AbstractIL.ILBinaryWriter.options *
+        ilxMainModule: ILModuleDef *
+        normalizeAssemblyRefs: (ILAssemblyRef -> ILAssemblyRef) *
+        optimizedImpls: TypedTree.CheckedAssemblyAfterOptimization *
+        ilxGenEnvSnapshot: FSharp.Compiler.IlxGen.IlxGenEnvSnapshot *
+        outputFile: string *
+        pdbfile: string option -> bool
+
     abstract CaptureArtifacts:
         compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState * artifacts: CompilerEmitArtifacts -> unit
 
