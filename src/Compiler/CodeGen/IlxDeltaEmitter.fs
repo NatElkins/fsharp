@@ -118,6 +118,7 @@ type IlxDeltaRequest =
 type private MethodMetadataInfo =
     MethodAttributes * MethodImplAttributes * string * byte[] * StringOffset option * BlobOffset option
 
+
 [<RequireQualifiedAccess>]
 type internal EntityTokenRemapKind =
     | TypeDef
@@ -825,6 +826,733 @@ let private buildMethodSpecificationRowsSnapshot
     |> Seq.sortBy _.RowId
     |> Seq.toList
 
+
+let private buildPropertyEventAndSemanticsRows
+    (traceMethodUpdates: bool)
+    (request: IlxDeltaRequest)
+    (metadataReader: MetadataReader)
+    (propertyDefinitionIndex: DefinitionIndex<PropertyDefinitionKey>)
+    (eventDefinitionIndex: DefinitionIndex<EventDefinitionKey>)
+    (propertyHandleLookup: Dictionary<PropertyDefinitionKey, PropertyDefinitionHandle>)
+    (eventHandleLookup: Dictionary<EventDefinitionKey, EventDefinitionHandle>)
+    (baselinePropertyHandles: Map<PropertyDefinitionKey, PropertyDefinitionMetadataHandles>)
+    (baselineEventHandles: Map<EventDefinitionKey, EventDefinitionMetadataHandles>)
+    (baselinePropertyLookup: Dictionary<string * string, PropertyDefinitionKey * int>)
+    (baselineEventLookup: Dictionary<string * string, EventDefinitionKey * int>)
+    (baselineTableRowCounts: int[])
+    (tryGetMethodToken: MethodDefinitionKey -> int option)
+    =
+    let propertyDefinitionRowsSnapshot =
+        propertyDefinitionIndex.Rows
+        |> List.choose (fun struct (rowId, key, isAdded) ->
+            match propertyHandleLookup.TryGetValue key with
+            | true, handle when not handle.IsNil ->
+                let propertyDef = metadataReader.GetPropertyDefinition handle
+                let name = metadataReader.GetString propertyDef.Name
+                let signature = metadataReader.GetBlobBytes propertyDef.Signature
+                let baselineHandles = baselinePropertyHandles |> Map.tryFind key
+                let resolvedNameOffset =
+                    match baselineHandles |> Option.bind (fun info -> info.NameOffset) with
+                    | Some offset -> Some offset
+                    | None ->
+                        if propertyDef.Name.IsNil then
+                            None
+                        else
+                            Some(StringOffset(MetadataTokens.GetHeapOffset propertyDef.Name))
+                let resolvedSignatureOffset =
+                    match baselineHandles |> Option.bind (fun info -> info.SignatureOffset) with
+                    | Some offset -> Some offset
+                    | None ->
+                        if propertyDef.Signature.IsNil then
+                            None
+                        else
+                            Some(BlobOffset(MetadataTokens.GetHeapOffset propertyDef.Signature))
+                Some
+                    { PropertyDefinitionRowInfo.Key = key
+                      RowId = rowId
+                      IsAdded = isAdded
+                      Name = name
+                      NameOffset = resolvedNameOffset
+                      Signature = signature
+                      SignatureOffset = resolvedSignatureOffset
+                      Attributes = propertyDef.Attributes }
+            | _ -> None)
+
+    if traceMethodUpdates then
+        printfn "[fsharp-hotreload][property-rows] count=%d" propertyDefinitionRowsSnapshot.Length
+
+    let eventDefinitionRowsSnapshot =
+        eventDefinitionIndex.Rows
+        |> List.choose (fun struct (rowId, key, isAdded) ->
+            match eventHandleLookup.TryGetValue key with
+            | true, handle when not handle.IsNil ->
+                let eventDef = metadataReader.GetEventDefinition handle
+                let name = metadataReader.GetString eventDef.Name
+                let resolvedNameOffset =
+                    match baselineEventHandles |> Map.tryFind key |> Option.bind (fun info -> info.NameOffset) with
+                    | Some offset -> Some offset
+                    | None ->
+                        if eventDef.Name.IsNil then
+                            None
+                        else
+                            Some(StringOffset(MetadataTokens.GetHeapOffset eventDef.Name))
+                Some
+                    { EventDefinitionRowInfo.Key = key
+                      RowId = rowId
+                      IsAdded = isAdded
+                      Name = name
+                      NameOffset = resolvedNameOffset
+                      Attributes = eventDef.Attributes
+                      EventType = entityHandleToTypeDefOrRef eventDef.Type }
+            | _ -> None)
+
+    let propertyRowsByType =
+        propertyDefinitionRowsSnapshot
+        |> Seq.groupBy (fun row -> row.Key.DeclaringType)
+        |> dict
+
+    let propertyRowsByName =
+        propertyDefinitionRowsSnapshot
+        |> Seq.groupBy (fun row -> struct (row.Key.DeclaringType, row.Key.Name))
+        |> dict
+
+    let eventRowsByType =
+        eventDefinitionRowsSnapshot
+        |> Seq.groupBy (fun row -> row.Key.DeclaringType)
+        |> dict
+
+    let eventRowsByName =
+        eventDefinitionRowsSnapshot
+        |> Seq.groupBy (fun row -> struct (row.Key.DeclaringType, row.Key.Name))
+        |> dict
+
+    let baselinePropertyMapRowCount = baselineTableRowCounts.[TableNames.PropertyMap.Index]
+    let baselineEventMapRowCount = baselineTableRowCounts.[TableNames.EventMap.Index]
+
+    let propertyMapDefinitionIndex =
+        let tryExisting typeName = request.Baseline.PropertyMapEntries |> Map.tryFind typeName
+        DefinitionIndex<string>(tryExisting, baselinePropertyMapRowCount)
+
+    let eventMapDefinitionIndex =
+        let tryExisting typeName = request.Baseline.EventMapEntries |> Map.tryFind typeName
+        DefinitionIndex<string>(tryExisting, baselineEventMapRowCount)
+
+    let propertyMapRowsSnapshot =
+        let missingTypes =
+            propertyDefinitionRowsSnapshot
+            |> Seq.filter _.IsAdded
+            |> Seq.map (fun row -> row.Key.DeclaringType)
+            |> Seq.filter (fun typeName -> not (request.Baseline.PropertyMapEntries |> Map.containsKey typeName))
+            |> Seq.distinct
+            |> Seq.toList
+
+        for typeName in missingTypes do
+            propertyMapDefinitionIndex.Add typeName |> ignore
+
+        propertyMapDefinitionIndex.Rows
+        |> List.choose (fun struct (rowId, typeName, isAdded) ->
+            let typeTokenOpt = request.Baseline.TypeTokens |> Map.tryFind typeName
+            let firstPropertyRowIdOpt =
+                match propertyRowsByType.TryGetValue typeName with
+                | true, rows ->
+                    rows
+                    |> Seq.sortBy _.RowId
+                    |> Seq.tryHead
+                    |> Option.map _.RowId
+                | _ -> None
+
+            let shouldAdd = isAdded || List.contains typeName missingTypes
+
+            match typeTokenOpt, firstPropertyRowIdOpt, shouldAdd with
+            | Some typeToken, Some firstRowId, true ->
+                Some
+                    { PropertyMapRowInfo.DeclaringType = typeName
+                      RowId = rowId
+                      TypeDefRowId = typeToken &&& 0x00FFFFFF
+                      FirstPropertyRowId = Some firstRowId
+                      IsAdded = true }
+            | _ -> None)
+
+    let eventMapRowsSnapshot =
+        let missingTypes =
+            eventDefinitionRowsSnapshot
+            |> Seq.filter _.IsAdded
+            |> Seq.map (fun row -> row.Key.DeclaringType)
+            |> Seq.filter (fun typeName -> not (request.Baseline.EventMapEntries |> Map.containsKey typeName))
+            |> Seq.distinct
+            |> Seq.toList
+
+        for typeName in missingTypes do
+            eventMapDefinitionIndex.Add typeName |> ignore
+
+        eventMapDefinitionIndex.Rows
+        |> List.choose (fun struct (rowId, typeName, isAdded) ->
+            let typeTokenOpt = request.Baseline.TypeTokens |> Map.tryFind typeName
+            let firstEventRowIdOpt =
+                match eventRowsByType.TryGetValue typeName with
+                | true, rows ->
+                    rows
+                    |> Seq.sortBy _.RowId
+                    |> Seq.tryHead
+                    |> Option.map _.RowId
+                | _ -> None
+
+            let shouldAdd = isAdded || List.contains typeName missingTypes
+
+            match typeTokenOpt, firstEventRowIdOpt, shouldAdd with
+            | Some typeToken, Some firstRowId, true ->
+                Some
+                    { EventMapRowInfo.DeclaringType = typeName
+                      RowId = rowId
+                      TypeDefRowId = typeToken &&& 0x00FFFFFF
+                      FirstEventRowId = Some firstRowId
+                      IsAdded = true }
+            | _ -> None)
+
+    let tryGetPropertyAssociation typeName propertyName =
+        match propertyRowsByName.TryGetValue(struct (typeName, propertyName)) with
+        | true, rows ->
+            rows
+            |> Seq.sortBy _.RowId
+            |> Seq.tryHead
+            |> Option.map (fun row -> struct (row.RowId, row.Key))
+        | _ ->
+            match baselinePropertyLookup.TryGetValue((typeName, propertyName)) with
+            | true, (key, rowId) -> Some(struct (rowId, key))
+            | _ -> None
+
+    let tryGetEventAssociation typeName eventName =
+        match eventRowsByName.TryGetValue(struct (typeName, eventName)) with
+        | true, rows ->
+            rows
+            |> Seq.sortBy _.RowId
+            |> Seq.tryHead
+            |> Option.map (fun row -> struct (row.RowId, row.Key))
+        | _ ->
+            match baselineEventLookup.TryGetValue((typeName, eventName)) with
+            | true, (key, rowId) -> Some(struct (rowId, key))
+            | _ -> None
+
+    let semanticsAttributeForMemberKind memberKind =
+        match memberKind with
+        | SymbolMemberKind.PropertyGet _ -> MethodSemanticsAttributes.Getter
+        | SymbolMemberKind.PropertySet _ -> MethodSemanticsAttributes.Setter
+        | SymbolMemberKind.EventAdd _ -> MethodSemanticsAttributes.Adder
+        | SymbolMemberKind.EventRemove _ -> MethodSemanticsAttributes.Remover
+        | SymbolMemberKind.EventInvoke _ -> MethodSemanticsAttributes.Raiser
+        | _ -> MethodSemanticsAttributes.Other
+
+    let accessorName memberKind =
+        match memberKind with
+        | SymbolMemberKind.PropertyGet name
+        | SymbolMemberKind.PropertySet name -> Some name
+        | SymbolMemberKind.EventAdd name
+        | SymbolMemberKind.EventRemove name
+        | SymbolMemberKind.EventInvoke name -> Some name
+        | _ -> None
+
+    let mutable nextMethodSemanticsRowId = baselineTableRowCounts.[TableNames.MethodSemantics.Index]
+
+    let methodSemanticsRowsSnapshot =
+        request.UpdatedAccessors
+        |> List.choose (fun accessor ->
+            match accessor.Method with
+            | None -> None
+            | Some methodKey ->
+                match tryGetMethodToken methodKey with
+                | None -> None
+                | Some methodToken ->
+                    let typeName = accessor.ContainingType
+                    let attrs = semanticsAttributeForMemberKind accessor.MemberKind
+                    match accessor.MemberKind, accessorName accessor.MemberKind with
+                    | (SymbolMemberKind.PropertyGet _
+                      | SymbolMemberKind.PropertySet _), Some propertyName ->
+                        match tryGetPropertyAssociation typeName propertyName with
+                        | Some(struct (propertyRowId, propertyKey)) when propertyDefinitionIndex.IsAdded propertyKey ->
+                            nextMethodSemanticsRowId <- nextMethodSemanticsRowId + 1
+                            Some
+                                { MethodSemanticsMetadataUpdate.RowId = nextMethodSemanticsRowId
+                                  MethodToken = methodToken
+                                  Attributes = attrs
+                                  IsAdded = true
+                                  AssociationInfo =
+                                    MethodSemanticsAssociation.PropertyAssociation(propertyKey, propertyRowId) }
+                        | None -> None
+                        | _ -> None
+                    | (SymbolMemberKind.EventAdd _
+                      | SymbolMemberKind.EventRemove _
+                      | SymbolMemberKind.EventInvoke _), Some eventName ->
+                        match tryGetEventAssociation typeName eventName with
+                        | Some(struct (eventRowId, eventKey)) when eventDefinitionIndex.IsAdded eventKey ->
+                            nextMethodSemanticsRowId <- nextMethodSemanticsRowId + 1
+                            Some
+                                { MethodSemanticsMetadataUpdate.RowId = nextMethodSemanticsRowId
+                                  MethodToken = methodToken
+                                  Attributes = attrs
+                                  IsAdded = true
+                                  AssociationInfo =
+                                    MethodSemanticsAssociation.EventAssociation(eventKey, eventRowId) }
+                        | None -> None
+                        | _ -> None
+                    | _ -> None)
+
+    propertyDefinitionRowsSnapshot,
+    eventDefinitionRowsSnapshot,
+    propertyMapRowsSnapshot,
+    eventMapRowsSnapshot,
+    methodSemanticsRowsSnapshot
+
+let private buildCustomAttributeRows
+    (traceMetadata: bool)
+    (metadataReader: MetadataReader)
+    (baselineTableRowCounts: int[])
+    (methodUpdateInputs: struct (MethodDefinitionKey * int * MethodDefinitionHandle * MethodDefinition * MethodBodyBlock) list)
+    (methodDefinitionRowsRaw: struct (int * MethodDefinitionKey * bool) list)
+    (methodDefinitionIndex: DefinitionIndex<MethodDefinitionKey>)
+    (methodUpdatesWithDefs: (MethodMetadataUpdate * MethodDefinition * int list) list)
+    (remapEntityToken: int -> int)
+    (remapAssemblyRefToken: int -> int)
+    (baselineTypeReferenceTokens: Map<TypeReferenceKey, int>)
+    (initialTypeRefRowId: int)
+    (initialMemberRefRowId: int)
+    (typeReferenceRows: ResizeArray<TypeReferenceRowInfo>)
+    (memberReferenceRows: ResizeArray<MemberReferenceRowInfo>)
+    =
+    let rows = ResizeArray<CustomAttributeRowInfo>()
+    let mutable nextRowId = baselineTableRowCounts.[TableNames.CustomAttribute.Index]
+    let mutable nextTypeRefRowId = initialTypeRefRowId
+    let mutable nextMemberRefRowId = initialMemberRefRowId
+
+    let methodRowIdToKey = Dictionary<int, MethodDefinitionKey>(HashIdentity.Structural)
+    for struct (rowId, key, _) in methodDefinitionRowsRaw do
+        methodRowIdToKey[rowId] <- key
+
+    let methodsWithCustomAttribute = HashSet<MethodDefinitionKey>(HashIdentity.Structural)
+    let methodsWithNullableContextAttribute = HashSet<MethodDefinitionKey>(HashIdentity.Structural)
+    let mutable nullableContextAttributeSeen = false
+
+    let encodeNullableContextValue () = [| 0x01uy; 0x00uy; 0x01uy; 0x00uy; 0x00uy |]
+
+    let rec getFullTypeName (handle: TypeDefinitionHandle) =
+        let def = metadataReader.GetTypeDefinition handle
+        let name = metadataReader.GetString def.Name
+        let ns =
+            if def.Namespace.IsNil then
+                ""
+            else
+                metadataReader.GetString def.Namespace
+        let declaring = def.GetDeclaringType()
+        if declaring.IsNil then
+            if String.IsNullOrEmpty ns then name else $"{ns}.{name}"
+        else
+            $"{getFullTypeName declaring}+{name}"
+
+    let tryFindTypeDefinition fullName =
+        metadataReader.TypeDefinitions
+        |> Seq.tryPick (fun handle ->
+            let def = metadataReader.GetTypeDefinition handle
+            let name = metadataReader.GetString def.Name
+            let ns = if def.Namespace.IsNil then "" else metadataReader.GetString def.Namespace
+            let decl = if String.IsNullOrEmpty ns then name else $"{ns}.{name}"
+            if String.Equals(decl, fullName, StringComparison.Ordinal) then Some handle else None)
+
+    let tryFindStateMachineType (methodKey: MethodDefinitionKey) =
+        match tryFindTypeDefinition methodKey.DeclaringType with
+        | None -> ValueNone
+        | Some parentHandle ->
+            let parentDef = metadataReader.GetTypeDefinition parentHandle
+            let nestedTypes = parentDef.GetNestedTypes()
+            let prefix = methodKey.Name + "@hotreload"
+            let matches =
+                nestedTypes
+                |> Seq.choose (fun nested ->
+                    let nestedDef = metadataReader.GetTypeDefinition nested
+                    let name = metadataReader.GetString nestedDef.Name
+                    if name.StartsWith(prefix, StringComparison.Ordinal) then
+                        Some(name, nested)
+                    else
+                        None)
+                |> Seq.toArray
+
+            if matches.Length = 0 then
+                ValueNone
+            else
+                matches
+                |> Array.tryFind (fun (name, _) -> String.Equals(name, prefix, StringComparison.Ordinal))
+                |> ValueOption.ofOption
+                |> ValueOption.orElseWith (fun () -> matches |> Array.tryHead |> ValueOption.ofOption)
+                |> ValueOption.map snd
+
+    let findAssemblyReferenceRow scopeName =
+        metadataReader.AssemblyReferences
+        |> Seq.tryPick (fun handle ->
+            let reference = metadataReader.GetAssemblyReference handle
+            let name = metadataReader.GetString reference.Name
+            if String.Equals(name, scopeName, StringComparison.OrdinalIgnoreCase) then
+                let token = MetadataTokens.GetToken(EntityHandle.op_Implicit handle)
+                let remapped = remapAssemblyRefToken token
+                let rowId = remapped &&& 0x00FFFFFF
+                Some(RS_AssemblyRef(AssemblyRefHandle rowId))
+            else
+                None)
+
+    let tryGetAssemblyScope () =
+        match findAssemblyReferenceRow "System.Runtime" with
+        | Some scope -> Some scope
+        | None -> findAssemblyReferenceRow "mscorlib"
+
+    let tryFindSystemTypeRef () =
+        metadataReader.TypeReferences
+        |> Seq.tryPick (fun handle ->
+            let typeRef = metadataReader.GetTypeReference handle
+            let name = metadataReader.GetString typeRef.Name
+            let ns =
+                if typeRef.Namespace.IsNil then
+                    ""
+                else
+                    metadataReader.GetString typeRef.Namespace
+            if String.Equals(name, "Type", StringComparison.Ordinal)
+               && String.Equals(ns, "System", StringComparison.Ordinal) then
+                Some handle
+            else
+                None)
+
+    let tryReuseBaselineTypeRef scopeName namespaceName typeName =
+        let key =
+            { TypeReferenceKey.Scope = scopeName
+              Namespace = namespaceName
+              Name = typeName }
+        baselineTypeReferenceTokens |> Map.tryFind key
+
+    let tryFindExistingTypeRef scopeName namespaceName typeName =
+        metadataReader.TypeReferences
+        |> Seq.tryPick (fun handle ->
+            let typeRef = metadataReader.GetTypeReference handle
+            let name = metadataReader.GetString typeRef.Name
+            if name = typeName then
+                let ns = if typeRef.Namespace.IsNil then "" else metadataReader.GetString typeRef.Namespace
+                if ns = namespaceName then
+                    match typeRef.ResolutionScope.Kind with
+                    | HandleKind.AssemblyReference ->
+                        let asm =
+                            metadataReader.GetAssemblyReference(
+                                AssemblyReferenceHandle.op_Explicit typeRef.ResolutionScope
+                            )
+                        let asmName = metadataReader.GetString asm.Name
+                        if asmName = scopeName then
+                            Some handle
+                        else
+                            None
+                    | _ -> None
+                else
+                    None
+            else
+                None)
+
+    let mutable systemObjectTypeRefToken: int option = None
+    let mutable asyncAttributeTypeRefToken: int option = None
+    let mutable asyncAttributeCtorToken: int option = None
+    let mutable nullableContextAttributeTypeRefToken: int option = None
+    let mutable nullableContextAttributeCtorToken: int option = None
+
+    let ensureSystemObjectTypeRef () =
+        match systemObjectTypeRefToken with
+        | Some token -> token
+        | None ->
+            let scope =
+                match tryGetAssemblyScope () with
+                | Some value -> value
+                | None -> RS_Module(ModuleHandle 1)
+            let nextRowId = nextTypeRefRowId + 1
+            nextTypeRefRowId <- nextRowId
+            typeReferenceRows.Add(
+                { RowId = nextRowId
+                  ResolutionScope = scope
+                  Name = "Object"
+                  NameOffset = None
+                  Namespace = "System"
+                  NamespaceOffset = None })
+            let token = 0x01000000 ||| nextRowId
+            systemObjectTypeRefToken <- Some token
+            token
+
+    let ensureSystemTypeRefHandle () =
+        match tryFindSystemTypeRef () with
+        | Some handle -> handle
+        | None ->
+            let scope =
+                match tryGetAssemblyScope () with
+                | Some value -> value
+                | None -> RS_Module(ModuleHandle 1)
+            let nextRowId = nextTypeRefRowId + 1
+            nextTypeRefRowId <- nextRowId
+            typeReferenceRows.Add(
+                { RowId = nextRowId
+                  ResolutionScope = scope
+                  Name = "Type"
+                  NameOffset = None
+                  Namespace = "System"
+                  NamespaceOffset = None })
+            MetadataTokens.TypeReferenceHandle nextRowId
+
+    let ensureAsyncAttributeTypeRef () =
+        match asyncAttributeTypeRefToken with
+        | Some token -> token
+        | None ->
+            let scope =
+                match tryGetAssemblyScope () with
+                | Some value -> value
+                | None ->
+                    raise (
+                        HotReloadUnsupportedEditException
+                            "Unable to locate System.Runtime/mscorlib assembly reference for AsyncStateMachineAttribute. Please rebuild."
+                    )
+            let nextRowId = nextTypeRefRowId + 1
+            nextTypeRefRowId <- nextRowId
+            typeReferenceRows.Add(
+                { RowId = nextRowId
+                  ResolutionScope = scope
+                  Name = "AsyncStateMachineAttribute"
+                  NameOffset = None
+                  Namespace = "System.Runtime.CompilerServices"
+                  NamespaceOffset = None })
+            let token = 0x01000000 ||| nextRowId
+            asyncAttributeTypeRefToken <- Some token
+            token
+
+    let ensureAsyncAttributeCtor () =
+        match asyncAttributeCtorToken with
+        | Some token -> token
+        | None ->
+            let attrTypeToken = ensureAsyncAttributeTypeRef ()
+            let systemTypeRefHandle = ensureSystemTypeRefHandle ()
+
+            let signatureBytes =
+                let blob = BlobBuilder()
+                let instanceHeader =
+                    (int SignatureCallingConvention.Default)
+                    ||| (int SignatureAttributes.Instance)
+                    |> byte
+                blob.WriteByte(instanceHeader)
+                blob.WriteCompressedInteger 1
+                blob.WriteByte(LanguagePrimitives.EnumToValue SignatureTypeCode.Void)
+                blob.WriteByte(0x12uy)
+                let typeRefEntity: EntityHandle = TypeReferenceHandle.op_Implicit systemTypeRefHandle
+                let codedIndex = CodedIndex.TypeDefOrRef typeRefEntity
+                blob.WriteCompressedInteger codedIndex
+                blob.ToArray()
+
+            let parentRowId = attrTypeToken &&& 0x00FFFFFF
+            let nextRowId = nextMemberRefRowId + 1
+            nextMemberRefRowId <- nextRowId
+            memberReferenceRows.Add(
+                { RowId = nextRowId
+                  Parent = MRP_TypeRef(TypeRefHandle parentRowId)
+                  Name = ".ctor"
+                  NameOffset = None
+                  Signature = signatureBytes
+                  SignatureOffset = None })
+
+            let token = 0x0A000000 ||| nextRowId
+            asyncAttributeCtorToken <- Some token
+            token
+
+    let ensureNullableContextAttributeTypeRef () =
+        match nullableContextAttributeTypeRefToken with
+        | Some token -> token
+        | None ->
+            let baselineOrExistingToken =
+                [ "System.Runtime"; "mscorlib" ]
+                |> List.tryPick (fun scope ->
+                    match tryReuseBaselineTypeRef scope "System.Runtime.CompilerServices" "NullableContextAttribute" with
+                    | Some token -> Some token
+                    | None ->
+                        match tryFindExistingTypeRef scope "System.Runtime.CompilerServices" "NullableContextAttribute" with
+                        | Some handle -> Some(MetadataTokens.GetToken(EntityHandle.op_Implicit handle))
+                        | None -> None)
+            match baselineOrExistingToken with
+            | Some token ->
+                nullableContextAttributeTypeRefToken <- Some token
+                token
+            | None ->
+                let scope =
+                    match tryGetAssemblyScope () with
+                    | Some value -> value
+                    | None ->
+                        raise (
+                            HotReloadUnsupportedEditException
+                                "Unable to locate System.Runtime/mscorlib assembly reference for NullableContextAttribute. Please rebuild."
+                        )
+                let nextRowId = nextTypeRefRowId + 1
+                nextTypeRefRowId <- nextRowId
+                typeReferenceRows.Add(
+                    { RowId = nextRowId
+                      ResolutionScope = scope
+                      Name = "NullableContextAttribute"
+                      NameOffset = None
+                      Namespace = "System.Runtime.CompilerServices"
+                      NamespaceOffset = None })
+                let token = 0x01000000 ||| nextRowId
+                nullableContextAttributeTypeRefToken <- Some token
+                let _ = ensureSystemObjectTypeRef ()
+                token
+
+    let ensureNullableContextAttributeCtor () =
+        match nullableContextAttributeCtorToken with
+        | Some token -> token
+        | None ->
+            let attrTypeToken = ensureNullableContextAttributeTypeRef ()
+            let signatureBytes =
+                let blob = BlobBuilder()
+                let instanceHeader =
+                    (int SignatureCallingConvention.Default)
+                    ||| (int SignatureAttributes.Instance)
+                    |> byte
+                blob.WriteByte(instanceHeader)
+                blob.WriteCompressedInteger 1
+                blob.WriteByte(LanguagePrimitives.EnumToValue SignatureTypeCode.Void)
+                blob.WriteByte(LanguagePrimitives.EnumToValue SignatureTypeCode.Byte)
+                blob.ToArray()
+
+            let parentRowId = attrTypeToken &&& 0x00FFFFFF
+            let nextRowId = nextMemberRefRowId + 1
+            nextMemberRefRowId <- nextRowId
+            memberReferenceRows.Add(
+                { RowId = nextRowId
+                  Parent = MRP_TypeRef(TypeRefHandle parentRowId)
+                  Name = ".ctor"
+                  NameOffset = None
+                  Signature = signatureBytes
+                  SignatureOffset = None })
+
+            let token = 0x0A000000 ||| nextRowId
+            nullableContextAttributeCtorToken <- Some token
+            token
+
+    let encodeAsyncAttributeValue (stateMachineFullName: string) =
+        let blob = BlobBuilder()
+        blob.WriteUInt16(0x0001us)
+        blob.WriteSerializedString(stateMachineFullName)
+        blob.WriteUInt16(0us)
+        blob.ToArray()
+
+    let isAsyncStateMachineAttribute (attribute: CustomAttribute) =
+        match attribute.Constructor.Kind with
+        | HandleKind.MemberReference ->
+            let memberRef = metadataReader.GetMemberReference(MemberReferenceHandle.op_Explicit attribute.Constructor)
+            match memberRef.Parent.Kind with
+            | HandleKind.TypeReference ->
+                let typeRef = metadataReader.GetTypeReference(TypeReferenceHandle.op_Explicit memberRef.Parent)
+                let name = metadataReader.GetString typeRef.Name
+                let ns = if typeRef.Namespace.IsNil then "" else metadataReader.GetString typeRef.Namespace
+                ns = "System.Runtime.CompilerServices"
+                && name.EndsWith("StateMachineAttribute", StringComparison.Ordinal)
+            | _ -> false
+        | _ -> false
+
+    let isNullableContextAttribute (attribute: CustomAttribute) =
+        match attribute.Constructor.Kind with
+        | HandleKind.MemberReference ->
+            let memberRef = metadataReader.GetMemberReference(MemberReferenceHandle.op_Explicit attribute.Constructor)
+            match memberRef.Parent.Kind with
+            | HandleKind.TypeReference ->
+                let typeRef = metadataReader.GetTypeReference(TypeReferenceHandle.op_Explicit memberRef.Parent)
+                let name = metadataReader.GetString typeRef.Name
+                let ns = if typeRef.Namespace.IsNil then "" else metadataReader.GetString typeRef.Namespace
+                ns = "System.Runtime.CompilerServices" && name = "NullableContextAttribute"
+            | _ -> false
+        | _ -> false
+
+    for struct (key: MethodDefinitionKey, _, _, methodDef, _) in methodUpdateInputs do
+        if methodDefinitionIndex.Contains key then
+            let parentRowId = methodDefinitionIndex.GetRowId key
+            for attributeHandle in methodDef.GetCustomAttributes() do
+                let attribute = metadataReader.GetCustomAttribute attributeHandle
+                let constructorToken = MetadataTokens.GetToken attribute.Constructor
+                let remappedConstructorToken = remapEntityToken constructorToken
+                let ctorRowId = remappedConstructorToken &&& 0x00FFFFFF
+                nextRowId <- nextRowId + 1
+                let valueBytes =
+                    if attribute.Value.IsNil then
+                        Array.empty
+                    else
+                        metadataReader.GetBlobBytes attribute.Value
+
+                if isAsyncStateMachineAttribute attribute then
+                    match methodRowIdToKey.TryGetValue parentRowId with
+                    | true, methodKey -> methodsWithCustomAttribute.Add methodKey |> ignore
+                    | _ -> ()
+
+                if isNullableContextAttribute attribute then
+                    nullableContextAttributeSeen <- true
+                    match methodRowIdToKey.TryGetValue parentRowId with
+                    | true, methodKey ->
+                        if traceMetadata then
+                            printfn
+                                "[fsharp-hotreload][metadata] nullable-context attribute detected on %s"
+                                methodKey.Name
+                        methodsWithNullableContextAttribute.Add methodKey |> ignore
+                    | _ -> ()
+
+                let ctorType =
+                    match attribute.Constructor.Kind with
+                    | HandleKind.MethodDefinition -> CAT_MethodDef(MethodDefHandle ctorRowId)
+                    | HandleKind.MemberReference -> CAT_MemberRef(MemberRefHandle ctorRowId)
+                    | _ -> CAT_MemberRef(MemberRefHandle ctorRowId)
+
+                rows.Add(
+                    { RowId = nextRowId
+                      Parent = HCA_MethodDef(MethodDefHandle parentRowId)
+                      Constructor = ctorType
+                      Value = valueBytes
+                      ValueOffset =
+                        if attribute.Value.IsNil then
+                            None
+                        else
+                            Some(BlobOffset(MetadataTokens.GetHeapOffset attribute.Value)) })
+
+    for (update, _, _) in methodUpdatesWithDefs do
+        let methodKey = update.MethodKey
+        if methodsWithCustomAttribute.Contains methodKey |> not then
+            match tryFindStateMachineType methodKey with
+            | ValueSome stateMachineHandle ->
+                let ctorToken = ensureAsyncAttributeCtor ()
+                let ctorRowId = ctorToken &&& 0x00FFFFFF
+                let methodRowId = methodDefinitionIndex.GetRowId methodKey
+                let stateMachineFullName = getFullTypeName stateMachineHandle
+                let valueBytes = encodeAsyncAttributeValue stateMachineFullName
+
+                nextRowId <- nextRowId + 1
+                rows.Add(
+                    { RowId = nextRowId
+                      Parent = HCA_MethodDef(MethodDefHandle methodRowId)
+                      Constructor = CAT_MemberRef(MemberRefHandle ctorRowId)
+                      Value = valueBytes
+                      ValueOffset = None })
+
+                methodsWithCustomAttribute.Add methodKey |> ignore
+            | ValueNone -> ()
+
+    if nullableContextAttributeSeen then
+        for KeyValue(methodRowId, methodKey) in methodRowIdToKey do
+            if methodsWithNullableContextAttribute.Contains methodKey |> not then
+                let ctorToken = ensureNullableContextAttributeCtor ()
+                let ctorRowId = ctorToken &&& 0x00FFFFFF
+                nextRowId <- nextRowId + 1
+                rows.Add(
+                    { RowId = nextRowId
+                      Parent = HCA_MethodDef(MethodDefHandle methodRowId)
+                      Constructor = CAT_MemberRef(MemberRefHandle ctorRowId)
+                      Value = encodeNullableContextValue ()
+                      ValueOffset = None })
+                methodsWithNullableContextAttribute.Add methodKey |> ignore
+
+    let rowList = rows |> Seq.toList
+    if traceMetadata then
+        printfn "[fsharp-hotreload][metadata] custom-attributes rows=%d" (List.length rowList)
+
+    rowList, nextTypeRefRowId, nextMemberRefRowId
+
 /// Emits the delta artifacts for a request. The current implementation populates token projections
 /// while leaving the raw metadata/IL/PDB payload empty; future work will replace the placeholders
 /// with fully emitted heaps.
@@ -1260,8 +1988,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             |> Option.map (fun token -> token &&& 0x00FFFFFF)
 
     let baselineTableRowCounts = request.Baseline.Metadata.TableRowCounts
-    let baselinePropertyMapRowCount = baselineTableRowCounts.[TableNames.PropertyMap.Index]
-    let baselineEventMapRowCount = baselineTableRowCounts.[TableNames.EventMap.Index]
     let baselineTypeRefRowCount = baselineTableRowCounts.[TableNames.TypeRef.Index]
     let baselineMemberRefRowCount = baselineTableRowCounts.[TableNames.MemberRef.Index]
     let baselineAssemblyRefRowCount = baselineTableRowCounts.[TableNames.AssemblyRef.Index]
@@ -1886,248 +2612,25 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 methodUpdatesWithDefs
                 baselineMethodSpecRowCount
                 methodSpecRowsByToken
-        let propertyDefinitionRowsSnapshot =
-            propertyDefinitionIndex.Rows
-            |> List.choose (fun struct (rowId, key, isAdded) ->
-                match propertyHandleLookup.TryGetValue key with
-                | true, handle when not handle.IsNil ->
-                    let propertyDef = metadataReader.GetPropertyDefinition handle
-                    let name = metadataReader.GetString propertyDef.Name
-                    let signature = metadataReader.GetBlobBytes propertyDef.Signature
-                    let baselineHandles = baselinePropertyHandles |> Map.tryFind key
-                    let resolvedNameOffset =
-                        match baselineHandles |> Option.bind (fun info -> info.NameOffset) with
-                        | Some offset -> Some offset
-                        | None -> if propertyDef.Name.IsNil then None else Some (StringOffset (MetadataTokens.GetHeapOffset propertyDef.Name))
-                    let resolvedSignatureOffset =
-                        match baselineHandles |> Option.bind (fun info -> info.SignatureOffset) with
-                        | Some offset -> Some offset
-                        | None -> if propertyDef.Signature.IsNil then None else Some (BlobOffset (MetadataTokens.GetHeapOffset propertyDef.Signature))
-                    Some
-                        { PropertyDefinitionRowInfo.Key = key
-                          RowId = rowId
-                          IsAdded = isAdded
-                          Name = name
-                          NameOffset = resolvedNameOffset
-                          Signature = signature
-                          SignatureOffset = resolvedSignatureOffset
-                          Attributes = propertyDef.Attributes }
-                | _ -> None)
-
-        if traceMethodUpdates.Value then
-            printfn "[fsharp-hotreload][property-rows] count=%d" propertyDefinitionRowsSnapshot.Length
-
-        let eventDefinitionRowsSnapshot =
-            eventDefinitionIndex.Rows
-            |> List.choose (fun struct (rowId, key, isAdded) ->
-                match eventHandleLookup.TryGetValue key with
-                | true, handle when not handle.IsNil ->
-                    let eventDef = metadataReader.GetEventDefinition handle
-                    let name = metadataReader.GetString eventDef.Name
-                    let resolvedNameOffset =
-                        match baselineEventHandles |> Map.tryFind key |> Option.bind (fun info -> info.NameOffset) with
-                        | Some offset -> Some offset
-                        | None -> if eventDef.Name.IsNil then None else Some (StringOffset (MetadataTokens.GetHeapOffset eventDef.Name))
-                    Some
-                        { EventDefinitionRowInfo.Key = key
-                          RowId = rowId
-                          IsAdded = isAdded
-                          Name = name
-                          NameOffset = resolvedNameOffset
-                          Attributes = eventDef.Attributes
-                          EventType = entityHandleToTypeDefOrRef eventDef.Type }
-                | _ -> None)
-
-        let propertyRowsByType =
-            propertyDefinitionRowsSnapshot
-            |> Seq.groupBy (fun row -> row.Key.DeclaringType)
-            |> dict
-
-        let propertyRowsByName =
-            propertyDefinitionRowsSnapshot
-            |> Seq.groupBy (fun row -> struct (row.Key.DeclaringType, row.Key.Name))
-            |> dict
-
-        let eventRowsByType =
-            eventDefinitionRowsSnapshot
-            |> Seq.groupBy (fun row -> row.Key.DeclaringType)
-            |> dict
-
-        let eventRowsByName =
-            eventDefinitionRowsSnapshot
-            |> Seq.groupBy (fun row -> struct (row.Key.DeclaringType, row.Key.Name))
-            |> dict
-
-        let propertyMapDefinitionIndex =
-            let tryExisting typeName = request.Baseline.PropertyMapEntries |> Map.tryFind typeName
-            DefinitionIndex<string>(tryExisting, baselinePropertyMapRowCount)
-
-        let eventMapDefinitionIndex =
-            let tryExisting typeName = request.Baseline.EventMapEntries |> Map.tryFind typeName
-            DefinitionIndex<string>(tryExisting, baselineEventMapRowCount)
-
-        let propertyMapRowsSnapshot =
-            let missingTypes =
-                propertyDefinitionRowsSnapshot
-                |> Seq.filter _.IsAdded
-                |> Seq.map (fun row -> row.Key.DeclaringType)
-                |> Seq.filter (fun typeName -> not (request.Baseline.PropertyMapEntries |> Map.containsKey typeName))
-                |> Seq.distinct
-                |> Seq.toList
-
-            for typeName in missingTypes do
-                propertyMapDefinitionIndex.Add typeName |> ignore
-
-            propertyMapDefinitionIndex.Rows
-            |> List.choose (fun struct (rowId, typeName, isAdded) ->
-                let typeTokenOpt = request.Baseline.TypeTokens |> Map.tryFind typeName
-                let firstPropertyRowIdOpt =
-                    match propertyRowsByType.TryGetValue typeName with
-                    | true, rows ->
-                        rows
-                        |> Seq.sortBy _.RowId
-                        |> Seq.tryHead
-                        |> Option.map _.RowId
-                    | _ -> None
-
-                let shouldAdd = isAdded || List.contains typeName missingTypes
-
-                match typeTokenOpt, firstPropertyRowIdOpt, shouldAdd with
-                | Some typeToken, Some firstRowId, true ->
-                    Some
-                        { PropertyMapRowInfo.DeclaringType = typeName
-                          RowId = rowId
-                          TypeDefRowId = typeToken &&& 0x00FFFFFF
-                          FirstPropertyRowId = Some firstRowId
-                          IsAdded = true }
-                | _ -> None)
-
-        let eventMapRowsSnapshot =
-            let missingTypes =
-                eventDefinitionRowsSnapshot
-                |> Seq.filter _.IsAdded
-                |> Seq.map (fun row -> row.Key.DeclaringType)
-                |> Seq.filter (fun typeName -> not (request.Baseline.EventMapEntries |> Map.containsKey typeName))
-                |> Seq.distinct
-                |> Seq.toList
-
-            for typeName in missingTypes do
-                eventMapDefinitionIndex.Add typeName |> ignore
-
-            eventMapDefinitionIndex.Rows
-            |> List.choose (fun struct (rowId, typeName, isAdded) ->
-                let typeTokenOpt = request.Baseline.TypeTokens |> Map.tryFind typeName
-                let firstEventRowIdOpt =
-                    match eventRowsByType.TryGetValue typeName with
-                    | true, rows ->
-                        rows
-                        |> Seq.sortBy _.RowId
-                        |> Seq.tryHead
-                        |> Option.map _.RowId
-                    | _ -> None
-
-                let shouldAdd = isAdded || List.contains typeName missingTypes
-
-                match typeTokenOpt, firstEventRowIdOpt, shouldAdd with
-                | Some typeToken, Some firstRowId, true ->
-                    Some
-                        { EventMapRowInfo.DeclaringType = typeName
-                          RowId = rowId
-                          TypeDefRowId = typeToken &&& 0x00FFFFFF
-                          FirstEventRowId = Some firstRowId
-                          IsAdded = true }
-                | _ -> None)
-
-        let tryGetPropertyAssociation typeName propertyName =
-            match propertyRowsByName.TryGetValue(struct (typeName, propertyName)) with
-            | true, rows ->
-                rows
-                |> Seq.sortBy _.RowId
-                |> Seq.tryHead
-                |> Option.map (fun row -> struct (row.RowId, row.Key))
-            | _ ->
-                match baselinePropertyLookup.TryGetValue((typeName, propertyName)) with
-                | true, (key, rowId) -> Some(struct (rowId, key))
-                | _ -> None
-
-        let tryGetEventAssociation typeName eventName =
-            match eventRowsByName.TryGetValue(struct (typeName, eventName)) with
-            | true, rows ->
-                rows
-                |> Seq.sortBy _.RowId
-                |> Seq.tryHead
-                |> Option.map (fun row -> struct (row.RowId, row.Key))
-            | _ ->
-                match baselineEventLookup.TryGetValue((typeName, eventName)) with
-                | true, (key, rowId) -> Some(struct (rowId, key))
-                | _ -> None
-
-        let semanticsAttributeForMemberKind memberKind =
-            match memberKind with
-            | SymbolMemberKind.PropertyGet _ -> MethodSemanticsAttributes.Getter
-            | SymbolMemberKind.PropertySet _ -> MethodSemanticsAttributes.Setter
-            | SymbolMemberKind.EventAdd _ -> MethodSemanticsAttributes.Adder
-            | SymbolMemberKind.EventRemove _ -> MethodSemanticsAttributes.Remover
-            | SymbolMemberKind.EventInvoke _ -> MethodSemanticsAttributes.Raiser
-            | _ -> MethodSemanticsAttributes.Other
-
-        let accessorName memberKind =
-            match memberKind with
-            | SymbolMemberKind.PropertyGet name
-            | SymbolMemberKind.PropertySet name -> Some name
-            | SymbolMemberKind.EventAdd name
-            | SymbolMemberKind.EventRemove name
-            | SymbolMemberKind.EventInvoke name -> Some name
-            | _ -> None
-
-        let mutable nextMethodSemanticsRowId = baselineTableRowCounts.[TableNames.MethodSemantics.Index]
-
-        let methodSemanticsRowsSnapshot =
-            request.UpdatedAccessors
-            |> List.choose (fun accessor ->
-                match accessor.Method with
-                | None -> None
-                | Some methodKey ->
-                    match tryGetMethodToken methodKey with
-                    | None -> None
-                    | Some methodToken ->
-                        let typeName = accessor.ContainingType
-                        let attrs = semanticsAttributeForMemberKind accessor.MemberKind
-                        match accessor.MemberKind, accessorName accessor.MemberKind with
-                        | (SymbolMemberKind.PropertyGet _
-                          | SymbolMemberKind.PropertySet _), Some propertyName ->
-                            match tryGetPropertyAssociation typeName propertyName with
-                            // Emit MethodSemantics when the property itself is added, even if the declaring type
-                            // already has a PropertyMap row in the baseline metadata.
-                            | Some(struct (propertyRowId, propertyKey)) when propertyDefinitionIndex.IsAdded propertyKey ->
-                                nextMethodSemanticsRowId <- nextMethodSemanticsRowId + 1
-                                Some
-                                    { MethodSemanticsMetadataUpdate.RowId = nextMethodSemanticsRowId
-                                      MethodToken = methodToken
-                                      Attributes = attrs
-                                      IsAdded = true
-                                      AssociationInfo =
-                                        MethodSemanticsAssociation.PropertyAssociation(propertyKey, propertyRowId) }
-                            | None -> None
-                            | _ -> None
-                        | (SymbolMemberKind.EventAdd _
-                          | SymbolMemberKind.EventRemove _
-                          | SymbolMemberKind.EventInvoke _), Some eventName ->
-                            match tryGetEventAssociation typeName eventName with
-                            // Emit MethodSemantics when the event itself is added, even if the declaring type
-                            // already has an EventMap row in the baseline metadata.
-                            | Some(struct (eventRowId, eventKey)) when eventDefinitionIndex.IsAdded eventKey ->
-                                nextMethodSemanticsRowId <- nextMethodSemanticsRowId + 1
-                                Some
-                                    { MethodSemanticsMetadataUpdate.RowId = nextMethodSemanticsRowId
-                                      MethodToken = methodToken
-                                      Attributes = attrs
-                                      IsAdded = true
-                                      AssociationInfo =
-                                        MethodSemanticsAssociation.EventAssociation(eventKey, eventRowId) }
-                            | None -> None
-                            | _ -> None
-                        | _ -> None)
+        let (propertyDefinitionRowsSnapshot,
+             eventDefinitionRowsSnapshot,
+             propertyMapRowsSnapshot,
+             eventMapRowsSnapshot,
+             methodSemanticsRowsSnapshot) =
+            buildPropertyEventAndSemanticsRows
+                traceMethodUpdates.Value
+                request
+                metadataReader
+                propertyDefinitionIndex
+                eventDefinitionIndex
+                propertyHandleLookup
+                eventHandleLookup
+                baselinePropertyHandles
+                baselineEventHandles
+                baselinePropertyLookup
+                baselineEventLookup
+                baselineTableRowCounts
+                tryGetMethodToken
 
         let methodUpdates = methodUpdatesWithDefs |> List.map (fun (update, _, _) -> update)
 
@@ -2139,443 +2642,25 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             userStringUpdates
             |> Seq.toList
 
-        let customAttributeRowList : CustomAttributeRowInfo list =
-            let rows = ResizeArray<CustomAttributeRowInfo>()
-            let mutable nextRowId = baselineTableRowCounts.[TableNames.CustomAttribute.Index]
-            let methodRowIdToKey = Dictionary<int, MethodDefinitionKey>(HashIdentity.Structural)
-            for struct (rowId, key, _) in methodDefinitionIndex.Rows do
-                methodRowIdToKey[rowId] <- key
+        let customAttributeRowList, nextTypeRefRowIdAfterAttributes, nextMemberRefRowIdAfterAttributes =
+            buildCustomAttributeRows
+                traceMetadata.Value
+                metadataReader
+                baselineTableRowCounts
+                methodUpdateInputs
+                methodDefinitionRowsRaw
+                methodDefinitionIndex
+                methodUpdatesWithDefs
+                remapEntityToken
+                remapAssemblyRefToken
+                baselineTypeReferenceTokens
+                nextTypeRefRowId
+                nextMemberRefRowId
+                typeReferenceRows
+                memberReferenceRows
 
-            let methodsWithCustomAttribute = HashSet<MethodDefinitionKey>(HashIdentity.Structural)
-            let methodsWithNullableContextAttribute = HashSet<MethodDefinitionKey>(HashIdentity.Structural)
-            let mutable nullableContextAttributeSeen = false
-            let encodeNullableContextValue () =
-                [| 0x01uy; 0x00uy; 0x01uy; 0x00uy; 0x00uy |]
-
-            let rec getFullTypeName (handle: TypeDefinitionHandle) =
-                let def = metadataReader.GetTypeDefinition handle
-                let name = metadataReader.GetString def.Name
-                let ns =
-                    if def.Namespace.IsNil then
-                        ""
-                    else
-                        metadataReader.GetString def.Namespace
-                let declaring = def.GetDeclaringType()
-                if declaring.IsNil then
-                    if String.IsNullOrEmpty ns then
-                        name
-                    else
-                        $"{ns}.{name}"
-                else
-                    $"{getFullTypeName declaring}+{name}"
-
-            let tryFindTypeDefinition fullName =
-                metadataReader.TypeDefinitions
-                |> Seq.tryPick (fun handle ->
-                    let def = metadataReader.GetTypeDefinition handle
-                    let name = metadataReader.GetString def.Name
-                    let ns =
-                        if def.Namespace.IsNil then
-                            ""
-                        else
-                            metadataReader.GetString def.Namespace
-                    let decl =
-                        if String.IsNullOrEmpty ns then
-                            name
-                        else
-                            $"{ns}.{name}"
-                    if String.Equals(decl, fullName, StringComparison.Ordinal) then
-                        Some handle
-                    else
-                        None)
-
-            let tryFindStateMachineType (methodKey: MethodDefinitionKey) =
-                match tryFindTypeDefinition methodKey.DeclaringType with
-                | None -> ValueNone
-                | Some parentHandle ->
-                    let parentDef = metadataReader.GetTypeDefinition parentHandle
-                    let nestedTypes = parentDef.GetNestedTypes()
-                    let prefix = methodKey.Name + "@hotreload"
-                    let matches =
-                        nestedTypes
-                        |> Seq.choose (fun nested ->
-                            let nestedDef = metadataReader.GetTypeDefinition nested
-                            let name = metadataReader.GetString nestedDef.Name
-                            if name.StartsWith(prefix, StringComparison.Ordinal) then
-                                Some(name, nested)
-                            else
-                                None)
-                        |> Seq.toArray
-
-                    if matches.Length = 0 then
-                        ValueNone
-                    else
-                        matches
-                        |> Array.tryFind (fun (name, _) -> String.Equals(name, prefix, StringComparison.Ordinal))
-                        |> ValueOption.ofOption
-                        |> ValueOption.orElseWith (fun () -> matches |> Array.tryHead |> ValueOption.ofOption)
-                        |> ValueOption.map snd
-
-            let findAssemblyReferenceRow scopeName =
-                metadataReader.AssemblyReferences
-                |> Seq.tryPick (fun handle ->
-                    let reference = metadataReader.GetAssemblyReference handle
-                    let name = metadataReader.GetString reference.Name
-                    if String.Equals(name, scopeName, StringComparison.OrdinalIgnoreCase) then
-                        let token = MetadataTokens.GetToken(EntityHandle.op_Implicit handle)
-                        let remapped = remapAssemblyRefToken token
-                        let rowId = remapped &&& 0x00FFFFFF
-                        Some(RS_AssemblyRef(AssemblyRefHandle rowId))
-                    else
-                        None)
-
-            let tryGetAssemblyScope () =
-                match findAssemblyReferenceRow "System.Runtime" with
-                | Some scope -> Some scope
-                | None -> findAssemblyReferenceRow "mscorlib"
-
-            let tryFindSystemTypeRef () =
-                metadataReader.TypeReferences
-                |> Seq.tryPick (fun handle ->
-                    let typeRef = metadataReader.GetTypeReference handle
-                    let name = metadataReader.GetString typeRef.Name
-                    let ns =
-                        if typeRef.Namespace.IsNil then
-                            ""
-                        else
-                            metadataReader.GetString typeRef.Namespace
-                    if String.Equals(name, "Type", StringComparison.Ordinal)
-                       && String.Equals(ns, "System", StringComparison.Ordinal) then
-                        Some handle
-                    else
-                        None)
-
-            let tryReuseBaselineTypeRef scopeName namespaceName typeName =
-                let key =
-                    { TypeReferenceKey.Scope = scopeName
-                      Namespace = namespaceName
-                      Name = typeName }
-                baselineTypeReferenceTokens |> Map.tryFind key
-
-            let tryFindExistingTypeRef scopeName namespaceName typeName =
-                metadataReader.TypeReferences
-                |> Seq.tryPick (fun handle ->
-                    let typeRef = metadataReader.GetTypeReference handle
-                    let name = metadataReader.GetString typeRef.Name
-                    if name = typeName then
-                        let ns = if typeRef.Namespace.IsNil then "" else metadataReader.GetString typeRef.Namespace
-                        if ns = namespaceName then
-                            match typeRef.ResolutionScope.Kind with
-                            | HandleKind.AssemblyReference ->
-                                let asm =
-                                    metadataReader.GetAssemblyReference(
-                                        AssemblyReferenceHandle.op_Explicit typeRef.ResolutionScope
-                                    )
-                                let asmName = metadataReader.GetString asm.Name
-                                if asmName = scopeName then
-                                    Some handle
-                                else
-                                    None
-                            | _ -> None
-                        else
-                            None
-                    else
-                        None)
-
-            let mutable systemObjectTypeRefToken : int option = None
-            let mutable asyncAttributeTypeRefToken : int option = None
-            let mutable asyncAttributeCtorToken : int option = None
-            let mutable nullableContextAttributeTypeRefToken : int option = None
-            let mutable nullableContextAttributeCtorToken : int option = None
-
-            let ensureSystemObjectTypeRef () =
-                match systemObjectTypeRefToken with
-                | Some token -> token
-                | None ->
-                    let scope =
-                        match tryGetAssemblyScope () with
-                        | Some value -> value
-                        | None -> RS_Module(ModuleHandle 1)
-                    let nextRowId = nextTypeRefRowId + 1
-                    nextTypeRefRowId <- nextRowId
-                    typeReferenceRows.Add(
-                        { RowId = nextRowId
-                          ResolutionScope = scope
-                          Name = "Object"
-                          NameOffset = None
-                          Namespace = "System"
-                          NamespaceOffset = None })
-                    let token = 0x01000000 ||| nextRowId
-                    systemObjectTypeRefToken <- Some token
-                    token
-
-            let ensureSystemTypeRefHandle () =
-                match tryFindSystemTypeRef () with
-                | Some handle -> handle
-                | None ->
-                    let scope =
-                        match tryGetAssemblyScope () with
-                        | Some value -> value
-                        | None -> RS_Module(ModuleHandle 1)
-                    let nextRowId = nextTypeRefRowId + 1
-                    nextTypeRefRowId <- nextRowId
-                    typeReferenceRows.Add(
-                        { RowId = nextRowId
-                          ResolutionScope = scope
-                          Name = "Type"
-                          NameOffset = None
-                          Namespace = "System"
-                          NamespaceOffset = None })
-                    MetadataTokens.TypeReferenceHandle nextRowId
-
-            let ensureAsyncAttributeTypeRef () =
-                match asyncAttributeTypeRefToken with
-                | Some token -> token
-                | None ->
-                    let scope =
-                        match tryGetAssemblyScope () with
-                        | Some value -> value
-                        | None ->
-                            raise (HotReloadUnsupportedEditException "Unable to locate System.Runtime/mscorlib assembly reference for AsyncStateMachineAttribute. Please rebuild.")
-                    let nextRowId = nextTypeRefRowId + 1
-                    nextTypeRefRowId <- nextRowId
-                    typeReferenceRows.Add(
-                        { RowId = nextRowId
-                          ResolutionScope = scope
-                          Name = "AsyncStateMachineAttribute"
-                          NameOffset = None
-                          Namespace = "System.Runtime.CompilerServices"
-                          NamespaceOffset = None })
-                    let token = 0x01000000 ||| nextRowId
-                    asyncAttributeTypeRefToken <- Some token
-                    token
-
-            let ensureAsyncAttributeCtor () =
-                match asyncAttributeCtorToken with
-                | Some token -> token
-                | None ->
-                    let attrTypeToken = ensureAsyncAttributeTypeRef ()
-                    let systemTypeRefHandle = ensureSystemTypeRefHandle ()
-
-                    let signatureBytes =
-                        let blob = BlobBuilder()
-                        let instanceHeader =
-                            (int SignatureCallingConvention.Default)
-                            ||| (int SignatureAttributes.Instance)
-                            |> byte
-                        blob.WriteByte(instanceHeader)
-                        blob.WriteCompressedInteger 1
-                        blob.WriteByte(LanguagePrimitives.EnumToValue SignatureTypeCode.Void)
-                        blob.WriteByte(0x12uy)
-                        let typeRefEntity : EntityHandle = TypeReferenceHandle.op_Implicit systemTypeRefHandle
-                        let codedIndex = CodedIndex.TypeDefOrRef typeRefEntity
-                        blob.WriteCompressedInteger codedIndex
-                        blob.ToArray()
-
-                    let parentRowId = attrTypeToken &&& 0x00FFFFFF
-                    let nextRowId = nextMemberRefRowId + 1
-                    nextMemberRefRowId <- nextRowId
-                    memberReferenceRows.Add(
-                        { RowId = nextRowId
-                          Parent = MRP_TypeRef(TypeRefHandle parentRowId)
-                          Name = ".ctor"
-                          NameOffset = None
-                          Signature = signatureBytes
-                          SignatureOffset = None })
-
-                    let token = 0x0A000000 ||| nextRowId
-                    asyncAttributeCtorToken <- Some token
-                    token
-
-            let ensureNullableContextAttributeTypeRef () =
-                match nullableContextAttributeTypeRefToken with
-                | Some token -> token
-                | None ->
-                    let baselineOrExistingToken =
-                        [ "System.Runtime"; "mscorlib" ]
-                        |> List.tryPick (fun scope ->
-                            match tryReuseBaselineTypeRef scope "System.Runtime.CompilerServices" "NullableContextAttribute" with
-                            | Some token -> Some token
-                            | None ->
-                                match tryFindExistingTypeRef scope "System.Runtime.CompilerServices" "NullableContextAttribute" with
-                                | Some handle -> Some(MetadataTokens.GetToken(EntityHandle.op_Implicit handle))
-                                | None -> None)
-                    match baselineOrExistingToken with
-                    | Some token ->
-                        nullableContextAttributeTypeRefToken <- Some token
-                        token
-                    | None ->
-                        let scope =
-                            match tryGetAssemblyScope () with
-                            | Some value -> value
-                            | None ->
-                                raise (HotReloadUnsupportedEditException "Unable to locate System.Runtime/mscorlib assembly reference for NullableContextAttribute. Please rebuild.")
-                        let nextRowId = nextTypeRefRowId + 1
-                        nextTypeRefRowId <- nextRowId
-                        typeReferenceRows.Add(
-                            { RowId = nextRowId
-                              ResolutionScope = scope
-                              Name = "NullableContextAttribute"
-                              NameOffset = None
-                              Namespace = "System.Runtime.CompilerServices"
-                              NamespaceOffset = None })
-                        let token = 0x01000000 ||| nextRowId
-                        nullableContextAttributeTypeRefToken <- Some token
-                        let _ = ensureSystemObjectTypeRef ()
-                        token
-
-            let ensureNullableContextAttributeCtor () =
-                match nullableContextAttributeCtorToken with
-                | Some token -> token
-                | None ->
-                    let attrTypeToken = ensureNullableContextAttributeTypeRef ()
-                    let signatureBytes =
-                        let blob = BlobBuilder()
-                        let instanceHeader =
-                            (int SignatureCallingConvention.Default)
-                            ||| (int SignatureAttributes.Instance)
-                            |> byte
-                        blob.WriteByte(instanceHeader)
-                        blob.WriteCompressedInteger 1
-                        blob.WriteByte(LanguagePrimitives.EnumToValue SignatureTypeCode.Void)
-                        blob.WriteByte(LanguagePrimitives.EnumToValue SignatureTypeCode.Byte)
-                        blob.ToArray()
-
-                    let parentRowId = attrTypeToken &&& 0x00FFFFFF
-                    let nextRowId = nextMemberRefRowId + 1
-                    nextMemberRefRowId <- nextRowId
-                    memberReferenceRows.Add(
-                        { RowId = nextRowId
-                          Parent = MRP_TypeRef(TypeRefHandle parentRowId)
-                          Name = ".ctor"
-                          NameOffset = None
-                          Signature = signatureBytes
-                          SignatureOffset = None })
-
-                    let token = 0x0A000000 ||| nextRowId
-                    nullableContextAttributeCtorToken <- Some token
-                    token
-
-
-            let encodeAsyncAttributeValue (stateMachineFullName: string) =
-                let blob = BlobBuilder()
-                blob.WriteUInt16(0x0001us)
-                blob.WriteSerializedString(stateMachineFullName)
-                blob.WriteUInt16(0us)
-                blob.ToArray()
-
-            let isAsyncStateMachineAttribute (attribute: CustomAttribute) =
-                match attribute.Constructor.Kind with
-                | HandleKind.MemberReference ->
-                    let memberRef = metadataReader.GetMemberReference(MemberReferenceHandle.op_Explicit attribute.Constructor)
-                    match memberRef.Parent.Kind with
-                    | HandleKind.TypeReference ->
-                        let typeRef = metadataReader.GetTypeReference(TypeReferenceHandle.op_Explicit memberRef.Parent)
-                        let name = metadataReader.GetString typeRef.Name
-                        let ns = if typeRef.Namespace.IsNil then "" else metadataReader.GetString typeRef.Namespace
-                        ns = "System.Runtime.CompilerServices"
-                        && name.EndsWith("StateMachineAttribute", StringComparison.Ordinal)
-                    | _ -> false
-                | _ -> false
-
-            let isNullableContextAttribute (attribute: CustomAttribute) =
-                match attribute.Constructor.Kind with
-                | HandleKind.MemberReference ->
-                    let memberRef = metadataReader.GetMemberReference(MemberReferenceHandle.op_Explicit attribute.Constructor)
-                    match memberRef.Parent.Kind with
-                    | HandleKind.TypeReference ->
-                        let typeRef = metadataReader.GetTypeReference(TypeReferenceHandle.op_Explicit memberRef.Parent)
-                        let name = metadataReader.GetString typeRef.Name
-                        let ns = if typeRef.Namespace.IsNil then "" else metadataReader.GetString typeRef.Namespace
-                        ns = "System.Runtime.CompilerServices"
-                        && name = "NullableContextAttribute"
-                    | _ -> false
-                | _ -> false
-
-
-            for struct (key: MethodDefinitionKey, _, _, methodDef, _) in methodUpdateInputs do
-                if methodDefinitionIndex.Contains key then
-                    let parentRowId = methodDefinitionIndex.GetRowId key
-                    for attributeHandle in methodDef.GetCustomAttributes() do
-                        let attribute = metadataReader.GetCustomAttribute attributeHandle
-                        let constructorToken = MetadataTokens.GetToken attribute.Constructor
-                        let remappedConstructorToken = remapEntityToken constructorToken
-                        let ctorRowId = remappedConstructorToken &&& 0x00FFFFFF
-                        nextRowId <- nextRowId + 1
-                        let valueBytes =
-                            if attribute.Value.IsNil then
-                                Array.empty
-                            else
-                                metadataReader.GetBlobBytes attribute.Value
-
-                        if isAsyncStateMachineAttribute attribute then
-                            match methodRowIdToKey.TryGetValue parentRowId with
-                            | true, methodKey -> methodsWithCustomAttribute.Add methodKey |> ignore
-                            | _ -> ()
-                        if isNullableContextAttribute attribute then
-                            nullableContextAttributeSeen <- true
-                            match methodRowIdToKey.TryGetValue parentRowId with
-                            | true, methodKey ->
-                                if traceMetadata.Value then
-                                    printfn
-                                        "[fsharp-hotreload][metadata] nullable-context attribute detected on %s"
-                                        methodKey.Name
-                                methodsWithNullableContextAttribute.Add methodKey |> ignore
-                            | _ -> ()
-
-                        let ctorType =
-                            match attribute.Constructor.Kind with
-                            | HandleKind.MethodDefinition -> CAT_MethodDef(MethodDefHandle ctorRowId)
-                            | HandleKind.MemberReference -> CAT_MemberRef(MemberRefHandle ctorRowId)
-                            | _ -> CAT_MemberRef(MemberRefHandle ctorRowId) // Default fallback
-
-                        rows.Add(
-                            { RowId = nextRowId
-                              Parent = HCA_MethodDef(MethodDefHandle parentRowId)
-                              Constructor = ctorType
-                              Value = valueBytes
-                              ValueOffset = if attribute.Value.IsNil then None else Some (BlobOffset (MetadataTokens.GetHeapOffset attribute.Value)) })
-
-            for (update, _, _) in methodUpdatesWithDefs do
-                let methodKey = update.MethodKey
-                if methodsWithCustomAttribute.Contains methodKey |> not then
-                    match tryFindStateMachineType methodKey with
-                    | ValueSome stateMachineHandle ->
-                        let ctorToken = ensureAsyncAttributeCtor ()
-                        let ctorRowId = ctorToken &&& 0x00FFFFFF
-                        let methodRowId = methodDefinitionIndex.GetRowId methodKey
-                        let stateMachineFullName = getFullTypeName stateMachineHandle
-                        let valueBytes = encodeAsyncAttributeValue stateMachineFullName
-
-                        nextRowId <- nextRowId + 1
-                        rows.Add(
-                            { RowId = nextRowId
-                              Parent = HCA_MethodDef(MethodDefHandle methodRowId)
-                              Constructor = CAT_MemberRef(MemberRefHandle ctorRowId)
-                              Value = valueBytes
-                              ValueOffset = None })
-
-                        methodsWithCustomAttribute.Add methodKey |> ignore
-                    | ValueNone -> ()
-
-            if nullableContextAttributeSeen then
-                for KeyValue(methodRowId, methodKey) in methodRowIdToKey do
-                    if methodsWithNullableContextAttribute.Contains methodKey |> not then
-                        let ctorToken = ensureNullableContextAttributeCtor ()
-                        let ctorRowId = ctorToken &&& 0x00FFFFFF
-                        nextRowId <- nextRowId + 1
-                        rows.Add(
-                            { RowId = nextRowId
-                              Parent = HCA_MethodDef(MethodDefHandle methodRowId)
-                              Constructor = CAT_MemberRef(MemberRefHandle ctorRowId)
-                              Value = encodeNullableContextValue ()
-                              ValueOffset = None })
-                        methodsWithNullableContextAttribute.Add methodKey |> ignore
-
-            let rowList = rows |> Seq.toList
-            if traceMetadata.Value then
-                printfn "[fsharp-hotreload][metadata] custom-attributes rows=%d" (List.length rowList)
-            rowList
+        nextTypeRefRowId <- nextTypeRefRowIdAfterAttributes
+        nextMemberRefRowId <- nextMemberRefRowIdAfterAttributes
 
         let typeReferenceRowList, memberReferenceRowList, assemblyReferenceRowList =
             buildReferenceRows
