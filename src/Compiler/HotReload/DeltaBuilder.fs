@@ -298,6 +298,27 @@ let mapSymbolChangesToDelta
 
         deduplicate (explicitEntity @ pathSuffixes)
 
+    let resolveContainingTypeCandidates (change: UpdatedSymbolChange) =
+        let rawCandidates = candidateContainingTypeNames change
+
+        let normalizedCandidates =
+            rawCandidates
+            |> List.choose (fun candidate -> tryResolveTypeName [ candidate ])
+            |> deduplicate
+
+        match change.ContainingEntity with
+        | Some explicitEntity ->
+            match tryResolveTypeName [ explicitEntity ] with
+            | Some resolvedExplicit -> Ok [ resolvedExplicit ]
+            | None ->
+                Error
+                    ($"Unable to resolve explicit containing entity '{explicitEntity}' for symbol '{formatSymbolIdentity change.Symbol}' to a baseline type token; full rebuild required.")
+        | None ->
+            if List.isEmpty normalizedCandidates then
+                Ok rawCandidates
+            else
+                Ok normalizedCandidates
+
     let resolveMethodKey (symbol: SymbolId) (typeNames: string list) =
         let missingIdentityParts = missingRuntimeSignatureIdentityParts symbol
 
@@ -342,42 +363,45 @@ let mapSymbolChangesToDelta
         |> List.fold (fun (resolvedMethods, errors) change ->
             match change.Kind with
             | SemanticEditKind.MethodBody when change.Symbol.Kind = SymbolKind.Value ->
-                let candidates = candidateContainingTypeNames change
-                let resolution = resolveMethodKey change.Symbol candidates
-
-                if traceMethodResolution then
-                    printfn
-                        "[fsharp-hotreload][delta-builder] symbol=%s compiledName=%A args=%A genericArity=%A parameterTypes=%A returnType=%A path=%A containingEntity=%A candidates=%A resolution=%A"
-                        change.Symbol.LogicalName
-                        change.Symbol.CompiledName
-                        change.Symbol.TotalArgCount
-                        change.Symbol.GenericArity
-                        change.Symbol.ParameterTypeIdentities
-                        change.Symbol.ReturnTypeIdentity
-                        change.Symbol.Path
-                        change.ContainingEntity
-                        candidates
-                        resolution
-
-                match resolution with
-                | MethodResolved methodKey -> methodKey :: resolvedMethods, errors
-                | MethodIdentityMissing missingParts ->
-                    let missingText = String.concat ", " missingParts
-                    let errorMessage =
-                        $"Unable to resolve changed method symbol '{formatSymbolIdentity change.Symbol}' because runtime signature identity is incomplete (missing: {missingText}); full rebuild required."
-
+                match resolveContainingTypeCandidates change with
+                | Error errorMessage ->
                     resolvedMethods, errorMessage :: errors
-                | MethodMissing ->
-                    let errorMessage =
-                        $"Unable to resolve changed method symbol '{formatSymbolIdentity change.Symbol}' to a unique baseline method token (containingTypeCandidates={candidates}); full rebuild required."
+                | Ok candidates ->
+                    let resolution = resolveMethodKey change.Symbol candidates
 
-                    resolvedMethods, errorMessage :: errors
-                | MethodAmbiguous ambiguous ->
-                    let ambiguousText = ambiguous |> List.map describeMethodKey |> String.concat "; "
-                    let errorMessage =
-                        $"Ambiguous baseline method mapping for '{formatSymbolIdentity change.Symbol}' (containingTypeCandidates={candidates}, matches=[{ambiguousText}]); full rebuild required."
+                    if traceMethodResolution then
+                        printfn
+                            "[fsharp-hotreload][delta-builder] symbol=%s compiledName=%A args=%A genericArity=%A parameterTypes=%A returnType=%A path=%A containingEntity=%A candidates=%A resolution=%A"
+                            change.Symbol.LogicalName
+                            change.Symbol.CompiledName
+                            change.Symbol.TotalArgCount
+                            change.Symbol.GenericArity
+                            change.Symbol.ParameterTypeIdentities
+                            change.Symbol.ReturnTypeIdentity
+                            change.Symbol.Path
+                            change.ContainingEntity
+                            candidates
+                            resolution
 
-                    resolvedMethods, errorMessage :: errors
+                    match resolution with
+                    | MethodResolved methodKey -> methodKey :: resolvedMethods, errors
+                    | MethodIdentityMissing missingParts ->
+                        let missingText = String.concat ", " missingParts
+                        let errorMessage =
+                            $"Unable to resolve changed method symbol '{formatSymbolIdentity change.Symbol}' because runtime signature identity is incomplete (missing: {missingText}); full rebuild required."
+
+                        resolvedMethods, errorMessage :: errors
+                    | MethodMissing ->
+                        let errorMessage =
+                            $"Unable to resolve changed method symbol '{formatSymbolIdentity change.Symbol}' to a unique baseline method token (containingTypeCandidates={candidates}); full rebuild required."
+
+                        resolvedMethods, errorMessage :: errors
+                    | MethodAmbiguous ambiguous ->
+                        let ambiguousText = ambiguous |> List.map describeMethodKey |> String.concat "; "
+                        let errorMessage =
+                            $"Ambiguous baseline method mapping for '{formatSymbolIdentity change.Symbol}' (containingTypeCandidates={candidates}, matches=[{ambiguousText}]); full rebuild required."
+
+                        resolvedMethods, errorMessage :: errors
             | _ -> resolvedMethods, errors)
             ([], [])
 

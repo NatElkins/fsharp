@@ -153,6 +153,93 @@ module DeltaBuilderTests =
         Assert.Empty(accessorUpdates)
 
     [<Fact>]
+    let ``mapSymbolChangesToDelta resolves explicit containing entity with normalized separators`` () =
+        let baselineTypeName = "Sample.Container+Nested"
+
+        let methodKey: MethodDefinitionKey =
+            { DeclaringType = baselineTypeName
+              Name = "Run"
+              GenericArity = 0
+              ParameterTypes = []
+              ReturnType = ILType.Void }
+
+        let baseline =
+            createBaseline
+                (Map.ofList [ baselineTypeName, 0x02000002 ])
+                (Map.ofList [ methodKey, 0x06000002 ])
+
+        let methodSymbol =
+            { mkSymbol [ "Sample"; "Container"; "Nested" ] "Run" 21L SymbolKind.Value (Some SymbolMemberKind.Method) with
+                CompiledName = Some "Run"
+                TotalArgCount = Some 0
+                GenericArity = Some 0
+                ParameterTypeIdentities = Some []
+                ReturnTypeIdentity = Some "System.Void" }
+
+        let changes: FSharpSymbolChanges =
+            { Added = []
+              Updated =
+                [ { UpdatedSymbolChange.Symbol = methodSymbol
+                    Kind = SemanticEditKind.MethodBody
+                    ContainingEntity = Some "Sample.Container.Nested" } ]
+              Deleted = []
+              Synthesized = []
+              RudeEdits = [] }
+
+        let updatedTypes, updatedMethods, accessorUpdates =
+            match mapSymbolChangesToDelta baseline changes with
+            | Ok result -> result
+            | Error errors -> failwithf "Expected successful mapping, got %A" errors
+
+        Assert.Empty(updatedTypes)
+        Assert.Equal<MethodDefinitionKey list>([ methodKey ], updatedMethods)
+        Assert.Empty(accessorUpdates)
+
+    [<Fact>]
+    let ``mapSymbolChangesToDelta fails closed when explicit containing entity cannot resolve`` () =
+        let baselineTypeName = "Sample.Container+Nested"
+
+        let methodKey: MethodDefinitionKey =
+            { DeclaringType = baselineTypeName
+              Name = "Run"
+              GenericArity = 0
+              ParameterTypes = []
+              ReturnType = ILType.Void }
+
+        let baseline =
+            createBaseline
+                (Map.ofList [ baselineTypeName, 0x02000002 ])
+                (Map.ofList [ methodKey, 0x06000002 ])
+
+        let methodSymbol =
+            { mkSymbol [ "Sample"; "Container"; "Nested" ] "Run" 22L SymbolKind.Value (Some SymbolMemberKind.Method) with
+                CompiledName = Some "Run"
+                TotalArgCount = Some 0
+                GenericArity = Some 0
+                ParameterTypeIdentities = Some []
+                ReturnTypeIdentity = Some "System.Void" }
+
+        let changes: FSharpSymbolChanges =
+            { Added = []
+              Updated =
+                [ { UpdatedSymbolChange.Symbol = methodSymbol
+                    Kind = SemanticEditKind.MethodBody
+                    ContainingEntity = Some "Sample.Unrelated.Type" } ]
+              Deleted = []
+              Synthesized = []
+              RudeEdits = [] }
+
+        match mapSymbolChangesToDelta baseline changes with
+        | Ok _ -> failwith "Expected explicit containing-entity mismatch to fail closed"
+        | Error errors ->
+            Assert.Contains(
+                errors,
+                fun message ->
+                    message.Contains("Unable to resolve explicit containing entity", StringComparison.Ordinal)
+                    && message.Contains("full rebuild required", StringComparison.Ordinal)
+            )
+
+    [<Fact>]
     let ``mapSymbolChangesToDelta fails closed on ambiguous method mapping`` () =
         let primaryTypeName = "Sample.Container+Nested"
         let secondaryTypeName = "Container+Nested"
