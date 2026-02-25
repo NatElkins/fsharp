@@ -87,6 +87,9 @@ assert_contains "ilxgen-name-path" "ilxgen-name-path-check:"
 run_step "plugin-boundary" bash tests/scripts/check-hotreload-plugin-boundary.sh
 assert_contains "plugin-boundary" "hotreload-plugin-boundary-check:"
 
+run_step "metadata-parity" bash tests/scripts/check-hotreload-metadata-parity.sh
+assert_contains "metadata-parity" "hotreload-metadata-parity-check:"
+
 run_step "service-tests" \
   "${DOTNET}" test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj \
   -c Debug --no-build --filter FullyQualifiedName~HotReload -v minimal

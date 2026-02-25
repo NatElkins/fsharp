@@ -24,6 +24,38 @@ module SrmParityTests =
 
     module DeltaWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
+    let private assertReaderParity (delta: DeltaWriter.MetadataDelta) =
+        use provider = MetadataReaderProvider.FromMetadataImage(ImmutableArray.CreateRange<byte>(delta.Metadata))
+        let reader = provider.GetMetadataReader()
+
+        let tables =
+            [ TableIndex.Module
+              TableIndex.TypeRef
+              TableIndex.TypeDef
+              TableIndex.MethodDef
+              TableIndex.Param
+              TableIndex.MemberRef
+              TableIndex.MethodSpec
+              TableIndex.CustomAttribute
+              TableIndex.StandAloneSig
+              TableIndex.Property
+              TableIndex.Event
+              TableIndex.PropertyMap
+              TableIndex.EventMap
+              TableIndex.MethodSemantics
+              TableIndex.AssemblyRef
+              TableIndex.EncLog
+              TableIndex.EncMap
+            ]
+
+        for table in tables do
+            Assert.Equal(delta.TableRowCounts.[int table], reader.GetTableRowCount(table))
+
+        Assert.Equal(delta.HeapSizes.StringHeapSize, reader.GetHeapSize HeapIndex.String)
+        Assert.Equal(delta.HeapSizes.UserStringHeapSize, reader.GetHeapSize HeapIndex.UserString)
+        Assert.Equal(delta.HeapSizes.BlobHeapSize, reader.GetHeapSize HeapIndex.Blob)
+        Assert.Equal(delta.HeapSizes.GuidHeapSize, reader.GetHeapSize HeapIndex.Guid)
+
     /// Helper to serialize a MetadataBuilder to bytes using SRM's serialization
     let private serializeWithMetadataBuilder (metadataBuilder: MetadataBuilder) =
         let metadataRoot = MetadataRootBuilder(metadataBuilder)
@@ -80,6 +112,8 @@ module SrmParityTests =
             let artifacts = emitPropertyDeltaArtifacts (Some "parity-test") ()
             let delta = artifacts.Delta
 
+            assertReaderParity delta
+
             // The MetadataBuilder is populated during emit - we can verify row counts
             // by using the builder passed to emit internally
             // For this test, we verify the delta metadata is valid
@@ -107,6 +141,8 @@ module SrmParityTests =
             let artifacts = emitEventDeltaArtifacts (Some "event-parity") ()
             let delta = artifacts.Delta
 
+            assertReaderParity delta
+
             Assert.NotNull(delta.Metadata)
             Assert.True(delta.Metadata.Length > 0)
 
@@ -126,6 +162,8 @@ module SrmParityTests =
         let ``async delta produces valid metadata structure`` () =
             let artifacts = emitAsyncDeltaArtifacts (Some "async-parity") ()
             let delta = artifacts.Delta
+
+            assertReaderParity delta
 
             Assert.NotNull(delta.Metadata)
             Assert.True(delta.Metadata.Length > 0)
@@ -148,6 +186,8 @@ module SrmParityTests =
             let artifacts = emitClosureDeltaArtifacts ()
             let delta = artifacts.Delta
 
+            assertReaderParity delta
+
             Assert.NotNull(delta.Metadata)
             Assert.True(delta.Metadata.Length > 0)
 
@@ -164,6 +204,8 @@ module SrmParityTests =
         let ``local signature delta produces valid metadata structure`` () =
             let artifacts = emitLocalSignatureDeltaArtifacts (Some "locals-parity") ()
             let delta = artifacts.Delta
+
+            assertReaderParity delta
 
             Assert.NotNull(delta.Metadata)
             Assert.True(delta.Metadata.Length > 0)
@@ -195,6 +237,8 @@ module SrmParityTests =
             let artifacts = emitPropertyDeltaArtifacts (Some "heap-test") ()
             let delta = artifacts.Delta
 
+            assertReaderParity delta
+
             // Heap sizes should be non-negative
             Assert.True(delta.HeapSizes.StringHeapSize >= 0)
             Assert.True(delta.HeapSizes.BlobHeapSize >= 0)
@@ -206,6 +250,8 @@ module SrmParityTests =
         let ``delta EncLog and EncMap are correctly formed`` () =
             let artifacts = emitPropertyDeltaArtifacts (Some "enc-test") ()
             let delta = artifacts.Delta
+
+            assertReaderParity delta
 
             // EncLog should not be empty for any meaningful delta
             Assert.True(delta.EncLog.Length > 0, "EncLog should have entries")
@@ -227,6 +273,7 @@ module SrmParityTests =
 
             // Generation 1
             let gen1 = artifacts.Generation1
+            assertReaderParity gen1
             Assert.NotNull(gen1.Metadata)
             Assert.True(gen1.Metadata.Length > 0)
 
@@ -236,6 +283,7 @@ module SrmParityTests =
 
             // Generation 2
             let gen2 = artifacts.Generation2
+            assertReaderParity gen2
             Assert.NotNull(gen2.Metadata)
             Assert.True(gen2.Metadata.Length > 0)
 
