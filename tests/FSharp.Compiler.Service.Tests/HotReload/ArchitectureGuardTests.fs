@@ -80,6 +80,13 @@ let ``typed tree diff no longer relies on state-machine declaring-type string he
     Assert.DoesNotContain("\"QueryBuilder\"", source)
 
 [<Fact>]
+let ``typed tree diff gates value-reference query heuristics to member paths`` () =
+    let source = readCompilerFile "src/Compiler/TypedTree/TypedTreeDiff.fs"
+
+    Assert.Contains("elif vref.IsMember || vref.IsModuleBinding then", source)
+    Assert.Contains("if isLikelyQueryOperationName vref.LogicalName then", source)
+
+[<Fact>]
 let ``driver hot reload implementation references stay behind boundary files`` () =
     let driverDir = Path.Combine(repoRoot, "src/Compiler/Driver")
 

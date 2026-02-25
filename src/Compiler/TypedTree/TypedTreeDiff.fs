@@ -503,12 +503,15 @@ let private collectLoweredShapeInfo (expr: Expr) =
         match expr with
         | Expr.Const _ -> ()
         | Expr.Val (vref, _, _) ->
-            if isLikelyQueryOperationName vref.LogicalName then
-                addDistinct collector.QueryOperations vref.LogicalName
-            elif isLikelyStateMachineOperationName vref.LogicalName
-                 || vref.LogicalName.Equals("MoveNext", StringComparison.Ordinal) then
-                // Keep lowered-shape classification resilient without depending on declaring-type names.
+            // Keep query/state-machine signals tied to member/module references to avoid
+            // broad local-name heuristics while still observing lowered CE calls.
+            if vref.LogicalName.Equals("MoveNext", StringComparison.Ordinal) then
                 addDistinct collector.StateMachineOperations vref.LogicalName
+            elif vref.IsMember || vref.IsModuleBinding then
+                if isLikelyQueryOperationName vref.LogicalName then
+                    addDistinct collector.QueryOperations vref.LogicalName
+                elif isLikelyStateMachineOperationName vref.LogicalName then
+                    addDistinct collector.StateMachineOperations vref.LogicalName
         | Expr.App (funcExpr, _, _, args, _) ->
             walk funcExpr
             args |> List.iter walk
@@ -540,6 +543,8 @@ let private collectLoweredShapeInfo (expr: Expr) =
             | TOp.TraitCall traitInfo ->
                 if isLikelyQueryOperationName traitInfo.MemberLogicalName then
                     addDistinct collector.QueryOperations traitInfo.MemberLogicalName
+                elif isLikelyStateMachineOperationName traitInfo.MemberLogicalName then
+                    addDistinct collector.StateMachineOperations traitInfo.MemberLogicalName
             | _ -> ()
 
             args |> List.iter walk
@@ -564,6 +569,8 @@ let private collectLoweredShapeInfo (expr: Expr) =
         | Expr.WitnessArg (traitInfo, _) ->
             if isLikelyQueryOperationName traitInfo.MemberLogicalName then
                 addDistinct collector.QueryOperations traitInfo.MemberLogicalName
+            elif isLikelyStateMachineOperationName traitInfo.MemberLogicalName then
+                addDistinct collector.StateMachineOperations traitInfo.MemberLogicalName
         | Expr.StaticOptimization (_, onExpr, elseExpr, _) ->
             walk onExpr
             walk elseExpr
