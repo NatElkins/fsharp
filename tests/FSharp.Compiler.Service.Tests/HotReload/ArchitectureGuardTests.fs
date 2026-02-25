@@ -24,7 +24,8 @@ let ``compiler global state only depends on generated-name abstraction`` () =
 
     Assert.DoesNotContain("open FSharp.Compiler.SynthesizedTypeMaps\n", source)
     Assert.Contains("open FSharp.Compiler.GeneratedNames\n", source)
-    Assert.Contains("member _.CompilerGeneratedNameMap", source)
+    Assert.DoesNotContain("member _.CompilerGeneratedNameMap", source)
+    Assert.Contains("tryGetCompilerGeneratedNameMap", source)
 
 [<Fact>]
 let ``compiler config exposes generic emit hook contract only`` () =

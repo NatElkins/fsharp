@@ -22,6 +22,7 @@ open FSharp.Compiler.AbstractIL.ILPdbWriter
 open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.CodeAnalysis.TransparentCompiler
 open FSharp.Compiler.CompilerConfig
+open FSharp.Compiler.CompilerGeneratedNameMapState
 open FSharp.Compiler.CompilerEmitHookState
 open FSharp.Compiler.CompilerOptions
 open FSharp.Compiler.Diagnostics
@@ -240,7 +241,7 @@ type internal FSharpHotReloadService
                                 targetMap.BeginSession()
                                 targetMap
 
-                            compilerState.CompilerGeneratedNameMap <- Some(map :> ICompilerGeneratedNameMap)
+                            setCompilerGeneratedNameMap (compilerState :> obj) (map :> ICompilerGeneratedNameMap)
 
                             FSharpEditAndContinueLanguageService.Instance.EndSession()
                             let startTransition = FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
@@ -306,7 +307,7 @@ type internal FSharpHotReloadService
                                 |> Seq.map (fun (k, v) -> struct (k, v))
                                 |> map.LoadSnapshot
                                 map.BeginSession()
-                                compilerState.CompilerGeneratedNameMap <- Some(map :> ICompilerGeneratedNameMap)
+                                setCompilerGeneratedNameMap (compilerState :> obj) (map :> ICompilerGeneratedNameMap)
                             | ValueNone -> ())
 
                     if not FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
@@ -358,7 +359,7 @@ type internal FSharpHotReloadService
                                     match currentSynthesizedTypeMaps with
                                     | Some map ->
                                         map.BeginSession()
-                                        tcGlobals.CompilerGlobalState.Value.CompilerGeneratedNameMap <- Some(map :> ICompilerGeneratedNameMap)
+                                        setCompilerGeneratedNameMap (tcGlobals.CompilerGlobalState.Value :> obj) (map :> ICompilerGeneratedNameMap)
                                     | None -> ())
 
                                 match
@@ -1330,6 +1331,7 @@ open System.IO
 open Internal.Utilities
 open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.CompilerConfig
+open FSharp.Compiler.CompilerGeneratedNameMapState
 open FSharp.Compiler.EditorServices
 open FSharp.Compiler.Text.Range
 open FSharp.Compiler.DiagnosticsLogger

@@ -16,7 +16,6 @@ open FSharp.Compiler.Text
 type NiceNameGenerator =
 
     new: unit -> NiceNameGenerator
-    internal new: (unit -> FSharp.Compiler.GeneratedNames.ICompilerGeneratedNameMap option) -> NiceNameGenerator
     member FreshCompilerGeneratedName: name: string * m: range -> string
     member IncrementOnly: name: string * m: range -> int
 
@@ -29,7 +28,6 @@ type NiceNameGenerator =
 type StableNiceNameGenerator =
 
     new: unit -> StableNiceNameGenerator
-    internal new: (unit -> FSharp.Compiler.GeneratedNames.ICompilerGeneratedNameMap option) -> StableNiceNameGenerator
     member GetUniqueCompilerGeneratedName: name: string * m: range * uniq: int64 -> string
 
 type internal CompilerGlobalState =
@@ -44,9 +42,6 @@ type internal CompilerGlobalState =
 
     /// A global generator of stable compiler generated names
     member StableNameGenerator: StableNiceNameGenerator
-
-    /// Optional map that stabilizes compiler-generated names for specialized compilation modes (for example, hot reload).
-    member CompilerGeneratedNameMap: FSharp.Compiler.GeneratedNames.ICompilerGeneratedNameMap option with get, set
 
 type Unique = int64
 

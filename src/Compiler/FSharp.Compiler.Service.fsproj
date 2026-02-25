@@ -310,8 +310,8 @@
     <Compile Include="SyntaxTree\LexHelpers.fs">
       <Link>SyntaxTree\LexHelpers.fs</Link>
     </Compile>
-    <Compile Include="Generated\GeneratedNames.fsi" />
     <Compile Include="Generated\GeneratedNames.fs" />
+    <Compile Include="Generated\CompilerGeneratedNameMapState.fs" />
     <Compile Include="$(FsYaccOutputFolder)pplex.fsi">
       <Link>SyntaxTree\FsLexOutput\pplex.fsi</Link>
     </Compile>
@@ -332,7 +332,6 @@
     <Compile Include="TypedTree\TypeProviders.fs" />
     <Compile Include="TypedTree\QuotationPickler.fsi" />
     <Compile Include="TypedTree\QuotationPickler.fs" />
-    <Compile Include="TypedTree\SynthesizedTypeMaps.fsi" />
     <Compile Include="TypedTree\SynthesizedTypeMaps.fs" />
     <Compile Include="TypedTree\CompilerGlobalState.fsi" />
     <Compile Include="TypedTree\CompilerGlobalState.fs" />

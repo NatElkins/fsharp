@@ -10,6 +10,7 @@ open System.Threading
 open FSharp.Compiler.Syntax.PrettyNaming
 open FSharp.Compiler.Text
 open FSharp.Compiler.GeneratedNames
+open FSharp.Compiler.CompilerGeneratedNameMapState
 
 /// Generates compiler-generated names. Each name generated also includes the StartLine number of the range passed in
 /// at the point of first generation.
@@ -61,13 +62,10 @@ type StableNiceNameGenerator(getCompilerGeneratedNameMap: unit -> ICompilerGener
 
     new () = StableNiceNameGenerator(fun () -> None)
 
-type internal CompilerGlobalState () =
+type internal CompilerGlobalState () as this =
     /// A global generator of compiler generated names
-    let compilerGeneratedNameMapLock = obj ()
-    let mutable compilerGeneratedNameMap: ICompilerGeneratedNameMap option = None
-
     let getCompilerGeneratedNameMap () =
-        lock compilerGeneratedNameMapLock (fun () -> compilerGeneratedNameMap)
+        tryGetCompilerGeneratedNameMap (this :> obj)
 
     let globalNng = NiceNameGenerator(getCompilerGeneratedNameMap)
 
@@ -82,10 +80,6 @@ type internal CompilerGlobalState () =
     member _.StableNameGenerator = globalStableNameGenerator
 
     member _.IlxGenNiceNameGenerator = ilxgenGlobalNng
-
-    member _.CompilerGeneratedNameMap
-        with get () = lock compilerGeneratedNameMapLock (fun () -> compilerGeneratedNameMap)
-        and set value = lock compilerGeneratedNameMapLock (fun () -> compilerGeneratedNameMap <- value)
 
 /// Unique name generator for stamps attached to lambdas and object expressions
 type Unique = int64

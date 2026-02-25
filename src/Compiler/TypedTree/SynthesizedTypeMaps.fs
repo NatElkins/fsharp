@@ -5,12 +5,22 @@ open System.Collections.Concurrent
 open System.Collections.Generic
 
 open FSharp.Compiler.GeneratedNames
+open FSharp.Compiler.Syntax.PrettyNaming
 
 /// <summary>Provides stable compiler-generated names across hot reload sessions.</summary>
 type FSharpSynthesizedTypeMaps() =
     let syncLock = obj ()
     let buckets = ConcurrentDictionary<string, ResizeArray<string>>()
     let ordinals = ConcurrentDictionary<string, int>()
+
+    let makeHotReloadName (baseName: string) ordinal =
+        let suffix =
+            if ordinal <= 0 then
+                "hotreload"
+            else
+                $"hotreload-{ordinal}"
+
+        CompilerGeneratedNameSuffix baseName suffix
 
     let createBucket (names: string[]) =
         let bucket = ResizeArray<string>()

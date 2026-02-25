@@ -3,6 +3,8 @@ namespace FSharp.Compiler.Service.Tests.HotReload
 open Xunit
 
 open FSharp.Compiler.CompilerGlobalState
+open FSharp.Compiler.CompilerGeneratedNameMapState
+open FSharp.Compiler.GeneratedNames
 open FSharp.Compiler.SynthesizedTypeMaps
 open FSharp.Compiler.Text
 
@@ -12,7 +14,9 @@ module GeneratedNamesTests =
 
     [<Fact>]
     let ``NiceNameGenerator without map uses legacy suffix`` () =
-        let generator = NiceNameGenerator(fun () -> None)
+        let compilerState = CompilerGlobalState()
+        clearCompilerGeneratedNameMap (compilerState :> obj)
+        let generator = compilerState.NiceNameGenerator
 
         let first = generator.FreshCompilerGeneratedName("lambda", zeroRange)
         let second = generator.FreshCompilerGeneratedName("lambda", zeroRange)
@@ -22,10 +26,12 @@ module GeneratedNamesTests =
 
     [<Fact>]
     let ``NiceNameGenerator with synthesized map replays snapshot`` () =
+        let compilerState = CompilerGlobalState()
         let map = FSharpSynthesizedTypeMaps()
         map.BeginSession()
+        setCompilerGeneratedNameMap (compilerState :> obj) (map :> ICompilerGeneratedNameMap)
 
-        let generator = NiceNameGenerator(fun () -> Some map)
+        let generator = compilerState.NiceNameGenerator
 
         let first = generator.FreshCompilerGeneratedName("closure", zeroRange)
         let second = generator.FreshCompilerGeneratedName("closure", zeroRange)
@@ -50,18 +56,19 @@ module GeneratedNamesTests =
         // This test verifies that when hot reload is enabled, the internal
         // basicNameCounts counter is NOT incremented. This prevents counter drift
         // between the per-file basicNameCounts and the global map ordinals.
-        let mutable mapEnabled = true
+        let compilerState = CompilerGlobalState()
         let map = FSharpSynthesizedTypeMaps()
         map.BeginSession()
+        setCompilerGeneratedNameMap (compilerState :> obj) (map :> ICompilerGeneratedNameMap)
 
-        let generator = NiceNameGenerator(fun () -> if mapEnabled then Some map else None)
+        let generator = compilerState.NiceNameGenerator
 
         // Generate names while hot reload is enabled
         let _ = generator.FreshCompilerGeneratedName("test", zeroRange)
         let _ = generator.FreshCompilerGeneratedName("test", zeroRange)
 
         // Disable hot reload - fallback names should start fresh.
-        mapEnabled <- false
+        clearCompilerGeneratedNameMap (compilerState :> obj)
 
         let first = generator.FreshCompilerGeneratedName("test", zeroRange)
         let second = generator.FreshCompilerGeneratedName("test", zeroRange)
@@ -71,7 +78,9 @@ module GeneratedNamesTests =
 
     [<Fact>]
     let ``NiceNameGenerator without map keys ordinals by file index`` () =
-        let generator = NiceNameGenerator(fun () -> None)
+        let compilerState = CompilerGlobalState()
+        clearCompilerGeneratedNameMap (compilerState :> obj)
+        let generator = compilerState.NiceNameGenerator
         let start = Position.mkPos 42 0
         let fileOneRange = Range.mkRange "/tmp/generated-names-file-one.fs" start start
         let fileTwoRange = Range.mkRange "/tmp/generated-names-file-two.fs" start start
@@ -88,7 +97,9 @@ module GeneratedNamesTests =
 
     [<Fact>]
     let ``IncrementOnly remains one-based and file-index scoped`` () =
-        let generator = NiceNameGenerator(fun () -> None)
+        let compilerState = CompilerGlobalState()
+        clearCompilerGeneratedNameMap (compilerState :> obj)
+        let generator = compilerState.NiceNameGenerator
         let start = Position.mkPos 7 0
         let fileOneRange = Range.mkRange "/tmp/increment-only-one.fs" start start
         let fileTwoRange = Range.mkRange "/tmp/increment-only-two.fs" start start
