@@ -121,6 +121,7 @@ Track each major review concern with objective status and evidence so follow-up 
 - Evidence:
   - Guard now enforces allowlist + mandatory hash-locking for every drifted `.fsi`: `tests/scripts/check-main-fsi-drift.sh`.
   - Refresh helper added: `tests/scripts/refresh-main-fsi-drift-hashes.sh`.
+  - Reduced one main-relative signature drift by localizing hot-reload activity tag literals in `EditAndContinueLanguageService` and removing `Activity.fsi` from the allowlisted drift set (`10 -> 9` files).
 - Remaining gap:
   - The allowlisted drift set is still non-trivial and should be reduced through targeted refactors.
 

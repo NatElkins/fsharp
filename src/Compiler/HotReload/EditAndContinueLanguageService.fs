@@ -28,6 +28,11 @@ type internal FSharpEditAndContinueLanguageService private (getSessionStore: uni
 
     static let traceMethodsFlagName = "FSHARP_HOTRELOAD_TRACE_METHODS"
 
+    // Keep hot reload activity tags local so Activity.fsi stays main-compatible.
+    static let activityTagGeneration = "generation"
+
+    static let activityTagHotReloadAction = "hotReloadAction"
+
     static let shouldTraceMetadata () = isEnvVarTruthy traceMetadataFlagName
 
     static let shouldTraceMethods () = isEnvVarTruthy traceMethodsFlagName
@@ -139,7 +144,7 @@ type internal FSharpEditAndContinueLanguageService private (getSessionStore: uni
         use _ =
             Activity.start "HotReload.StartSession" [|
                 Activity.Tags.project, baseline.ModuleId.ToString()
-                Activity.Tags.hotReloadAction, "baseline"
+                activityTagHotReloadAction, "baseline"
             |]
 
         sessionStore().SetBaseline(baseline, CheckedAssemblyAfterOptimization [])
@@ -148,7 +153,7 @@ type internal FSharpEditAndContinueLanguageService private (getSessionStore: uni
         use _ =
             Activity.start "HotReload.StartSession" [|
                 Activity.Tags.project, baseline.ModuleId.ToString()
-                Activity.Tags.hotReloadAction, "baseline+impl"
+                activityTagHotReloadAction, "baseline+impl"
             |]
 
         sessionStore().SetBaseline(baseline, implementationFiles)
@@ -196,7 +201,7 @@ type internal FSharpEditAndContinueLanguageService private (getSessionStore: uni
         | ValueSome session ->
             use _ =
                 Activity.start "HotReload.EmitDelta" [|
-                    Activity.Tags.generation, string session.CurrentGeneration
+                    activityTagGeneration, string session.CurrentGeneration
                     Activity.Tags.project, session.Baseline.ModuleId.ToString()
                 |]
             try
@@ -271,7 +276,7 @@ type internal FSharpEditAndContinueLanguageService private (getSessionStore: uni
         | ValueSome session ->
             use _ =
                 Activity.start "HotReload.EmitDeltaForCompilation" [|
-                    Activity.Tags.generation, string session.CurrentGeneration
+                    activityTagGeneration, string session.CurrentGeneration
                     Activity.Tags.project, session.Baseline.ModuleId.ToString()
                 |]
             let symbolChanges = computeSymbolChanges tcGlobals session.ImplementationFiles updatedImplementation

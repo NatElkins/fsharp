@@ -12,4 +12,3 @@ src/Compiler/Driver/CompilerConfig.fsi
 src/Compiler/Service/FSharpCheckerResults.fsi
 src/Compiler/Service/service.fsi
 src/Compiler/TypedTree/TypedTreeDiff.fsi
-src/Compiler/Utilities/Activity.fsi
