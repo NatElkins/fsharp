@@ -1553,6 +1553,65 @@ let private buildCustomAttributeRows
 
     rowList, nextTypeRefRowId, nextMemberRefRowId
 
+let private buildMethodAndParameterRows
+    (orderedMethodInputs: struct (MethodDefinitionKey * int * MethodDefinitionHandle * MethodDefinition * MethodBodyBlock) list)
+    (metadataReader: MetadataReader)
+    (builder: IlDeltaStreamBuilder)
+    (remapUserString: int -> int)
+    (remapEntityToken: int -> int)
+    (parameterDefinitionRowsRaw: struct (int * ParameterDefinitionKey * bool) list)
+    (parameterHandleLookup: Dictionary<ParameterDefinitionKey, ParameterHandle>)
+    (baselineParameterHandles: Map<ParameterDefinitionKey, ParameterDefinitionMetadataHandles>)
+    (syntheticParameterInfo: Dictionary<ParameterDefinitionKey, ParameterAttributes>)
+    (firstParamRowByMethod: Dictionary<MethodDefinitionKey, int>)
+    (returnParameterKeys: HashSet<ParameterDefinitionKey>)
+    (methodDefinitionRowsRaw: struct (int * MethodDefinitionKey * bool) list)
+    (baselineMethodHandles: Map<MethodDefinitionKey, MethodDefinitionMetadataHandles>)
+    (baselineMethodTokens: Map<MethodDefinitionKey, int>)
+    (methodDefinitionIndex: DefinitionIndex<MethodDefinitionKey>)
+    (traceMetadata: bool)
+    (baselineMethodSpecRowCount: int)
+    (methodSpecRowsByToken: Dictionary<int, MethodSpecificationRowInfo>) =
+    let methodUpdatesWithDefs, methodMetadataLookup =
+        buildMethodUpdatesWithMetadata
+            orderedMethodInputs
+            metadataReader
+            builder
+            remapUserString
+            remapEntityToken
+
+    let parameterDefinitionRowsSnapshot =
+        buildParameterDefinitionRowsSnapshot
+            parameterDefinitionRowsRaw
+            parameterHandleLookup
+            baselineParameterHandles
+            syntheticParameterInfo
+            firstParamRowByMethod
+            returnParameterKeys
+            metadataReader
+
+    let methodDefinitionRowsSnapshot =
+        buildMethodDefinitionRowsSnapshot
+            methodDefinitionRowsRaw
+            methodUpdatesWithDefs
+            methodMetadataLookup
+            baselineMethodHandles
+            firstParamRowByMethod
+            baselineMethodTokens
+            methodDefinitionIndex
+
+    let methodSpecificationRowsSnapshot =
+        buildMethodSpecificationRowsSnapshot
+            traceMetadata
+            methodUpdatesWithDefs
+            baselineMethodSpecRowCount
+            methodSpecRowsByToken
+
+    methodUpdatesWithDefs,
+    parameterDefinitionRowsSnapshot,
+    methodDefinitionRowsSnapshot,
+    methodSpecificationRowsSnapshot
+
 /// Emits the delta artifacts for a request. The current implementation populates token projections
 /// while leaving the raw metadata/IL/PDB payload empty; future work will replace the placeholders
 /// with fully emitted heaps.
@@ -2580,36 +2639,27 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
     if List.isEmpty methodUpdateInputs && List.isEmpty updatedTypeTokens then
         emptyDelta
     else
-        let methodUpdatesWithDefs, methodMetadataLookup =
-            buildMethodUpdatesWithMetadata
+        let (methodUpdatesWithDefs,
+             parameterDefinitionRowsSnapshot,
+             methodDefinitionRowsSnapshot,
+             methodSpecificationRowsSnapshot) =
+            buildMethodAndParameterRows
                 orderedMethodInputs
                 metadataReader
                 builder
                 remapUserString
                 remapEntityToken
-
-        let parameterDefinitionRowsSnapshot =
-            buildParameterDefinitionRowsSnapshot
                 parameterDefinitionIndex.Rows
                 parameterHandleLookup
                 baselineParameterHandles
                 syntheticParameterInfo
                 firstParamRowByMethod
                 returnParameterKeys
-                metadataReader
-        let methodDefinitionRowsSnapshot =
-            buildMethodDefinitionRowsSnapshot
                 methodDefinitionRowsRaw
-                methodUpdatesWithDefs
-                methodMetadataLookup
                 baselineMethodHandles
-                firstParamRowByMethod
                 request.Baseline.MethodTokens
                 methodDefinitionIndex
-        let methodSpecificationRowsSnapshot =
-            buildMethodSpecificationRowsSnapshot
                 traceMetadata.Value
-                methodUpdatesWithDefs
                 baselineMethodSpecRowCount
                 methodSpecRowsByToken
         let (propertyDefinitionRowsSnapshot,
