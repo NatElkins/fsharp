@@ -429,6 +429,36 @@ type Type =
         Assert.False(capabilities.SupportsRuntimeApply, "Runtime apply capability should require explicit opt-in")
 
     [<Fact>]
+    let ``Compiler outputs stay byte-identical when hot reload capture flag is toggled`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-flag-parity", Guid.NewGuid().ToString("N"))
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+        let pdbPath = Path.ChangeExtension(dllPath, ".pdb")
+
+        File.WriteAllText(fsPath, baselineSource)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baselineSource
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions false
+        let baselineDllBytes = File.ReadAllBytes(dllPath)
+        let baselinePdbBytes = File.ReadAllBytes(pdbPath)
+
+        compileProject checker projectOptions true
+        let hotReloadDllBytes = File.ReadAllBytes(dllPath)
+        let hotReloadPdbBytes = File.ReadAllBytes(pdbPath)
+
+        Assert.Equal<byte>(baselineDllBytes, hotReloadDllBytes)
+        Assert.Equal<byte>(baselinePdbBytes, hotReloadPdbBytes)
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
     let ``StartHotReloadSession and EmitHotReloadDelta produce delta`` () =
         let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-checker", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(projectDir) |> ignore
