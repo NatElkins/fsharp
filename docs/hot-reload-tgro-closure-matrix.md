@@ -68,6 +68,7 @@ Track each major review concern with objective status and evidence so follow-up 
 - Evidence:
   - Method token resolution is fail-closed and rejects incomplete runtime signature identity instead of permissive fallback: `src/Compiler/HotReload/DeltaBuilder.fs`.
   - Explicit `ContainingEntity` mapping now resolves through baseline type-token normalization and fails closed when the explicit entity cannot resolve, avoiding permissive candidate fallback: `src/Compiler/HotReload/DeltaBuilder.fs`.
+  - Method resolution now pre-indexes baseline methods by normalized containing-type token + full runtime signature identity before applying compatibility fallback matching, reducing accidental cross-type string matches while preserving existing supported shapes: `src/Compiler/HotReload/DeltaBuilder.fs`.
   - Regression tests cover incomplete identity, ambiguous mapping, explicit-entity normalization, and explicit-entity mismatch fail-closed behavior: `tests/FSharp.Compiler.Service.Tests/HotReload/DeltaBuilderTests.fs`.
 - Remaining gap:
   - End-to-end symbol identity still relies on string identities (`SymbolId`, `MethodDefinitionKey`) rather than semantic symbol objects.

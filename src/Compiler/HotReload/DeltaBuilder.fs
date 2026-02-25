@@ -184,6 +184,31 @@ type private MethodResolutionResult =
     | MethodMissing
     | MethodAmbiguous of MethodDefinitionKey list
 
+type private MethodIdentityKey =
+    { DeclaringTypeToken: int
+      Name: string
+      GenericArity: int
+      ParameterTypes: string list
+      ReturnType: string }
+
+let private methodIdentityKey (declaringTypeToken: int) (methodKey: MethodDefinitionKey) : MethodIdentityKey =
+    { DeclaringTypeToken = declaringTypeToken
+      Name = methodKey.Name
+      GenericArity = methodKey.GenericArity
+      ParameterTypes = methodKey.ParameterTypes |> List.map ilTypeIdentity
+      ReturnType = ilTypeIdentity methodKey.ReturnType }
+
+let private tryMethodIdentityKeyFromSymbol (declaringTypeToken: int) (symbol: SymbolId) : MethodIdentityKey option =
+    match symbol.GenericArity, symbol.ParameterTypeIdentities, symbol.ReturnTypeIdentity with
+    | Some genericArity, Some parameterTypes, Some returnType ->
+        Some
+            { DeclaringTypeToken = declaringTypeToken
+              Name = methodNameOfSymbol symbol
+              GenericArity = genericArity
+              ParameterTypes = parameterTypes
+              ReturnType = returnType }
+    | _ -> None
+
 let private describeMethodKey (key: MethodDefinitionKey) =
     let parameterCount = key.ParameterTypes.Length
     $"{key.DeclaringType}::{key.Name}/{parameterCount}`{key.GenericArity}"
@@ -264,6 +289,52 @@ let mapSymbolChangesToDelta
         |> List.tryFind (fun name -> Map.containsKey name baseline.TypeTokens)
         |> Option.orElseWith (fun () -> tryResolveTypeNameByPath baseline.TypeTokens typePathLookup names)
 
+    let methodIdentityIndex =
+        let index = System.Collections.Generic.Dictionary<MethodIdentityKey, ResizeArray<MethodDefinitionKey>>(HashIdentity.Structural)
+
+        for KeyValue(methodKey, _) in baseline.MethodTokens do
+            match baseline.TypeTokens |> Map.tryFind methodKey.DeclaringType with
+            | Some declaringTypeToken ->
+                let identity = methodIdentityKey declaringTypeToken methodKey
+
+                let bucket =
+                    match index.TryGetValue identity with
+                    | true, existing -> existing
+                    | _ ->
+                        let created = ResizeArray<MethodDefinitionKey>()
+                        index[identity] <- created
+                        created
+
+                bucket.Add methodKey
+            | None -> ()
+
+        index
+
+    let lookupMethodsByIdentity (symbol: SymbolId) (typeNames: string list) =
+        let typeTokens =
+            baseline.TypeTokens
+            |> Map.toSeq
+            |> Seq.choose (fun (declaringTypeName, declaringTypeToken) ->
+                if typeNames |> List.exists (typeNamesEquivalent declaringTypeName) then
+                    Some declaringTypeToken
+                else
+                    None)
+            |> Seq.toList
+            |> deduplicate
+
+        let matchedMethods =
+            typeTokens
+            |> List.collect (fun typeToken ->
+                match tryMethodIdentityKeyFromSymbol typeToken symbol with
+                | Some identity ->
+                    match methodIdentityIndex.TryGetValue identity with
+                    | true, methods -> methods |> Seq.toList
+                    | _ -> []
+                | None -> [])
+            |> deduplicate
+
+        typeTokens, matchedMethods
+
     let updatedTypes, typeResolutionErrors =
         changes
         |> FSharpSymbolChanges.entitySymbolsWithChanges
@@ -327,36 +398,42 @@ let mapSymbolChangesToDelta
             // avoid best-effort token matching that could map edits to the wrong method.
             MethodIdentityMissing missingIdentityParts
         else
-            let candidates =
-                baseline.MethodTokens
-                |> Map.toSeq
-                |> Seq.choose (fun (key, _) ->
-                    if (typeNames |> List.exists (typeNamesEquivalent key.DeclaringType)) && methodKeyMatchesSymbol symbol key then
-                        Some key
-                    else
-                        None)
-                |> Seq.distinct
-                |> Seq.toList
+            let _, identityMatchedCandidates = lookupMethodsByIdentity symbol typeNames
 
-            match candidates with
-            | [] -> MethodMissing
+            match identityMatchedCandidates with
             | [ candidate ] -> MethodResolved candidate
-            | _ ->
-                let parameterMatchedCandidates =
-                    candidates |> List.filter (methodParameterTypesMatchSymbol symbol)
+            | _ :: _ as ambiguous -> MethodAmbiguous ambiguous
+            | [] ->
+                let candidates =
+                    baseline.MethodTokens
+                    |> Map.toSeq
+                    |> Seq.choose (fun (key, _) ->
+                        if (typeNames |> List.exists (typeNamesEquivalent key.DeclaringType)) && methodKeyMatchesSymbol symbol key then
+                            Some key
+                        else
+                            None)
+                    |> Seq.distinct
+                    |> Seq.toList
 
-                match parameterMatchedCandidates with
-                | [ candidate ] -> MethodResolved candidate
+                match candidates with
                 | [] -> MethodMissing
+                | [ candidate ] -> MethodResolved candidate
                 | _ ->
-                    // Return type disambiguation mirrors Roslyn's signature equality only after parameter matching.
-                    let returnMatchedCandidates =
-                        parameterMatchedCandidates |> List.filter (methodReturnTypeMatchesSymbol symbol)
+                    let parameterMatchedCandidates =
+                        candidates |> List.filter (methodParameterTypesMatchSymbol symbol)
 
-                    match returnMatchedCandidates with
+                    match parameterMatchedCandidates with
                     | [ candidate ] -> MethodResolved candidate
                     | [] -> MethodMissing
-                    | ambiguous -> MethodAmbiguous ambiguous
+                    | _ ->
+                        // Return type disambiguation mirrors Roslyn's signature equality only after parameter matching.
+                        let returnMatchedCandidates =
+                            parameterMatchedCandidates |> List.filter (methodReturnTypeMatchesSymbol symbol)
+
+                        match returnMatchedCandidates with
+                        | [ candidate ] -> MethodResolved candidate
+                        | [] -> MethodMissing
+                        | ambiguous -> MethodAmbiguous ambiguous
 
     let updatedMethods, methodResolutionErrors =
         changes.Updated
