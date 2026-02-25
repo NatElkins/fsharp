@@ -44,7 +44,10 @@ for file in "${candidate_files[@]}"; do
     -e 'open FSharp\.Compiler\.HotReloadBaseline$' \
     -e 'open FSharp\.Compiler\.HotReloadPdb$' \
     -e 'open FSharp\.Compiler\.HotReloadEmitHook$' \
+    -e 'open FSharp\.Compiler\.HotReloadState$' \
     -e 'FSharp\.Compiler\.HotReload\.' \
+    -e 'FSharp\.Compiler\.HotReloadState\.' \
+    -e 'FSharpEditAndContinueLanguageService\.Instance' \
     "${full_path}" >/dev/null; then
     violations+=("${file}")
   fi

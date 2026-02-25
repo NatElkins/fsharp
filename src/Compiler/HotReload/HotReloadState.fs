@@ -24,149 +24,194 @@ type HotReloadSessionStart =
     | StartedFresh
     | ReplacedExisting
 
-// Session state is intentionally process-scoped today. The checker/service APIs expose
-// this as a single active session per process, and starting a new session replaces the old one.
-let private sessionLock = obj ()
-let mutable private session: HotReloadSession voption = ValueNone
-let mutable private lastCommittedSession: HotReloadSession voption = ValueNone
-
 let private toCommittedSnapshot (value: HotReloadSession) =
     { value with
         PendingUpdate = None }
 
-let setBaseline (value: FSharpEmitBaseline) (implementationFiles: CheckedAssemblyAfterOptimization) =
-    lock sessionLock (fun () ->
-        let hadExistingSession = session.IsSome
+/// Session store used by hot reload emit services. This keeps mutable session lifecycle
+/// state instance-scoped so ownership can live with the hosting service.
+type internal HotReloadSessionStore() =
 
-        let previousGenerationId =
-            if value.EncId = Guid.Empty then
-                None
+    let sessionLock = obj ()
+    let mutable session: HotReloadSession voption = ValueNone
+    let mutable lastCommittedSession: HotReloadSession voption = ValueNone
+
+    member _.SetBaseline(value: FSharpEmitBaseline, implementationFiles: CheckedAssemblyAfterOptimization) : HotReloadSessionStart =
+        lock sessionLock (fun () ->
+            let hadExistingSession = session.IsSome
+
+            let previousGenerationId =
+                if value.EncId = Guid.Empty then
+                    None
+                else
+                    Some value.EncId
+
+            let newSession =
+                {
+                    Baseline = value
+                    ImplementationFiles = implementationFiles
+                    CurrentGeneration = max 1 value.NextGeneration
+                    PreviousGenerationId = previousGenerationId
+                    PendingUpdate = None
+                }
+
+            session <- ValueSome newSession
+            lastCommittedSession <- ValueSome(toCommittedSnapshot newSession)
+
+            if hadExistingSession then
+                ReplacedExisting
             else
-                Some value.EncId
+                StartedFresh)
 
-        let newSession =
-            {
-                Baseline = value
-                ImplementationFiles = implementationFiles
-                CurrentGeneration = max 1 value.NextGeneration
-                PreviousGenerationId = previousGenerationId
-                PendingUpdate = None
-            }
+    member _.ClearBaseline() =
+        lock sessionLock (fun () -> session <- ValueNone)
 
-        session <-
-            ValueSome
-                newSession
+    member _.ClearSessionState() =
+        lock sessionLock (fun () ->
+            session <- ValueNone
+            lastCommittedSession <- ValueNone)
 
-        lastCommittedSession <- ValueSome(toCommittedSnapshot newSession)
-
-        if hadExistingSession then
-            ReplacedExisting
-        else
-            StartedFresh)
-
-let clearBaseline () =
-    lock sessionLock (fun () -> session <- ValueNone)
-
-let clearSessionState () =
-    lock sessionLock (fun () ->
-        session <- ValueNone
-        lastCommittedSession <- ValueNone)
-
-let tryGetBaseline () =
-    lock sessionLock (fun () ->
-        match session with
-        | ValueSome s -> ValueSome s.Baseline
-        | ValueNone -> ValueNone)
-
-let tryGetSession () =
-    lock sessionLock (fun () -> session)
-
-let tryRestoreSession () =
-    lock sessionLock (fun () ->
-        match session with
-        | ValueSome current -> ValueSome current
-        | ValueNone ->
-            match lastCommittedSession with
-            | ValueSome committed ->
-                let restored = toCommittedSnapshot committed
-                session <- ValueSome restored
-                ValueSome restored
+    member _.TryGetBaseline() =
+        lock sessionLock (fun () ->
+            match session with
+            | ValueSome s -> ValueSome s.Baseline
             | ValueNone -> ValueNone)
 
-let updateImplementationFiles (implementationFiles: CheckedAssemblyAfterOptimization) =
-    lock sessionLock (fun () ->
-        match session with
-        | ValueSome state ->
-            let updated =
-                {
-                    state with
-                        ImplementationFiles = implementationFiles
-                }
+    member _.TryGetSession() =
+        lock sessionLock (fun () -> session)
 
-            session <-
-                ValueSome
-                    updated
-            lastCommittedSession <- ValueSome(toCommittedSnapshot updated)
-        | ValueNone -> ())
+    member _.TryRestoreSession() =
+        lock sessionLock (fun () ->
+            match session with
+            | ValueSome current -> ValueSome current
+            | ValueNone ->
+                match lastCommittedSession with
+                | ValueSome committed ->
+                    let restored = toCommittedSnapshot committed
+                    session <- ValueSome restored
+                    ValueSome restored
+                | ValueNone -> ValueNone)
 
-let updateBaseline (baseline: FSharpEmitBaseline) =
-    if baseline.EncId = Guid.Empty then
-        invalidArg (nameof baseline) "Pending baseline must carry a non-empty EncId."
-
-    lock sessionLock (fun () ->
-        match session with
-        | ValueSome state ->
-            session <-
-                ValueSome
+    member _.UpdateImplementationFiles(implementationFiles: CheckedAssemblyAfterOptimization) =
+        lock sessionLock (fun () ->
+            match session with
+            | ValueSome state ->
+                let updated =
                     {
                         state with
-                            PendingUpdate =
-                                Some
-                                    {
-                                        GenerationId = baseline.EncId
-                                        Baseline = baseline
-                                    }
+                            ImplementationFiles = implementationFiles
                     }
-        | ValueNone -> ())
 
-let recordDeltaApplied (generationId: Guid) =
-    if generationId = Guid.Empty then
-        invalidArg (nameof generationId) "Generation ID cannot be empty GUID."
+                session <- ValueSome updated
+                lastCommittedSession <- ValueSome(toCommittedSnapshot updated)
+            | ValueNone -> ())
 
-    lock sessionLock (fun () ->
-        match session with
-        | ValueSome state ->
-            let pending =
-                match state.PendingUpdate with
-                | Some pending when pending.GenerationId = generationId -> pending
-                | Some _ ->
-                    invalidArg
-                        (nameof generationId)
-                        "Generation ID does not match the currently pending hot reload update."
-                | None -> invalidOp "Cannot commit delta: no pending hot reload update."
+    member _.UpdateBaseline(baseline: FSharpEmitBaseline) =
+        if baseline.EncId = Guid.Empty then
+            invalidArg (nameof baseline) "Pending baseline must carry a non-empty EncId."
 
-            let updated =
-                {
-                    state with
-                        Baseline = pending.Baseline
-                        CurrentGeneration = state.CurrentGeneration + 1
-                        PreviousGenerationId = Some generationId
-                        PendingUpdate = None
-                }
+        lock sessionLock (fun () ->
+            match session with
+            | ValueSome state ->
+                session <-
+                    ValueSome
+                        {
+                            state with
+                                PendingUpdate =
+                                    Some
+                                        {
+                                            GenerationId = baseline.EncId
+                                            Baseline = baseline
+                                        }
+                        }
+            | ValueNone -> ())
 
-            session <- ValueSome updated
-            lastCommittedSession <- ValueSome(toCommittedSnapshot updated)
-        | ValueNone ->
-            invalidOp "Cannot record delta applied: no active hot reload session.")
+    member _.RecordDeltaApplied(generationId: Guid) =
+        if generationId = Guid.Empty then
+            invalidArg (nameof generationId) "Generation ID cannot be empty GUID."
 
-let discardPendingUpdate () =
-    lock sessionLock (fun () ->
-        match session with
-        | ValueSome state ->
-            session <-
-                ValueSome
+        lock sessionLock (fun () ->
+            match session with
+            | ValueSome state ->
+                let pending =
+                    match state.PendingUpdate with
+                    | Some pending when pending.GenerationId = generationId -> pending
+                    | Some _ ->
+                        invalidArg
+                            (nameof generationId)
+                            "Generation ID does not match the currently pending hot reload update."
+                    | None -> invalidOp "Cannot commit delta: no pending hot reload update."
+
+                let updated =
                     {
                         state with
+                            Baseline = pending.Baseline
+                            CurrentGeneration = state.CurrentGeneration + 1
+                            PreviousGenerationId = Some generationId
                             PendingUpdate = None
                     }
-        | ValueNone -> ())
+
+                session <- ValueSome updated
+                lastCommittedSession <- ValueSome(toCommittedSnapshot updated)
+            | ValueNone ->
+                invalidOp "Cannot record delta applied: no active hot reload session.")
+
+    member _.DiscardPendingUpdate() =
+        lock sessionLock (fun () ->
+            match session with
+            | ValueSome state ->
+                session <-
+                    ValueSome
+                        {
+                            state with
+                                PendingUpdate = None
+                        }
+            | ValueNone -> ())
+
+let private activeStoreLock = obj ()
+let mutable private activeSessionStore = HotReloadSessionStore()
+
+/// The active store remains process-scoped today; callers set this when installing a
+/// service-owned session store so global helper calls route to that owner.
+let setSessionStore (store: HotReloadSessionStore) =
+    if obj.ReferenceEquals(store, null) then
+        invalidArg (nameof store) "Hot reload session store cannot be null."
+
+    lock activeStoreLock (fun () -> activeSessionStore <- store)
+
+let getSessionStore () =
+    lock activeStoreLock (fun () -> activeSessionStore)
+
+let createSessionStore () =
+    HotReloadSessionStore()
+
+// Backward-compatible module functions delegate to the currently active store.
+let setBaseline (value: FSharpEmitBaseline) (implementationFiles: CheckedAssemblyAfterOptimization) =
+    getSessionStore().SetBaseline(value, implementationFiles)
+
+let clearBaseline () =
+    getSessionStore().ClearBaseline()
+
+let clearSessionState () =
+    getSessionStore().ClearSessionState()
+
+let tryGetBaseline () =
+    getSessionStore().TryGetBaseline()
+
+let tryGetSession () =
+    getSessionStore().TryGetSession()
+
+let tryRestoreSession () =
+    getSessionStore().TryRestoreSession()
+
+let updateImplementationFiles (implementationFiles: CheckedAssemblyAfterOptimization) =
+    getSessionStore().UpdateImplementationFiles(implementationFiles)
+
+let updateBaseline (baseline: FSharpEmitBaseline) =
+    getSessionStore().UpdateBaseline(baseline)
+
+let recordDeltaApplied (generationId: Guid) =
+    getSessionStore().RecordDeltaApplied(generationId)
+
+let discardPendingUpdate () =
+    getSessionStore().DiscardPendingUpdate()

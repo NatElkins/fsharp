@@ -173,6 +173,14 @@ type internal FSharpHotReloadService
 
     let mutable currentSynthesizedTypeMaps: FSharpSynthesizedTypeMaps option = None
 
+    // Session store is owned by this service instance. We still route module-level helper
+    // APIs to this store for compatibility while keeping state ownership explicit.
+    let sessionStore = FSharp.Compiler.HotReloadState.createSessionStore ()
+
+    do FSharp.Compiler.HotReloadState.setSessionStore sessionStore
+
+    let editAndContinueService = FSharpEditAndContinueLanguageService(sessionStore)
+
     // Snapshot of the last committed output assembly. If semantic edits are detected while this
     // fingerprint remains unchanged, we refuse to emit deltas from stale binaries.
     let mutable currentOutputFingerprint: (DateTime * byte[] option) option = None
@@ -243,8 +251,8 @@ type internal FSharpHotReloadService
 
                             setCompilerGeneratedNameMap (compilerState :> obj) (map :> ICompilerGeneratedNameMap)
 
-                            FSharpEditAndContinueLanguageService.Instance.EndSession()
-                            let startTransition = FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
+                            editAndContinueService.EndSession()
+                            let startTransition = editAndContinueService.StartSession(baseline, implementationFiles)
 
                             // Scope ambient hook activation to explicit hot reload sessions so
                             // unrelated non-session compilations stay on the default emit path.
@@ -289,8 +297,8 @@ type internal FSharpHotReloadService
                     let outputFingerprint = tryGetOutputFingerprint outputPath
 
                     lock hotReloadGate (fun () ->
-                        if not FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
-                            match FSharpEditAndContinueLanguageService.Instance.TryRestoreSession() with
+                        if not editAndContinueService.IsSessionActive then
+                            match editAndContinueService.TryRestoreSession() with
                             | ValueSome restoredSession ->
                                 let compilerState = tcGlobals.CompilerGlobalState.Value
 
@@ -310,12 +318,12 @@ type internal FSharpHotReloadService
                                 setCompilerGeneratedNameMap (compilerState :> obj) (map :> ICompilerGeneratedNameMap)
                             | ValueNone -> ())
 
-                    if not FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
+                    if not editAndContinueService.IsSessionActive then
                         return Result.Error FSharpHotReloadError.NoActiveSession
                     else
                         let staleOutputErrorOpt =
                             lock hotReloadGate (fun () ->
-                                match FSharpEditAndContinueLanguageService.Instance.TryGetSession() with
+                                match editAndContinueService.TryGetSession() with
                                 | ValueNone -> None
                                 | ValueSome session ->
                                     let symbolChanges = computeSymbolChanges tcGlobals session.ImplementationFiles implementationFiles
@@ -363,7 +371,7 @@ type internal FSharpHotReloadService
                                     | None -> ())
 
                                 match
-                                    FSharpEditAndContinueLanguageService.Instance.EmitDeltaForCompilation(
+                                    editAndContinueService.EmitDeltaForCompilation(
                                         tcGlobals,
                                         implementationFiles,
                                         ilModule
@@ -384,9 +392,9 @@ type internal FSharpHotReloadService
             currentSynthesizedTypeMaps <- None
             currentOutputFingerprint <- None
             clearAmbientCompilerEmitHook()
-            FSharpEditAndContinueLanguageService.Instance.ResetSessionState())
+            editAndContinueService.ResetSessionState())
 
-    member _.SessionActive = FSharpEditAndContinueLanguageService.Instance.IsSessionActive
+    member _.SessionActive = editAndContinueService.IsSessionActive
 
     member _.Capabilities =
         let capabilities = HotReloadCapability.current

@@ -53,6 +53,13 @@ let ``hot reload service owns ambient emit hook lifecycle`` () =
     Assert.Contains("setAmbientCompilerEmitHook hotReloadCompilerEmitHook", source)
     Assert.Contains("clearAmbientCompilerEmitHook()", source)
 
+[<Fact>]
+let ``hot reload checker path uses service-owned enc instance`` () =
+    let source = readCompilerFile "src/Compiler/Service/service.fs"
+
+    Assert.Contains("let editAndContinueService = FSharpEditAndContinueLanguageService(sessionStore)", source)
+    Assert.DoesNotContain("FSharpEditAndContinueLanguageService.Instance", source)
+
 let private sliceBetween (source: string) (startMarker: string) (endMarker: string) =
     let startIndex = source.IndexOf(startMarker, System.StringComparison.Ordinal)
     Assert.True(startIndex >= 0, $"Could not find marker '{startMarker}'.")
@@ -101,7 +108,10 @@ let ``driver hot reload implementation references stay behind boundary files`` (
           "open FSharp.Compiler.HotReloadBaseline\n"
           "open FSharp.Compiler.HotReloadPdb\n"
           "open FSharp.Compiler.HotReloadEmitHook\n"
-          "FSharp.Compiler.HotReload." ]
+          "open FSharp.Compiler.HotReloadState\n"
+          "FSharp.Compiler.HotReload."
+          "FSharp.Compiler.HotReloadState."
+          "FSharpEditAndContinueLanguageService.Instance" ]
 
     for path in Directory.GetFiles(driverDir, "*.fs") do
         let fileName = Path.GetFileName(path)

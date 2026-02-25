@@ -17,9 +17,13 @@ open FSharp.Compiler.EnvironmentHelpers
 /// Entry point mirroring Roslyn's <c>EditAndContinueLanguageService</c>. It centralises session lifecycle
 /// management so callers do not talk to <see cref="HotReloadState"/> directly.
 /// </summary>
-type internal FSharpEditAndContinueLanguageService private () =
+type internal FSharpEditAndContinueLanguageService private (getSessionStore: unit -> HotReloadState.HotReloadSessionStore) =
 
-    static let lazyInstance = lazy FSharpEditAndContinueLanguageService()
+    static let lazyInstance =
+        lazy
+            FSharpEditAndContinueLanguageService(fun () -> FSharp.Compiler.HotReloadState.getSessionStore ())
+
+    let sessionStore () = getSessionStore()
     static let traceMetadataFlagName = "FSHARP_HOTRELOAD_TRACE_METADATA"
 
     static let traceMethodsFlagName = "FSHARP_HOTRELOAD_TRACE_METHODS"
@@ -124,6 +128,9 @@ type internal FSharpEditAndContinueLanguageService private () =
         map.BeginSession()
         map
 
+    new (sessionStore: HotReloadState.HotReloadSessionStore) =
+        FSharpEditAndContinueLanguageService(fun () -> sessionStore)
+
     /// <summary>Singleton instance consumed by CLI and IDE hosts.</summary>
     static member Instance = lazyInstance.Value
 
@@ -135,7 +142,7 @@ type internal FSharpEditAndContinueLanguageService private () =
                 Activity.Tags.hotReloadAction, "baseline"
             |]
 
-        FSharp.Compiler.HotReloadState.setBaseline baseline (CheckedAssemblyAfterOptimization [])
+        sessionStore().SetBaseline(baseline, CheckedAssemblyAfterOptimization [])
 
     member _.StartSession(baseline: FSharpEmitBaseline, implementationFiles: CheckedAssemblyAfterOptimization) : HotReloadState.HotReloadSessionStart =
         use _ =
@@ -144,31 +151,31 @@ type internal FSharpEditAndContinueLanguageService private () =
                 Activity.Tags.hotReloadAction, "baseline+impl"
             |]
 
-        FSharp.Compiler.HotReloadState.setBaseline baseline implementationFiles
+        sessionStore().SetBaseline(baseline, implementationFiles)
 
     /// <summary>Attempts to fetch the current baseline.</summary>
     member _.TryGetBaseline() =
-        FSharp.Compiler.HotReloadState.tryGetBaseline()
+        sessionStore().TryGetBaseline()
 
     /// <summary>Attempts to fetch the current session (baseline + generation metadata).</summary>
     member _.TryGetSession() =
-        FSharp.Compiler.HotReloadState.tryGetSession()
+        sessionStore().TryGetSession()
 
     /// <summary>Attempts to restore the active session from the last committed snapshot.</summary>
     member _.TryRestoreSession() =
-        FSharp.Compiler.HotReloadState.tryRestoreSession()
+        sessionStore().TryRestoreSession()
 
     /// <summary>Updates the stored EncId after a successful delta application.</summary>
     member _.OnDeltaApplied(generationId: Guid) =
-        FSharp.Compiler.HotReloadState.recordDeltaApplied generationId
+        sessionStore().RecordDeltaApplied(generationId)
 
     /// <summary>Clears the session, typically when hot reload is disabled or the build finishes.</summary>
     member _.EndSession() =
-        FSharp.Compiler.HotReloadState.clearBaseline()
+        sessionStore().ClearBaseline()
 
     /// <summary>Clears both active and restorable session state.</summary>
     member _.ResetSessionState() =
-        FSharp.Compiler.HotReloadState.clearSessionState()
+        sessionStore().ClearSessionState()
 
     /// <summary>
     /// Emits a delta for the supplied request; callers may commit the delta by invoking <see cref="OnDeltaApplied"/>.
@@ -184,7 +191,7 @@ type internal FSharpEditAndContinueLanguageService private () =
                 File.AppendAllText(path, message)
             with :? IOException as ex ->
                 eprintfn "[fsharp-hotreload][service] Failed to write trace log: %s" ex.Message
-        match FSharp.Compiler.HotReloadState.tryGetSession() with
+        match sessionStore().TryGetSession() with
         | ValueNone -> Error HotReloadError.NoActiveSession
         | ValueSome session ->
             use _ =
@@ -229,7 +236,7 @@ type internal FSharpEditAndContinueLanguageService private () =
                             delta.GenerationId
                             delta.BaseGenerationId
                             updatedBaseline.EncId
-                    FSharp.Compiler.HotReloadState.updateBaseline updatedBaseline
+                    sessionStore().UpdateBaseline(updatedBaseline)
                 | None -> ()
                 Ok { Delta = delta }
             with
@@ -240,7 +247,7 @@ type internal FSharpEditAndContinueLanguageService private () =
 
     /// <summary>Returns <c>true</c> if a hot reload session is active.</summary>
     member _.IsSessionActive =
-        FSharp.Compiler.HotReloadState.tryGetSession().IsSome
+        sessionStore().TryGetSession().IsSome
 
     /// <summary>Convenience helper that both emits and commits a delta when the request succeeds.</summary>
     member this.EmitAndCommitDelta(request: DeltaEmissionRequest) =
@@ -255,9 +262,9 @@ type internal FSharpEditAndContinueLanguageService private () =
         updatedImplementation: CheckedAssemblyAfterOptimization,
         ilModule: ILModuleDef
     ) : Result<DeltaEmissionResult, HotReloadError> =
-        // Session ownership is centralized in HotReloadState. If an active session was cleared
-        // by an overlapping build, restore from the last committed snapshot before emitting.
-        let sessionOpt = FSharp.Compiler.HotReloadState.tryRestoreSession ()
+        // Restore from the last committed snapshot before emitting if an overlapping
+        // compile cleared the currently active session.
+        let sessionOpt = sessionStore().TryRestoreSession()
 
         match sessionOpt with
         | ValueNone -> Error HotReloadError.NoActiveSession
@@ -304,7 +311,7 @@ type internal FSharpEditAndContinueLanguageService private () =
                             if result.Delta.UpdatedBaseline.IsSome then
                                 this.CommitPendingUpdate(result.Delta.GenerationId)
 
-                            FSharp.Compiler.HotReloadState.updateImplementationFiles updatedImplementation
+                            sessionStore().UpdateImplementationFiles(updatedImplementation)
                             Ok result
                         | Error error -> Error error
 
@@ -314,4 +321,4 @@ type internal FSharpEditAndContinueLanguageService private () =
 
     /// <summary>Explicit discard hook mirroring Roslyn's pending-update semantics.</summary>
     member _.DiscardPendingUpdate() =
-        FSharp.Compiler.HotReloadState.discardPendingUpdate()
+        sessionStore().DiscardPendingUpdate()
