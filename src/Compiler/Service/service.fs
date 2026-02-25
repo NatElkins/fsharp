@@ -35,6 +35,7 @@ open FSharp.Compiler.BuildGraph
 open FSharp.Compiler.HotReload
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.HotReload.DeltaBuilder
+open FSharp.Compiler.HotReloadEmitHook
 open FSharp.Compiler.IlxDeltaEmitter
 open FSharp.Compiler.TypedTree
 open FSharp.Compiler.GeneratedNames
@@ -243,6 +244,10 @@ type internal FSharpHotReloadService
                             FSharpEditAndContinueLanguageService.Instance.EndSession()
                             let startTransition = FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, implementationFiles)
 
+                            // Scope ambient hook activation to explicit hot reload sessions so
+                            // unrelated non-session compilations stay on the default emit path.
+                            setAmbientCompilerEmitHook hotReloadCompilerEmitHook
+
                             if traceSessionTransitions then
                                 printfn
                                     "[fsharp-hotreload][session] start transition=%s moduleId=%O output=%s"
@@ -376,6 +381,7 @@ type internal FSharpHotReloadService
         lock hotReloadGate (fun () ->
             currentSynthesizedTypeMaps <- None
             currentOutputFingerprint <- None
+            clearAmbientCompilerEmitHook()
             FSharpEditAndContinueLanguageService.Instance.ResetSessionState())
 
     member _.SessionActive = FSharpEditAndContinueLanguageService.Instance.IsSessionActive

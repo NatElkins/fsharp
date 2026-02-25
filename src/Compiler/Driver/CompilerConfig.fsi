@@ -273,6 +273,7 @@ type ICompilerEmitHook =
 
 val defaultCompilerEmitHook: ICompilerEmitHook
 val setAmbientCompilerEmitHook: hook: ICompilerEmitHook -> unit
+val clearAmbientCompilerEmitHook: unit -> unit
 val resolveCompilerEmitHook: explicitHook: ICompilerEmitHook option -> ICompilerEmitHook
 
 [<NoEquality; NoComparison>]

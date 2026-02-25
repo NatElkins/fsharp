@@ -35,6 +35,20 @@ let ``compiler config exposes generic emit hook contract only`` () =
     Assert.Contains("type ICompilerEmitHook", source)
     Assert.Contains("val defaultCompilerEmitHook", source)
 
+[<Fact>]
+let ``compiler emit hook bootstrap remains explicit-only`` () =
+    let source = readCompilerFile "src/Compiler/Driver/CompilerEmitHookBootstrap.fs"
+
+    Assert.Contains("tcConfigB.compilerEmitHook <- Some hotReloadCompilerEmitHook", source)
+    Assert.DoesNotContain("setAmbientCompilerEmitHook", source)
+
+[<Fact>]
+let ``hot reload service owns ambient emit hook lifecycle`` () =
+    let source = readCompilerFile "src/Compiler/Service/service.fs"
+
+    Assert.Contains("setAmbientCompilerEmitHook hotReloadCompilerEmitHook", source)
+    Assert.Contains("clearAmbientCompilerEmitHook()", source)
+
 let private sliceBetween (source: string) (startMarker: string) (endMarker: string) =
     let startIndex = source.IndexOf(startMarker, System.StringComparison.Ordinal)
     Assert.True(startIndex >= 0, $"Could not find marker '{startMarker}'.")

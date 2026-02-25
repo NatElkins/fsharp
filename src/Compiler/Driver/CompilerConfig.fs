@@ -526,6 +526,10 @@ let mutable private ambientCompilerEmitHook: ICompilerEmitHook option = None
 let setAmbientCompilerEmitHook (hook: ICompilerEmitHook) =
     ambientCompilerEmitHook <- Some hook
 
+/// Clear the ambient emit hook registration.
+let clearAmbientCompilerEmitHook () =
+    ambientCompilerEmitHook <- None
+
 /// Resolve the emit hook from explicit config first, then ambient registration, then no-op default.
 let resolveCompilerEmitHook (explicitHook: ICompilerEmitHook option) =
     explicitHook

@@ -6,10 +6,8 @@ open FSharp.Compiler.HotReloadEmitHook
 /// Keep hot reload hook wiring in a single adapter module so option parsing stays
 /// independent from hot reload implementation details.
 ///
-/// Wires both explicit and ambient emit hooks so hot reload-enabled builds and
-/// follow-up compiles in the same process share the same hook behavior.
+/// This wiring is intentionally explicit-only: enabling the compiler flag wires
+/// the hook for the current compilation invocation, while ambient/session wiring
+/// is owned by the hot reload service lifecycle.
 let configureHotReloadEmitHook (tcConfigB: TcConfigBuilder) =
     tcConfigB.compilerEmitHook <- Some hotReloadCompilerEmitHook
-    // Keep the hot reload hook available for follow-up emits in the same process,
-    // even when those invocations omit --enable:hotreloaddeltas.
-    setAmbientCompilerEmitHook hotReloadCompilerEmitHook
