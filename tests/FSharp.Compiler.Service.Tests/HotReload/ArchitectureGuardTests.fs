@@ -32,6 +32,9 @@ let ``compiler config exposes generic emit hook contract only`` () =
 
     Assert.DoesNotContain("IHotReloadEmitHook", source)
     Assert.DoesNotContain("HotReloadEmitArtifacts", source)
+    Assert.DoesNotContain("setAmbientCompilerEmitHook", source)
+    Assert.DoesNotContain("clearAmbientCompilerEmitHook", source)
+    Assert.DoesNotContain("resolveCompilerEmitHook", source)
     Assert.Contains("type ICompilerEmitHook", source)
     Assert.Contains("val defaultCompilerEmitHook", source)
 

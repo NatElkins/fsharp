@@ -272,9 +272,6 @@ type ICompilerEmitHook =
         compilerGlobalState: FSharp.Compiler.CompilerGlobalState.CompilerGlobalState -> unit
 
 val defaultCompilerEmitHook: ICompilerEmitHook
-val setAmbientCompilerEmitHook: hook: ICompilerEmitHook -> unit
-val clearAmbientCompilerEmitHook: unit -> unit
-val resolveCompilerEmitHook: explicitHook: ICompilerEmitHook option -> ICompilerEmitHook
 
 [<NoEquality; NoComparison>]
 type TcConfigBuilder =

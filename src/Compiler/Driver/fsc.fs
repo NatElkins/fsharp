@@ -32,6 +32,7 @@ open FSharp.Compiler.AbstractIL.ILBinaryReader
 open FSharp.Compiler.AccessibilityLogic
 open FSharp.Compiler.CheckDeclarations
 open FSharp.Compiler.CompilerConfig
+open FSharp.Compiler.CompilerEmitHookState
 open FSharp.Compiler.CompilerDiagnostics
 open FSharp.Compiler.CompilerImports
 open FSharp.Compiler.CompilerOptions

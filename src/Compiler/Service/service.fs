@@ -22,6 +22,7 @@ open FSharp.Compiler.AbstractIL.ILPdbWriter
 open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.CodeAnalysis.TransparentCompiler
 open FSharp.Compiler.CompilerConfig
+open FSharp.Compiler.CompilerEmitHookState
 open FSharp.Compiler.CompilerOptions
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.Driver

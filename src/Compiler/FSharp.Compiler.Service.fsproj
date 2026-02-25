@@ -480,6 +480,7 @@
     </Compile>
     <Compile Include="Driver\CompilerConfig.fsi" />
     <Compile Include="Driver\CompilerConfig.fs" />
+    <Compile Include="Driver\CompilerEmitHookState.fs" />
     <Compile Include="Driver\HotReloadEmitHook.fs" />
     <Compile Include="Driver\CompilerEmitHookBootstrap.fs" />
     <Compile Include="Driver\CompilerImports.fsi" />
