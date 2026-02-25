@@ -180,12 +180,25 @@ let private formatSymbolIdentity (symbol: SymbolId) =
 
 type private MethodResolutionResult =
     | MethodResolved of MethodDefinitionKey
+    | MethodIdentityMissing of string list
     | MethodMissing
     | MethodAmbiguous of MethodDefinitionKey list
 
 let private describeMethodKey (key: MethodDefinitionKey) =
     let parameterCount = key.ParameterTypes.Length
     $"{key.DeclaringType}::{key.Name}/{parameterCount}`{key.GenericArity}"
+
+let private missingRuntimeSignatureIdentityParts (symbol: SymbolId) =
+    [ if symbol.CompiledName.IsNone then
+          yield "compiled name"
+      if symbol.TotalArgCount.IsNone then
+          yield "argument count"
+      if symbol.GenericArity.IsNone then
+          yield "generic arity"
+      if symbol.ParameterTypeIdentities.IsNone then
+          yield "parameter type identities"
+      if symbol.ReturnTypeIdentity.IsNone then
+          yield "return type identity" ]
 
 // Maps typed-tree symbol changes to baseline tokens using fail-closed matching:
 // unresolved or ambiguous bindings return errors instead of silently dropping edits.
@@ -286,42 +299,43 @@ let mapSymbolChangesToDelta
         deduplicate (explicitEntity @ pathSuffixes)
 
     let resolveMethodKey (symbol: SymbolId) (typeNames: string list) =
-        let candidates =
-            baseline.MethodTokens
-            |> Map.toSeq
-            |> Seq.choose (fun (key, _) ->
-                if (typeNames |> List.exists (typeNamesEquivalent key.DeclaringType)) && methodKeyMatchesSymbol symbol key then
-                    Some key
-                else
-                    None)
-            |> Seq.distinct
-            |> Seq.toList
+        let missingIdentityParts = missingRuntimeSignatureIdentityParts symbol
 
-        match candidates with
-        | [] -> MethodMissing
-        | [ candidate ] -> MethodResolved candidate
-        | _ ->
-            let parameterMatchedCandidates =
-                if symbol.ParameterTypeIdentities.IsSome then
-                    candidates |> List.filter (methodParameterTypesMatchSymbol symbol)
-                else
-                    candidates
-
-            match parameterMatchedCandidates with
-            | [ candidate ] -> MethodResolved candidate
-            | [] -> MethodMissing
-            | _ ->
-                // Return type disambiguation mirrors Roslyn's signature equality only after parameter matching.
-                let returnMatchedCandidates =
-                    if symbol.ReturnTypeIdentity.IsSome then
-                        parameterMatchedCandidates |> List.filter (methodReturnTypeMatchesSymbol symbol)
+        if not (List.isEmpty missingIdentityParts) then
+            // Fail closed: if we cannot describe the runtime method signature precisely,
+            // avoid best-effort token matching that could map edits to the wrong method.
+            MethodIdentityMissing missingIdentityParts
+        else
+            let candidates =
+                baseline.MethodTokens
+                |> Map.toSeq
+                |> Seq.choose (fun (key, _) ->
+                    if (typeNames |> List.exists (typeNamesEquivalent key.DeclaringType)) && methodKeyMatchesSymbol symbol key then
+                        Some key
                     else
-                        parameterMatchedCandidates
+                        None)
+                |> Seq.distinct
+                |> Seq.toList
 
-                match returnMatchedCandidates with
+            match candidates with
+            | [] -> MethodMissing
+            | [ candidate ] -> MethodResolved candidate
+            | _ ->
+                let parameterMatchedCandidates =
+                    candidates |> List.filter (methodParameterTypesMatchSymbol symbol)
+
+                match parameterMatchedCandidates with
                 | [ candidate ] -> MethodResolved candidate
                 | [] -> MethodMissing
-                | ambiguous -> MethodAmbiguous ambiguous
+                | _ ->
+                    // Return type disambiguation mirrors Roslyn's signature equality only after parameter matching.
+                    let returnMatchedCandidates =
+                        parameterMatchedCandidates |> List.filter (methodReturnTypeMatchesSymbol symbol)
+
+                    match returnMatchedCandidates with
+                    | [ candidate ] -> MethodResolved candidate
+                    | [] -> MethodMissing
+                    | ambiguous -> MethodAmbiguous ambiguous
 
     let updatedMethods, methodResolutionErrors =
         changes.Updated
@@ -347,6 +361,12 @@ let mapSymbolChangesToDelta
 
                 match resolution with
                 | MethodResolved methodKey -> methodKey :: resolvedMethods, errors
+                | MethodIdentityMissing missingParts ->
+                    let missingText = String.concat ", " missingParts
+                    let errorMessage =
+                        $"Unable to resolve changed method symbol '{formatSymbolIdentity change.Symbol}' because runtime signature identity is incomplete (missing: {missingText}); full rebuild required."
+
+                    resolvedMethods, errorMessage :: errors
                 | MethodMissing ->
                     let errorMessage =
                         $"Unable to resolve changed method symbol '{formatSymbolIdentity change.Symbol}' to a unique baseline method token (containingTypeCandidates={candidates}); full rebuild required."
@@ -389,7 +409,17 @@ let mapSymbolChangesToDelta
                 let method, updatedErrors =
                     match resolveMethodKey symbol [ typeName ] with
                     | MethodResolved methodKey -> Some methodKey, errors
-                    | MethodMissing -> None, errors
+                    | MethodIdentityMissing missingParts ->
+                        let missingText = String.concat ", " missingParts
+                        let errorMessage =
+                            $"Unable to resolve accessor symbol '{formatSymbolIdentity symbol}' because runtime signature identity is incomplete (missing: {missingText}); full rebuild required."
+
+                        None, errorMessage :: errors
+                    | MethodMissing ->
+                        let errorMessage =
+                            $"Unable to resolve accessor symbol '{formatSymbolIdentity symbol}' to a unique baseline method token (type={typeName}); full rebuild required."
+
+                        None, errorMessage :: errors
                     | MethodAmbiguous ambiguous ->
                         let ambiguousText = ambiguous |> List.map describeMethodKey |> String.concat "; "
                         let errorMessage =

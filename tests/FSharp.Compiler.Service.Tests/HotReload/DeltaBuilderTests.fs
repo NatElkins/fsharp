@@ -154,30 +154,37 @@ module DeltaBuilderTests =
 
     [<Fact>]
     let ``mapSymbolChangesToDelta fails closed on ambiguous method mapping`` () =
-        let baselineTypeName = "Sample.Container+Nested"
+        let primaryTypeName = "Sample.Container+Nested"
+        let secondaryTypeName = "Container+Nested"
 
-        let overloadA: MethodDefinitionKey =
-            { DeclaringType = baselineTypeName
+        let primaryMethod: MethodDefinitionKey =
+            { DeclaringType = primaryTypeName
               Name = "Run"
               GenericArity = 0
-              ParameterTypes = [ ILType.TypeVar 0us ]
+              ParameterTypes = []
               ReturnType = ILType.Void }
 
-        let overloadB: MethodDefinitionKey =
-            { DeclaringType = baselineTypeName
+        let secondaryMethod: MethodDefinitionKey =
+            { DeclaringType = secondaryTypeName
               Name = "Run"
               GenericArity = 0
-              ParameterTypes = [ ILType.TypeVar 1us ]
+              ParameterTypes = []
               ReturnType = ILType.Void }
 
         let baseline =
             createBaseline
-                (Map.ofList [ baselineTypeName, 0x02000002 ])
-                (Map.ofList [ overloadA, 0x06000002; overloadB, 0x06000003 ])
+                (Map.ofList [ primaryTypeName, 0x02000002
+                              secondaryTypeName, 0x02000003 ])
+                (Map.ofList [ primaryMethod, 0x06000002
+                              secondaryMethod, 0x06000003 ])
 
         let methodSymbol =
             { mkSymbol [ "Sample"; "Container"; "Nested" ] "Run" 3L SymbolKind.Value (Some SymbolMemberKind.Method) with
-                CompiledName = Some "Run" }
+                CompiledName = Some "Run"
+                TotalArgCount = Some 0
+                GenericArity = Some 0
+                ParameterTypeIdentities = Some []
+                ReturnTypeIdentity = Some "System.Void" }
 
         let changes: FSharpSymbolChanges =
             { Added = []
@@ -193,3 +200,42 @@ module DeltaBuilderTests =
         | Ok _ -> failwith "Expected ambiguous method mapping to fail closed"
         | Error errors ->
             Assert.Contains(errors, fun message -> message.Contains("Ambiguous baseline method mapping", StringComparison.Ordinal))
+
+    [<Fact>]
+    let ``mapSymbolChangesToDelta fails closed when runtime method identity is incomplete`` () =
+        let baselineTypeName = "Sample.Container+Nested"
+
+        let methodKey: MethodDefinitionKey =
+            { DeclaringType = baselineTypeName
+              Name = "Run"
+              GenericArity = 0
+              ParameterTypes = []
+              ReturnType = ILType.Void }
+
+        let baseline =
+            createBaseline
+                (Map.ofList [ baselineTypeName, 0x02000002 ])
+                (Map.ofList [ methodKey, 0x06000002 ])
+
+        let methodSymbol =
+            { mkSymbol [ "Sample"; "Container"; "Nested" ] "Run" 4L SymbolKind.Value (Some SymbolMemberKind.Method) with
+                CompiledName = Some "Run"
+                TotalArgCount = Some 0
+                GenericArity = Some 0
+                ParameterTypeIdentities = None
+                ReturnTypeIdentity = Some "System.Void" }
+
+        let changes: FSharpSymbolChanges =
+            { Added = []
+              Updated =
+                [ { UpdatedSymbolChange.Symbol = methodSymbol
+                    Kind = SemanticEditKind.MethodBody
+                    ContainingEntity = None } ]
+              Deleted = []
+              Synthesized = []
+              RudeEdits = [] }
+
+        match mapSymbolChangesToDelta baseline changes with
+        | Ok _ -> failwith "Expected incomplete runtime method identity to fail closed"
+        | Error errors ->
+            Assert.Contains(errors, fun message -> message.Contains("runtime signature identity is incomplete", StringComparison.Ordinal))
