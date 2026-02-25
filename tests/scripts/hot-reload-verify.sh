@@ -84,6 +84,9 @@ assert_contains "metadata-coupling" "metadata-coupling-check:"
 run_step "ilxgen-name-path" bash tests/scripts/check-ilxgen-name-path.sh
 assert_contains "ilxgen-name-path" "ilxgen-name-path-check:"
 
+run_step "plugin-boundary" bash tests/scripts/check-hotreload-plugin-boundary.sh
+assert_contains "plugin-boundary" "hotreload-plugin-boundary-check:"
+
 run_step "service-tests" \
   "${DOTNET}" test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj \
   -c Debug --no-build --filter FullyQualifiedName~HotReload -v minimal

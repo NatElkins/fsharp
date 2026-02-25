@@ -77,3 +77,29 @@ let ``typed tree diff no longer relies on state-machine declaring-type string he
     Assert.DoesNotContain("\"TaskBuilder\"", source)
     Assert.DoesNotContain("\"Resumable\"", source)
     Assert.DoesNotContain("\"QueryBuilder\"", source)
+
+[<Fact>]
+let ``driver hot reload implementation references stay behind boundary files`` () =
+    let driverDir = Path.Combine(repoRoot, "src/Compiler/Driver")
+
+    let allowlist =
+        set
+            [ "CompilerEmitHookBootstrap.fs"
+              "CompilerEmitHookState.fs"
+              "HotReloadEmitHook.fs" ]
+
+    let forbiddenPatterns =
+        [ "open FSharp.Compiler.HotReload\n"
+          "open FSharp.Compiler.HotReloadBaseline\n"
+          "open FSharp.Compiler.HotReloadPdb\n"
+          "open FSharp.Compiler.HotReloadEmitHook\n"
+          "FSharp.Compiler.HotReload." ]
+
+    for path in Directory.GetFiles(driverDir, "*.fs") do
+        let fileName = Path.GetFileName(path)
+
+        if not (allowlist.Contains fileName) then
+            let source = File.ReadAllText(path)
+
+            for pattern in forbiddenPatterns do
+                Assert.DoesNotContain(pattern, source)
