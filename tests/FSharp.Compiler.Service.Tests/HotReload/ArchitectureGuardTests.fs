@@ -87,11 +87,13 @@ let ``typed tree diff no longer relies on state-machine declaring-type string he
     Assert.DoesNotContain("\"QueryBuilder\"", source)
 
 [<Fact>]
-let ``typed tree diff gates value-reference query heuristics to member paths`` () =
+let ``typed tree diff constrains value-reference operation-name heuristics to members`` () =
     let source = readCompilerFile "src/Compiler/TypedTree/TypedTreeDiff.fs"
 
-    Assert.Contains("elif vref.IsMember || vref.IsModuleBinding then", source)
+    Assert.Contains("if vref.LogicalName.Equals(\"MoveNext\", StringComparison.Ordinal) then", source)
+    Assert.Contains("elif vref.MemberInfo.IsSome then", source)
     Assert.Contains("if isLikelyQueryOperationName vref.LogicalName then", source)
+    Assert.DoesNotContain("vref.IsModuleBinding", source)
 
 [<Fact>]
 let ``driver hot reload implementation references stay behind boundary files`` () =

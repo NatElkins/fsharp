@@ -57,8 +57,8 @@ Track each major review concern with objective status and evidence so follow-up 
 - Status: **Partially addressed**
 - Evidence:
   - Declaring-type string heuristic removed.
-  - Value-reference operation-name heuristics are now gated to member/module references (plus `MoveNext` sentinel) to avoid broad local-name matches while preserving lowered-shape detection: `src/Compiler/TypedTree/TypedTreeDiff.fs`.
-  - Architecture guard enforces the value-branch gating pattern: `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
+  - Value-reference operation-name heuristics are now constrained to member references (`vref.MemberInfo.IsSome`) plus the explicit `MoveNext` sentinel, removing module-binding name heuristics while preserving lowered-shape detection: `src/Compiler/TypedTree/TypedTreeDiff.fs`.
+  - Architecture guard enforces member-only value-branch gating: `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
 - Remaining gap:
   - Lowered-shape classification still uses operation-name heuristics; move to stronger semantic signals where feasible.
 

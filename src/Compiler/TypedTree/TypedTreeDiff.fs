@@ -503,11 +503,12 @@ let private collectLoweredShapeInfo (expr: Expr) =
         match expr with
         | Expr.Const _ -> ()
         | Expr.Val (vref, _, _) ->
-            // Keep query/state-machine signals tied to member/module references to avoid
-            // broad local-name heuristics while still observing lowered CE calls.
+            // Keep operation-name heuristics constrained to member references only.
+            // This avoids broad local/module-binding name matching while preserving
+            // lowered query/state-machine signal collection.
             if vref.LogicalName.Equals("MoveNext", StringComparison.Ordinal) then
                 addDistinct collector.StateMachineOperations vref.LogicalName
-            elif vref.IsMember || vref.IsModuleBinding then
+            elif vref.MemberInfo.IsSome then
                 if isLikelyQueryOperationName vref.LogicalName then
                     addDistinct collector.QueryOperations vref.LogicalName
                 elif isLikelyStateMachineOperationName vref.LogicalName then
