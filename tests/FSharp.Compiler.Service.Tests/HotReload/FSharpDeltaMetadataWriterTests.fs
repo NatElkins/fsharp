@@ -22,6 +22,7 @@ open Internal.Utilities.Library
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.CodeGen
+open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.CodeGen.DeltaMetadataSerializer
 open FSharp.Compiler.CodeGen.DeltaTableLayout
@@ -2428,3 +2429,77 @@ module FSharpDeltaMetadataWriterTests =
             sprintf "Guids array length %d is not 4-byte aligned" heaps.Guids.Length)
         Assert.True(heaps.Strings.Length % 4 = 0,
             sprintf "Strings array length %d is not 4-byte aligned" heaps.Strings.Length)
+
+    let private emptyRowArrays : RowElementData[][] = Array.empty
+
+    let private emptyTableRows : TableRows =
+        { Module = emptyRowArrays
+          MethodDef = emptyRowArrays
+          Param = emptyRowArrays
+          TypeRef = emptyRowArrays
+          MemberRef = emptyRowArrays
+          MethodSpec = emptyRowArrays
+          AssemblyRef = emptyRowArrays
+          StandAloneSig = emptyRowArrays
+          CustomAttribute = emptyRowArrays
+          Property = emptyRowArrays
+          Event = emptyRowArrays
+          PropertyMap = emptyRowArrays
+          EventMap = emptyRowArrays
+          MethodSemantics = emptyRowArrays
+          EncLog = emptyRowArrays
+          EncMap = emptyRowArrays }
+
+    let private createSerializerInputWithModuleElement (element: RowElementData) =
+        let rowCounts = Array.zeroCreate MetadataTokens.TableCount
+        rowCounts[TableNames.Module.Index] <- 1
+
+        let heapSizes: MetadataHeapSizes =
+            { StringHeapSize = 1
+              UserStringHeapSize = 1
+              BlobHeapSize = 1
+              GuidHeapSize = 16 }
+
+        let metadataSizes: DeltaMetadataSizes =
+            { RowCounts = rowCounts
+              HeapSizes = heapSizes
+              BitMasks = DeltaTableLayout.computeBitMasks rowCounts false
+              IndexSizes = DeltaIndexSizing.compute rowCounts (Array.zeroCreate MetadataTokens.TableCount) heapSizes false
+              IsEncDelta = false }
+
+        { Tables = { emptyTableRows with Module = [| [| element |] |] }
+          MetadataSizes = metadataSizes
+          StringHeap = Array.empty
+          StringHeapOffsets = [| 0 |]
+          BlobHeap = Array.empty
+          BlobHeapOffsets = [| 0 |]
+          GuidHeap = Array.empty
+          HeapOffsets = MetadataHeapOffsets.Zero }
+
+    [<Fact>]
+    let ``table serializer fails fast on invalid string heap offset index`` () =
+        let input =
+            createSerializerInputWithModuleElement
+                { Tag = RowElementTags.String
+                  Value = 2
+                  IsAbsolute = false }
+
+        let ex =
+            Assert.Throws<ArgumentException>(fun () ->
+                buildTableStream input |> ignore)
+
+        Assert.Contains("String heap offset index out of range", ex.Message)
+
+    [<Fact>]
+    let ``table serializer fails fast on invalid blob heap offset index`` () =
+        let input =
+            createSerializerInputWithModuleElement
+                { Tag = RowElementTags.Blob
+                  Value = 2
+                  IsAbsolute = false }
+
+        let ex =
+            Assert.Throws<ArgumentException>(fun () ->
+                buildTableStream input |> ignore)
+
+        Assert.Contains("Blob heap offset index out of range", ex.Message)

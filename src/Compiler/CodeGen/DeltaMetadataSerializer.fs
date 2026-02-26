@@ -170,15 +170,23 @@ let private writeRowElement (writer: BinaryWriter) (indexSizes: DeltaIndexSizing
         writeUInt32 writer value
     elif tag = RowElementTags.String then
         let offset =
-            if element.IsAbsolute then value
-            elif value = 0 then 0
+            if element.IsAbsolute then
+                value
+            elif value = 0 then
+                0
+            elif value < 0 || value >= input.StringHeapOffsets.Length then
+                invalidArg "element" $"String heap offset index out of range: {value} (offsetCount={input.StringHeapOffsets.Length})"
             else
                 input.HeapOffsets.StringHeapStart + input.StringHeapOffsets.[value]
         writeHeapIndex writer indexSizes.StringsBig offset
     elif tag = RowElementTags.Blob then
         let offset =
-            if element.IsAbsolute then value
-            elif value = 0 then 0
+            if element.IsAbsolute then
+                value
+            elif value = 0 then
+                0
+            elif value < 0 || value >= input.BlobHeapOffsets.Length then
+                invalidArg "element" $"Blob heap offset index out of range: {value} (offsetCount={input.BlobHeapOffsets.Length})"
             else
                 input.HeapOffsets.BlobHeapStart + input.BlobHeapOffsets.[value]
         writeHeapIndex writer indexSizes.BlobsBig offset
