@@ -61,9 +61,10 @@ Track each major review concern with objective status and evidence so follow-up 
   - Declaring-type string heuristic removed.
   - Value-reference operation-name heuristics are now constrained to member references (`vref.MemberInfo.IsSome`) plus the explicit `MoveNext` sentinel, removing module-binding name heuristics while preserving lowered-shape detection: `src/Compiler/TypedTree/TypedTreeDiff.fs`.
   - Lowered-shape collection now also records structural trait-call fingerprints (`traitConstraintShapeDigest`) for `TraitCall`/`WitnessArg`, so new builder operations contribute non-name-only evidence without changing current rude-edit outcomes: `src/Compiler/TypedTree/TypedTreeDiff.fs`.
-  - Architecture guard enforces both member-only value-branch gating and trait-shape collection: `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
+  - Lowered-shape digests now split structural vs heuristic signals (`formatLoweredShapeDigest`) and synthesized rude-edit classification explicitly evaluates both segments (`hasLoweredShapeDigestSegmentValues`), making fallback-to-name heuristics explicit instead of implicit: `src/Compiler/TypedTree/TypedTreeDiff.fs`.
+  - Architecture guard enforces member-only value-branch gating, trait-shape collection, and explicit structural/heuristic digest helpers: `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
 - Remaining gap:
-  - Lowered-shape classification still uses operation-name heuristics; move to stronger semantic signals where feasible.
+  - Remaining work is to reduce or remove the final operation-name heuristic lists (`isLikelyQueryOperationName` / `isLikelyStateMachineOperationName`) once equivalent semantic signals are available for all covered constructs.
 
 ### 7) String-based symbol identity chain
 

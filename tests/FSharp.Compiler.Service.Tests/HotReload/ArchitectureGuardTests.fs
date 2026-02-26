@@ -102,6 +102,8 @@ let ``typed tree diff supplements operation-name heuristics with trait-shape fin
 
     Assert.Contains("if vref.LogicalName.Equals(\"MoveNext\", StringComparison.Ordinal) then", source)
     Assert.Contains("traitConstraintShapeDigest denv traitInfo", source)
+    Assert.Contains("formatLoweredShapeDigest", source)
+    Assert.Contains("hasLoweredShapeDigestSegmentValues", source)
     Assert.Contains("if isLikelyQueryOperationName vref.LogicalName then", source)
     Assert.DoesNotContain("vref.IsModuleBinding", source)
 
