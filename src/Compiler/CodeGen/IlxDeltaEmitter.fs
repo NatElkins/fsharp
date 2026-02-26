@@ -1612,6 +1612,117 @@ let private buildMethodAndParameterRows
     methodDefinitionRowsSnapshot,
     methodSpecificationRowsSnapshot
 
+let private buildAddedOrChangedMethods (methodBodies: MethodBodyUpdate list) =
+    methodBodies
+    |> List.map (fun body ->
+        { HotReloadBaseline.AddedOrChangedMethodInfo.MethodToken = body.MethodToken
+          LocalSignatureToken = body.LocalSignatureToken
+          CodeOffset = body.CodeOffset
+          CodeLength = body.CodeLength })
+
+let private buildDeltaToUpdatedMethodTokenMap
+    (methodTokenMap: Dictionary<int, int>)
+    (addedOrChangedMethods: HotReloadBaseline.AddedOrChangedMethodInfo list)
+    : IReadOnlyDictionary<int, int> =
+    let dict = Dictionary<int, int>()
+
+    for KeyValue(newToken, baselineToken) in methodTokenMap do
+        dict[baselineToken] <- newToken
+
+    for methodInfo in addedOrChangedMethods do
+        if not (dict.ContainsKey methodInfo.MethodToken) then
+            dict[methodInfo.MethodToken] <- methodInfo.MethodToken
+
+    dict :> IReadOnlyDictionary<_, _>
+
+let private finalizeDeltaArtifacts
+    (request: IlxDeltaRequest)
+    (pdbBytesOpt: byte[] option)
+    (encId: Guid)
+    (encBaseId: Guid)
+    (metadataDelta: MetadataWriter.MetadataDelta)
+    (streams: IlDeltaStreams)
+    (updatedTypeTokens: int list)
+    (updatedMethodTokenList: int list)
+    (methodTokenMap: Dictionary<int, int>)
+    (userStringEntries: (int * int * string) list)
+    (methodDefinitionRowsSnapshot: MethodDefinitionRowInfo list)
+    (propertyMapRowsSnapshot: PropertyMapRowInfo list)
+    (eventMapRowsSnapshot: EventMapRowInfo list)
+    (methodSemanticsRowsSnapshot: MethodSemanticsMetadataUpdate list)
+    (methodTokenToKey: Dictionary<int, MethodDefinitionKey>)
+    (addedMethodDeltaTokens: Dictionary<MethodDefinitionKey, int>)
+    (addedPropertyDeltaTokens: Dictionary<PropertyDefinitionKey, int>)
+    (addedEventDeltaTokens: Dictionary<EventDefinitionKey, int>)
+    =
+    let addedOrChangedMethods =
+        buildAddedOrChangedMethods streams.MethodBodies
+
+    let deltaToUpdatedMethodToken =
+        buildDeltaToUpdatedMethodTokenMap methodTokenMap addedOrChangedMethods
+
+    let pdbDelta =
+        match pdbBytesOpt with
+        | None -> None
+        | Some pdbBytes ->
+            HotReloadPdb.emitDelta
+                request.Baseline
+                pdbBytes
+                addedOrChangedMethods
+                deltaToUpdatedMethodToken
+                metadataDelta.EncLog
+                metadataDelta.EncMap
+
+    let synthesizedSnapshot =
+        request.SynthesizedNames
+        |> Option.map (fun map -> map.Snapshot |> Seq.map (fun struct (k, v) -> k, v) |> Map.ofSeq)
+
+    let updatedBaselineCore =
+        HotReloadBaseline.applyDelta
+            request.Baseline
+            metadataDelta.TableRowCounts
+            metadataDelta.HeapSizes
+            addedOrChangedMethods
+            encId
+            encBaseId
+            synthesizedSnapshot
+
+    let updatedBaseline =
+        buildUpdatedBaseline
+            updatedBaselineCore
+            propertyMapRowsSnapshot
+            eventMapRowsSnapshot
+            methodSemanticsRowsSnapshot
+            methodTokenToKey
+            addedMethodDeltaTokens
+            addedPropertyDeltaTokens
+            addedEventDeltaTokens
+
+    let delta =
+        { emptyDelta with
+            Metadata = metadataDelta.Metadata
+            IL = streams.IL
+            UpdatedTypeTokens = updatedTypeTokens
+            UpdatedMethodTokens = updatedMethodTokenList
+            EncLog = metadataDelta.EncLog
+            EncMap = metadataDelta.EncMap
+            MethodBodies = streams.MethodBodies
+            StandaloneSignatures = streams.StandaloneSignatures
+            Pdb = pdbDelta
+            GenerationId = encId
+            BaseGenerationId = encBaseId
+            UserStringUpdates = userStringEntries
+            MethodDefinitionRows = methodDefinitionRowsSnapshot
+            AddedOrChangedMethods = addedOrChangedMethods
+            UpdatedBaseline = Some updatedBaseline
+        }
+
+    if traceUserStringUpdates.Value then
+        for (original, updated, text) in delta.UserStringUpdates do
+            printfn "[fsharp-hotreload][userstring-summary] original=0x%08X new=0x%08X text=%s" original updated text
+
+    delta
+
 /// Emits the delta artifacts for a request. The current implementation populates token projections
 /// while leaving the raw metadata/IL/PDB payload empty; future work will replace the placeholders
 /// with fully emitted heaps.
@@ -2750,79 +2861,22 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
                 baselineHeapOffsets
                 request.Baseline.Metadata.TableRowCounts
 
-        let addedOrChangedMethods =
-            streams.MethodBodies
-            |> List.map (fun body ->
-                { HotReloadBaseline.AddedOrChangedMethodInfo.MethodToken = body.MethodToken
-                  LocalSignatureToken = body.LocalSignatureToken
-                  CodeOffset = body.CodeOffset
-                  CodeLength = body.CodeLength })
-
-        let deltaToUpdatedMethodToken =
-            let dict = Dictionary<int, int>()
-            for KeyValue(newToken, baselineToken) in methodTokenMap do
-                dict[baselineToken] <- newToken
-            for methodInfo in addedOrChangedMethods do
-                if not (dict.ContainsKey methodInfo.MethodToken) then
-                    dict[methodInfo.MethodToken] <- methodInfo.MethodToken
-            dict :> IReadOnlyDictionary<_, _>
-
-        let pdbDelta =
-            match pdbBytesOpt with
-            | None -> None
-            | Some pdbBytes ->
-                HotReloadPdb.emitDelta
-                    request.Baseline
-                    pdbBytes
-                    addedOrChangedMethods
-                    deltaToUpdatedMethodToken
-                    metadataDelta.EncLog
-                    metadataDelta.EncMap
-
-        let synthesizedSnapshot =
-            request.SynthesizedNames
-            |> Option.map (fun map -> map.Snapshot |> Seq.map (fun struct (k, v) -> k, v) |> Map.ofSeq)
-
-        let updatedBaselineCore =
-            HotReloadBaseline.applyDelta
-                request.Baseline
-                metadataDelta.TableRowCounts
-                metadataDelta.HeapSizes
-                addedOrChangedMethods
-                encId
-                encBaseId
-                synthesizedSnapshot
-
-        let updatedBaseline =
-            buildUpdatedBaseline
-                updatedBaselineCore
-                propertyMapRowsSnapshot
-                eventMapRowsSnapshot
-                methodSemanticsRowsSnapshot
-                methodTokenToKey
-                addedMethodDeltaTokens
-                addedPropertyDeltaTokens
-                addedEventDeltaTokens
-
-        { emptyDelta with
-            Metadata = metadataDelta.Metadata
-            IL = streams.IL
-            UpdatedTypeTokens = updatedTypeTokens
-            UpdatedMethodTokens = updatedMethodTokenList
-            EncLog = metadataDelta.EncLog
-            EncMap = metadataDelta.EncMap
-            MethodBodies = streams.MethodBodies
-            StandaloneSignatures = streams.StandaloneSignatures
-            Pdb = pdbDelta
-            GenerationId = encId
-            BaseGenerationId = encBaseId
-            UserStringUpdates = userStringUpdates |> Seq.toList
-            MethodDefinitionRows = methodDefinitionRowsSnapshot
-            AddedOrChangedMethods = addedOrChangedMethods
-            UpdatedBaseline = Some updatedBaseline
-        }
-        |> fun delta ->
-            if traceUserStringUpdates.Value then
-                for (original, updated, text) in delta.UserStringUpdates do
-                    printfn "[fsharp-hotreload][userstring-summary] original=0x%08X new=0x%08X text=%s" original updated text
-            delta
+        finalizeDeltaArtifacts
+            request
+            pdbBytesOpt
+            encId
+            encBaseId
+            metadataDelta
+            streams
+            updatedTypeTokens
+            updatedMethodTokenList
+            methodTokenMap
+            userStringEntries
+            methodDefinitionRowsSnapshot
+            propertyMapRowsSnapshot
+            eventMapRowsSnapshot
+            methodSemanticsRowsSnapshot
+            methodTokenToKey
+            addedMethodDeltaTokens
+            addedPropertyDeltaTokens
+            addedEventDeltaTokens

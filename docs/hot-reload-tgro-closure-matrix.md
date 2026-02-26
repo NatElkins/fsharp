@@ -87,10 +87,11 @@ Track each major review concern with objective status and evidence so follow-up 
 
 - Status: **Partially addressed**
 - Evidence:
-  - `emitDelta` now routes metadata row assembly through explicit helper phases (`buildMethodAndParameterRows`, `buildPropertyEventAndSemanticsRows`, `buildCustomAttributeRows`): `src/Compiler/CodeGen/IlxDeltaEmitter.fs`.
+  - `emitDelta` now routes metadata row assembly through explicit helper phases (`buildMethodAndParameterRows`, `buildPropertyEventAndSemanticsRows`, `buildCustomAttributeRows`).
+  - Final payload assembly (`added/changed method projection`, `PDB delta`, `baseline apply`) now runs through dedicated `finalizeDeltaArtifacts` helpers (`buildAddedOrChangedMethods`, `buildDeltaToUpdatedMethodTokenMap`) instead of inline logic.
   - Architecture guard enforces that phase extraction remains explicit: `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
 - Remaining gap:
-  - Additional extraction is still needed to fully separate remap/metadata/PDB/baseline-update responsibilities.
+  - Additional extraction is still needed to fully separate remap and metadata-reference remapping responsibilities.
 
 ### 10) HR files in core directories
 
