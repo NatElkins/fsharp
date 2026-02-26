@@ -32,7 +32,7 @@ open FSharp.Compiler.AbstractIL.ILBinaryReader
 open FSharp.Compiler.AccessibilityLogic
 open FSharp.Compiler.CheckDeclarations
 open FSharp.Compiler.CompilerConfig
-open FSharp.Compiler.CompilerEmitHookState
+open FSharp.Compiler.CompilerEmitHookBootstrap
 open FSharp.Compiler.CompilerDiagnostics
 open FSharp.Compiler.CompilerImports
 open FSharp.Compiler.CompilerOptions
@@ -959,7 +959,7 @@ let main4
     if tcConfig.standalone && generatedCcu.UsesFSharp20PlusQuotations then
         error (Error(FSComp.SR.fscQuotationLiteralsStaticLinking0 (), rangeStartup))
 
-    let compilerEmitHook = resolveCompilerEmitHook tcConfig.compilerEmitHook
+    let compilerEmitHook = resolveCompilerEmitHookForCompile tcConfig
     compilerEmitHook.ValidateConfiguration(tcConfig.emitCaptureArtifacts, tcConfig.debuginfo, tcConfig.optSettings.LocalOptimizationsEnabled)
 
     // Compute a static linker, it gets called later.
@@ -1136,7 +1136,7 @@ let main6
             | _ -> aref
         | None -> aref
 
-    let compilerEmitHook = resolveCompilerEmitHook tcConfig.compilerEmitHook
+    let compilerEmitHook = resolveCompilerEmitHookForCompile tcConfig
 
     match dynamicAssemblyCreator with
     | None ->

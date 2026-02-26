@@ -17,6 +17,8 @@ let ``fsc does not directly depend on hot reload implementation modules`` () =
     Assert.DoesNotContain("open FSharp.Compiler.HotReloadBaseline\n", source)
     Assert.DoesNotContain("open FSharp.Compiler.HotReloadPdb\n", source)
     Assert.DoesNotContain("open FSharp.Compiler.HotReloadEmitHook\n", source)
+    Assert.DoesNotContain("open FSharp.Compiler.CompilerEmitHookState\n", source)
+    Assert.Contains("open FSharp.Compiler.CompilerEmitHookBootstrap\n", source)
 
 [<Fact>]
 let ``compiler global state only depends on generated-name abstraction`` () =
