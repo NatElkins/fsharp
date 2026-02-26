@@ -737,17 +737,17 @@ type FSharpChecker
               OptimizeDuringCodeGen = fun _ expr -> expr })
         |> CheckedAssemblyAfterOptimization
 
-    let typedImplementationFilesProperty =
-        typeof<FSharpCheckProjectResults>.GetProperty(
-            "TypedImplementationFiles",
-            BindingFlags.Instance ||| BindingFlags.NonPublic ||| BindingFlags.Public)
+    let typedImplementationFilesGetterMethod =
+        typeof<FSharpCheckProjectResults>.GetMethod(
+            "get_TypedImplementationFiles",
+            BindingFlags.Instance ||| BindingFlags.NonPublic)
 
     let getTypedImplementationFilesViaReflection (projectResults: FSharpCheckProjectResults) =
-        if obj.ReferenceEquals(typedImplementationFilesProperty, null) then
-            invalidOp "Could not resolve TypedImplementationFiles on FSharpCheckProjectResults."
+        if obj.ReferenceEquals(typedImplementationFilesGetterMethod, null) then
+            invalidOp "Could not resolve get_TypedImplementationFiles on FSharpCheckProjectResults."
 
         let tupleFields =
-            typedImplementationFilesProperty.GetValue(projectResults)
+            typedImplementationFilesGetterMethod.Invoke(projectResults, [||])
             |> FSharpValue.GetTupleFields
 
         let tcGlobals = tupleFields[0] :?> TcGlobals

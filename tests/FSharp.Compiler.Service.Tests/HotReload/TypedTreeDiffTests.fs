@@ -37,10 +37,18 @@ type private DiffTestHarness() =
             useTransparentCompiler = FSharp.Test.CompilerAssertHelpers.UseTransparentCompiler
         )
 
-    static let typedImplementationFilesProperty =
-        typeof<FSharpCheckProjectResults>.GetProperty(
-            "TypedImplementationFiles",
-            BindingFlags.Instance ||| BindingFlags.NonPublic ||| BindingFlags.Public)
+    static let reflectionFlags =
+        BindingFlags.Instance ||| BindingFlags.NonPublic ||| BindingFlags.Public
+
+    static let tryGetTypedImplementationFilesTuple (projectResults: FSharpCheckProjectResults) =
+        let resultsType = typeof<FSharpCheckProjectResults>
+
+        match resultsType.GetProperty("TypedImplementationFiles", reflectionFlags) with
+        | null ->
+            match resultsType.GetMethod("get_TypedImplementationFiles", reflectionFlags) with
+            | null -> invalidOp "Could not resolve TypedImplementationFiles reflection accessors."
+            | getter -> getter.Invoke(projectResults, [||])
+        | property -> property.GetValue(projectResults)
 
     let args = mkProjectCommandLineArgs(dllPath, [ filePath ])
 
@@ -66,7 +74,7 @@ type private DiffTestHarness() =
             failwithf "Compilation failed: %A" errors
 
         let tupleItems =
-            typedImplementationFilesProperty.GetValue(projectResults)
+            tryGetTypedImplementationFilesTuple projectResults
             |> FSharpValue.GetTupleFields
 
         let tcGlobals = tupleItems[0] :?> FSharp.Compiler.TcGlobals.TcGlobals

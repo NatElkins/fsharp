@@ -35,15 +35,22 @@ open FSharp.Compiler.ComponentTests.HotReload.TestHelpers
 [<Collection(nameof NotThreadSafeResourceCollection)>]
 module RuntimeIntegrationTests =
 
-    let private typedImplementationFilesProperty =
-        typeof<FSharpCheckProjectResults>.GetProperty(
-            "TypedImplementationFiles",
-            BindingFlags.Instance ||| BindingFlags.NonPublic ||| BindingFlags.Public
-        )
+    let private reflectionFlags =
+        BindingFlags.Instance ||| BindingFlags.NonPublic ||| BindingFlags.Public
+
+    let private getTypedImplementationFilesTuple (projectResults: FSharpCheckProjectResults) =
+        let resultsType = typeof<FSharpCheckProjectResults>
+
+        match resultsType.GetProperty("TypedImplementationFiles", reflectionFlags) with
+        | null ->
+            match resultsType.GetMethod("get_TypedImplementationFiles", reflectionFlags) with
+            | null -> invalidOp "Could not resolve TypedImplementationFiles reflection accessors."
+            | getter -> getter.Invoke(projectResults, [||])
+        | property -> property.GetValue(projectResults)
 
     let private getTypedAssembly (projectResults: FSharpCheckProjectResults) =
         let tupleItems =
-            typedImplementationFilesProperty.GetValue(projectResults)
+            getTypedImplementationFilesTuple projectResults
             |> FSharpValue.GetTupleFields
 
         let tcGlobals = tupleItems[0] :?> FSharp.Compiler.TcGlobals.TcGlobals
