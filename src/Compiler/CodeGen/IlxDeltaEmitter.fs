@@ -1723,6 +1723,265 @@ let private finalizeDeltaArtifacts
 
     delta
 
+type private MetadataReferenceRemapper =
+    { RemapEntityToken: int -> int
+      RemapAssemblyRefToken: int -> int }
+
+type private MetadataReferenceRemapContext =
+    { MetadataReader: MetadataReader
+      TraceMetadata: bool
+      BaselineMemberRefRowCount: int
+      TryReuseBaselineTypeRef: string -> string -> string -> int option
+      TypeTokenMap: Dictionary<int, int>
+      FieldTokenMap: Dictionary<int, int>
+      MethodTokenMap: Dictionary<int, int>
+      PropertyTokenMap: Dictionary<int, int>
+      EventTokenMap: Dictionary<int, int>
+      TypeReferenceRows: ResizeArray<TypeReferenceRowInfo>
+      MemberReferenceRows: ResizeArray<MemberReferenceRowInfo>
+      AssemblyReferenceRows: ResizeArray<AssemblyReferenceRowInfo>
+      TypeRefTokenMap: Dictionary<int, int>
+      AssemblyRefTokenMap: Dictionary<int, int>
+      MemberRefTokenMap: Dictionary<int, int>
+      MethodSpecTokenMap: Dictionary<int, int>
+      MethodSpecRowsByToken: Dictionary<int, MethodSpecificationRowInfo>
+      GetNextTypeRefRowId: unit -> int
+      SetNextTypeRefRowId: int -> unit
+      GetNextMemberRefRowId: unit -> int
+      SetNextMemberRefRowId: int -> unit
+      GetNextAssemblyRefRowId: unit -> int
+      SetNextAssemblyRefRowId: int -> unit
+      GetNextMethodSpecRowId: unit -> int
+      SetNextMethodSpecRowId: int -> unit }
+
+let private createMetadataReferenceRemapper (context: MetadataReferenceRemapContext) : MetadataReferenceRemapper =
+    let metadataReader = context.MetadataReader
+    let traceMetadata = context.TraceMetadata
+
+    let inline remapWith (dict: Dictionary<int, int>) token =
+        match dict.TryGetValue token with
+        | true, mapped -> mapped
+        | _ -> token
+
+    let rec remapAssemblyRefToken token =
+        match context.AssemblyRefTokenMap.TryGetValue token with
+        | true, mapped -> mapped
+        | _ ->
+            let handle = MetadataTokens.AssemblyReferenceHandle token
+            let row = metadataReader.GetAssemblyReference handle
+            let nextRowId = context.GetNextAssemblyRefRowId () + 1
+            context.SetNextAssemblyRefRowId nextRowId
+            let getBlob (blob: BlobHandle) = if blob.IsNil then Array.empty else metadataReader.GetBlobBytes blob
+            let info =
+                { RowId = nextRowId
+                  Version = row.Version
+                  Flags = row.Flags
+                  PublicKeyOrToken = getBlob row.PublicKeyOrToken
+                  PublicKeyOrTokenOffset = None
+                  Name = if row.Name.IsNil then "" else metadataReader.GetString row.Name
+                  NameOffset = None
+                  Culture = if row.Culture.IsNil then None else Some(metadataReader.GetString row.Culture)
+                  CultureOffset = None
+                  HashValue = getBlob row.HashValue
+                  HashValueOffset = None }
+            context.AssemblyReferenceRows.Add info
+            let deltaToken = 0x23000000 ||| nextRowId
+            context.AssemblyRefTokenMap[token] <- deltaToken
+            deltaToken
+
+    and remapTypeRefToken token =
+        match context.TypeRefTokenMap.TryGetValue token with
+        | true, mapped -> mapped
+        | _ ->
+            let handle = MetadataTokens.TypeReferenceHandle token
+            let row = metadataReader.GetTypeReference handle
+            let name = if row.Name.IsNil then "" else metadataReader.GetString row.Name
+            let namespaceName = if row.Namespace.IsNil then "" else metadataReader.GetString row.Namespace
+            let baselineToken =
+                match row.ResolutionScope.Kind with
+                | HandleKind.AssemblyReference ->
+                    let assemblyHandle = AssemblyReferenceHandle.op_Explicit row.ResolutionScope
+                    let assemblyRef = metadataReader.GetAssemblyReference assemblyHandle
+                    let scopeName = metadataReader.GetString assemblyRef.Name
+                    context.TryReuseBaselineTypeRef scopeName namespaceName name
+                | _ -> None
+            match baselineToken with
+            | Some reused ->
+                context.TypeRefTokenMap[token] <- reused
+                reused
+            | None ->
+                if traceMetadata then
+                    printfn
+                        "[fsharp-hotreload][metadata] remap typeref miss scope=%A ns=%s name=%s"
+                        row.ResolutionScope.Kind
+                        namespaceName
+                        name
+                let resolutionScope =
+                    if row.ResolutionScope.IsNil then
+                        RS_Module(ModuleHandle 1)
+                    else
+                        let scopeToken = MetadataTokens.GetToken(row.ResolutionScope)
+                        match row.ResolutionScope.Kind with
+                        | HandleKind.AssemblyReference ->
+                            let mapped = remapAssemblyRefToken scopeToken
+                            RS_AssemblyRef(AssemblyRefHandle(mapped &&& 0x00FFFFFF))
+                        | HandleKind.TypeReference ->
+                            let mapped = remapTypeRefToken scopeToken
+                            RS_TypeRef(TypeRefHandle(mapped &&& 0x00FFFFFF))
+                        | HandleKind.ModuleDefinition ->
+                            let rowId = MetadataTokens.GetRowNumber row.ResolutionScope
+                            RS_Module(ModuleHandle rowId)
+                        | HandleKind.ModuleReference ->
+                            let rowId = MetadataTokens.GetRowNumber row.ResolutionScope
+                            RS_ModuleRef(ModuleRefHandle rowId)
+                        | _ -> RS_Module(ModuleHandle 1)
+                let nextRowId = context.GetNextTypeRefRowId () + 1
+                context.SetNextTypeRefRowId nextRowId
+                context.TypeReferenceRows.Add(
+                    { RowId = nextRowId
+                      ResolutionScope = resolutionScope
+                      Name = name
+                      NameOffset = None
+                      Namespace = namespaceName
+                      NamespaceOffset = None })
+                let deltaToken = 0x01000000 ||| nextRowId
+                context.TypeRefTokenMap[token] <- deltaToken
+                deltaToken
+
+    and remapMemberRefToken token =
+        let rowId = token &&& 0x00FFFFFF
+
+        if rowId > 0 && rowId <= context.BaselineMemberRefRowCount then
+            token
+        else
+            match context.MemberRefTokenMap.TryGetValue token with
+            | true, mapped -> mapped
+            | _ ->
+                let handle = MetadataTokens.MemberReferenceHandle token
+                let row = metadataReader.GetMemberReference handle
+
+                let parent =
+                    if row.Parent.IsNil then
+                        MRP_TypeRef(TypeRefHandle 1)
+                    else
+                        let parentToken = MetadataTokens.GetToken(row.Parent)
+                        match row.Parent.Kind with
+                        | HandleKind.TypeDefinition ->
+                            let mapped = remapWith context.TypeTokenMap parentToken
+                            MRP_TypeDef(TypeDefHandle(mapped &&& 0x00FFFFFF))
+                        | HandleKind.TypeReference ->
+                            let mapped = remapTypeRefToken parentToken
+                            MRP_TypeRef(TypeRefHandle(mapped &&& 0x00FFFFFF))
+                        | HandleKind.TypeSpecification ->
+                            let rowId = parentToken &&& 0x00FFFFFF
+                            MRP_TypeSpec(TypeSpecHandle rowId)
+                        | HandleKind.MethodDefinition ->
+                            let mapped = remapWith context.MethodTokenMap parentToken
+                            MRP_MethodDef(MethodDefHandle(mapped &&& 0x00FFFFFF))
+                        | HandleKind.ModuleReference ->
+                            let rowId = parentToken &&& 0x00FFFFFF
+                            MRP_ModuleRef(ModuleRefHandle rowId)
+                        | _ ->
+                            MRP_TypeRef(TypeRefHandle 1)
+
+                let nextRowId = context.GetNextMemberRefRowId () + 1
+                context.SetNextMemberRefRowId nextRowId
+                let mapped = 0x0A000000 ||| nextRowId
+                context.MemberRefTokenMap[token] <- mapped
+
+                let signature =
+                    if row.Signature.IsNil then
+                        Array.empty
+                    else
+                        metadataReader.GetBlobBytes row.Signature
+
+                context.MemberReferenceRows.Add(
+                    { RowId = nextRowId
+                      Parent = parent
+                      Name = if row.Name.IsNil then "" else metadataReader.GetString row.Name
+                      NameOffset = None
+                      Signature = signature
+                      SignatureOffset = None })
+
+                if traceMetadata then
+                    printfn
+                        "[fsharp-hotreload][metadata] remap memberref token=0x%08X -> 0x%08X"
+                        token
+                        mapped
+
+                mapped
+
+    and remapMethodSpecToken token =
+        match context.MethodSpecTokenMap.TryGetValue token with
+        | true, mapped -> mapped
+        | _ ->
+            let methodSpecHandle = MetadataTokens.MethodSpecificationHandle token
+
+            if methodSpecHandle.IsNil then
+                token
+            else
+                let methodSpec = metadataReader.GetMethodSpecification methodSpecHandle
+                let originalMethodToken = MetadataTokens.GetToken(methodSpec.Method)
+                let remappedMethodToken = remapEntityToken originalMethodToken
+                let methodDefOrRef =
+                    let rowId = remappedMethodToken &&& 0x00FFFFFF
+                    match remappedMethodToken &&& 0xFF000000 with
+                    | 0x06000000 -> Some(MDOR_MethodDef(MethodDefHandle rowId))
+                    | 0x0A000000 -> Some(MDOR_MemberRef(MemberRefHandle rowId))
+                    | _ -> None
+
+                match methodDefOrRef with
+                | None ->
+                    if traceMetadata then
+                        printfn
+                            "[fsharp-hotreload][metadata] keeping methodspec token=0x%08X (unsupported remapped method token=0x%08X)"
+                            token
+                            remappedMethodToken
+
+                    token
+                | Some method ->
+                    let rowId = context.GetNextMethodSpecRowId () + 1
+                    context.SetNextMethodSpecRowId rowId
+                    let signature =
+                        if methodSpec.Signature.IsNil then
+                            Array.empty
+                        else
+                            metadataReader.GetBlobBytes methodSpec.Signature
+
+                    let row =
+                        { MethodSpecificationRowInfo.RowId = rowId
+                          Method = method
+                          Signature = signature
+                          SignatureOffset = None }
+
+                    let mapped = 0x2B000000 ||| rowId
+                    context.MethodSpecTokenMap[token] <- mapped
+                    context.MethodSpecRowsByToken[mapped] <- row
+
+                    if traceMetadata then
+                        printfn
+                            "[fsharp-hotreload][metadata] remap methodspec token=0x%08X -> 0x%08X"
+                            token
+                            mapped
+
+                    mapped
+
+    and remapEntityToken token =
+        match classifyEntityTokenRemapKind token with
+        | EntityTokenRemapKind.TypeDef -> remapWith context.TypeTokenMap token
+        | EntityTokenRemapKind.FieldDef -> remapWith context.FieldTokenMap token
+        | EntityTokenRemapKind.MethodDef -> remapWith context.MethodTokenMap token
+        | EntityTokenRemapKind.MemberRef -> remapMemberRefToken token
+        | EntityTokenRemapKind.MethodSpec -> remapMethodSpecToken token
+        | EntityTokenRemapKind.TypeRef -> remapTypeRefToken token
+        | EntityTokenRemapKind.Event -> remapWith context.EventTokenMap token
+        | EntityTokenRemapKind.Property -> remapWith context.PropertyTokenMap token
+        | EntityTokenRemapKind.AssemblyRef -> remapAssemblyRefToken token
+        | EntityTokenRemapKind.Passthrough -> token
+
+    { RemapEntityToken = remapEntityToken
+      RemapAssemblyRefToken = remapAssemblyRefToken }
+
 /// Emits the delta artifacts for a request. The current implementation populates token projections
 /// while leaving the raw metadata/IL/PDB payload empty; future work will replace the placeholders
 /// with fully emitted heaps.
@@ -2200,226 +2459,41 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             addedMethodDeltaTokens[key] <- deltaToken
             addMapping methodTokenMap newToken deltaToken
 
+    let metadataReferenceRemapper =
+        createMetadataReferenceRemapper
+            { MetadataReader = metadataReader
+              TraceMetadata = traceMetadata.Value
+              BaselineMemberRefRowCount = baselineMemberRefRowCount
+              TryReuseBaselineTypeRef = tryReuseBaselineTypeRef
+              TypeTokenMap = typeTokenMap
+              FieldTokenMap = fieldTokenMap
+              MethodTokenMap = methodTokenMap
+              PropertyTokenMap = propertyTokenMap
+              EventTokenMap = eventTokenMap
+              TypeReferenceRows = typeReferenceRows
+              MemberReferenceRows = memberReferenceRows
+              AssemblyReferenceRows = assemblyReferenceRows
+              TypeRefTokenMap = typeRefTokenMap
+              AssemblyRefTokenMap = assemblyRefTokenMap
+              MemberRefTokenMap = memberRefTokenMap
+              MethodSpecTokenMap = methodSpecTokenMap
+              MethodSpecRowsByToken = methodSpecRowsByToken
+              GetNextTypeRefRowId = (fun () -> nextTypeRefRowId)
+              SetNextTypeRefRowId = (fun value -> nextTypeRefRowId <- value)
+              GetNextMemberRefRowId = (fun () -> nextMemberRefRowId)
+              SetNextMemberRefRowId = (fun value -> nextMemberRefRowId <- value)
+              GetNextAssemblyRefRowId = (fun () -> nextAssemblyRefRowId)
+              SetNextAssemblyRefRowId = (fun value -> nextAssemblyRefRowId <- value)
+              GetNextMethodSpecRowId = (fun () -> nextMethodSpecRowId)
+              SetNextMethodSpecRowId = (fun value -> nextMethodSpecRowId <- value) }
+
+    let remapEntityToken = metadataReferenceRemapper.RemapEntityToken
+    let remapAssemblyRefToken = metadataReferenceRemapper.RemapAssemblyRefToken
+
     let inline remapWith (dict: Dictionary<int, int>) token =
         match dict.TryGetValue token with
         | true, mapped -> mapped
         | _ -> token
-
-    let rec remapAssemblyRefToken token =
-        match assemblyRefTokenMap.TryGetValue token with
-        | true, mapped -> mapped
-        | _ ->
-            let handle = MetadataTokens.AssemblyReferenceHandle token
-            let row = metadataReader.GetAssemblyReference handle
-            let nextRowId = nextAssemblyRefRowId + 1
-            nextAssemblyRefRowId <- nextRowId
-            let getBlob (blob: BlobHandle) = if blob.IsNil then Array.empty else metadataReader.GetBlobBytes blob
-            let info =
-                { RowId = nextRowId
-                  Version = row.Version
-                  Flags = row.Flags
-                  PublicKeyOrToken = getBlob row.PublicKeyOrToken
-                  PublicKeyOrTokenOffset = None
-                  Name = if row.Name.IsNil then "" else metadataReader.GetString row.Name
-                  NameOffset = None
-                  Culture = if row.Culture.IsNil then None else Some(metadataReader.GetString row.Culture)
-                  CultureOffset = None
-                  HashValue = getBlob row.HashValue
-                  HashValueOffset = None }
-            assemblyReferenceRows.Add info
-            let deltaToken = 0x23000000 ||| nextRowId
-            assemblyRefTokenMap[token] <- deltaToken
-            deltaToken
-
-    and remapTypeRefToken token =
-        match typeRefTokenMap.TryGetValue token with
-        | true, mapped -> mapped
-        | _ ->
-            let handle = MetadataTokens.TypeReferenceHandle token
-            let row = metadataReader.GetTypeReference handle
-            let name = if row.Name.IsNil then "" else metadataReader.GetString row.Name
-            let namespaceName = if row.Namespace.IsNil then "" else metadataReader.GetString row.Namespace
-            let baselineToken =
-                match row.ResolutionScope.Kind with
-                | HandleKind.AssemblyReference ->
-                    let assemblyHandle = AssemblyReferenceHandle.op_Explicit row.ResolutionScope
-                    let assemblyRef = metadataReader.GetAssemblyReference assemblyHandle
-                    let scopeName = metadataReader.GetString assemblyRef.Name
-                    tryReuseBaselineTypeRef scopeName namespaceName name
-                | _ -> None
-            match baselineToken with
-            | Some reused ->
-                typeRefTokenMap[token] <- reused
-                reused
-            | None ->
-                if traceMetadata.Value then
-                    printfn
-                        "[fsharp-hotreload][metadata] remap typeref miss scope=%A ns=%s name=%s"
-                        row.ResolutionScope.Kind
-                        namespaceName
-                        name
-                let resolutionScope =
-                    if row.ResolutionScope.IsNil then
-                        RS_Module(ModuleHandle 1)
-                    else
-                        let scopeToken = MetadataTokens.GetToken(row.ResolutionScope)
-                        match row.ResolutionScope.Kind with
-                        | HandleKind.AssemblyReference ->
-                            let mapped = remapAssemblyRefToken scopeToken
-                            RS_AssemblyRef(AssemblyRefHandle(mapped &&& 0x00FFFFFF))
-                        | HandleKind.TypeReference ->
-                            let mapped = remapTypeRefToken scopeToken
-                            RS_TypeRef(TypeRefHandle(mapped &&& 0x00FFFFFF))
-                        | HandleKind.ModuleDefinition ->
-                            let rowId = MetadataTokens.GetRowNumber row.ResolutionScope
-                            RS_Module(ModuleHandle rowId)
-                        | HandleKind.ModuleReference ->
-                            let rowId = MetadataTokens.GetRowNumber row.ResolutionScope
-                            RS_ModuleRef(ModuleRefHandle rowId)
-                        | _ -> RS_Module(ModuleHandle 1)
-                let nextRowId = nextTypeRefRowId + 1
-                nextTypeRefRowId <- nextRowId
-                typeReferenceRows.Add(
-                    { RowId = nextRowId
-                      ResolutionScope = resolutionScope
-                      Name = name
-                      NameOffset = None
-                      Namespace = namespaceName
-                      NamespaceOffset = None })
-                let deltaToken = 0x01000000 ||| nextRowId
-                typeRefTokenMap[token] <- deltaToken
-                deltaToken
-
-    and remapMemberRefToken token =
-        let rowId = token &&& 0x00FFFFFF
-
-        if rowId > 0 && rowId <= baselineMemberRefRowCount then
-            token
-        else
-            match memberRefTokenMap.TryGetValue token with
-            | true, mapped -> mapped
-            | _ ->
-                let handle = MetadataTokens.MemberReferenceHandle token
-                let row = metadataReader.GetMemberReference handle
-
-                let parent =
-                    if row.Parent.IsNil then
-                        MRP_TypeRef(TypeRefHandle 1)
-                    else
-                        let parentToken = MetadataTokens.GetToken(row.Parent)
-                        match row.Parent.Kind with
-                        | HandleKind.TypeDefinition ->
-                            let mapped = remapWith typeTokenMap parentToken
-                            MRP_TypeDef(TypeDefHandle(mapped &&& 0x00FFFFFF))
-                        | HandleKind.TypeReference ->
-                            let mapped = remapTypeRefToken parentToken
-                            MRP_TypeRef(TypeRefHandle(mapped &&& 0x00FFFFFF))
-                        | HandleKind.TypeSpecification ->
-                            let rowId = parentToken &&& 0x00FFFFFF
-                            MRP_TypeSpec(TypeSpecHandle rowId)
-                        | HandleKind.MethodDefinition ->
-                            let mapped = remapWith methodTokenMap parentToken
-                            MRP_MethodDef(MethodDefHandle(mapped &&& 0x00FFFFFF))
-                        | HandleKind.ModuleReference ->
-                            let rowId = parentToken &&& 0x00FFFFFF
-                            MRP_ModuleRef(ModuleRefHandle rowId)
-                        | _ ->
-                            MRP_TypeRef(TypeRefHandle 1)
-
-                let nextRowId = nextMemberRefRowId + 1
-                nextMemberRefRowId <- nextRowId
-                let mapped = 0x0A000000 ||| nextRowId
-                memberRefTokenMap[token] <- mapped
-
-                let signature =
-                    if row.Signature.IsNil then
-                        Array.empty
-                    else
-                        metadataReader.GetBlobBytes row.Signature
-
-                memberReferenceRows.Add(
-                    { RowId = nextRowId
-                      Parent = parent
-                      Name = if row.Name.IsNil then "" else metadataReader.GetString row.Name
-                      NameOffset = None
-                      Signature = signature
-                      SignatureOffset = None })
-
-                if traceMetadata.Value then
-                    printfn
-                        "[fsharp-hotreload][metadata] remap memberref token=0x%08X -> 0x%08X"
-                        token
-                        mapped
-
-                mapped
-
-    and remapMethodSpecToken token =
-        match methodSpecTokenMap.TryGetValue token with
-        | true, mapped -> mapped
-        | _ ->
-            let methodSpecHandle = MetadataTokens.MethodSpecificationHandle token
-
-            if methodSpecHandle.IsNil then
-                token
-            else
-                let methodSpec = metadataReader.GetMethodSpecification methodSpecHandle
-                let originalMethodToken = MetadataTokens.GetToken(methodSpec.Method)
-                let remappedMethodToken = remapEntityToken originalMethodToken
-                let methodDefOrRef =
-                    let rowId = remappedMethodToken &&& 0x00FFFFFF
-                    match remappedMethodToken &&& 0xFF000000 with
-                    | 0x06000000 -> Some(MDOR_MethodDef(MethodDefHandle rowId))
-                    | 0x0A000000 -> Some(MDOR_MemberRef(MemberRefHandle rowId))
-                    | _ -> None
-
-                match methodDefOrRef with
-                | None ->
-                    if traceMetadata.Value then
-                        printfn
-                            "[fsharp-hotreload][metadata] keeping methodspec token=0x%08X (unsupported remapped method token=0x%08X)"
-                            token
-                            remappedMethodToken
-
-                    token
-                | Some method ->
-                    nextMethodSpecRowId <- nextMethodSpecRowId + 1
-                    let rowId = nextMethodSpecRowId
-                    let signature =
-                        if methodSpec.Signature.IsNil then
-                            Array.empty
-                        else
-                            metadataReader.GetBlobBytes methodSpec.Signature
-
-                    let row =
-                        { MethodSpecificationRowInfo.RowId = rowId
-                          Method = method
-                          Signature = signature
-                          SignatureOffset = None }
-
-                    let mapped = 0x2B000000 ||| rowId
-                    methodSpecTokenMap[token] <- mapped
-                    methodSpecRowsByToken[mapped] <- row
-
-                    if traceMetadata.Value then
-                        printfn
-                            "[fsharp-hotreload][metadata] remap methodspec token=0x%08X -> 0x%08X"
-                            token
-                            mapped
-
-                    mapped
-
-    and remapEntityToken token =
-        match classifyEntityTokenRemapKind token with
-        | EntityTokenRemapKind.TypeDef -> remapWith typeTokenMap token
-        | EntityTokenRemapKind.FieldDef -> remapWith fieldTokenMap token
-        | EntityTokenRemapKind.MethodDef -> remapWith methodTokenMap token
-        | EntityTokenRemapKind.MemberRef -> remapMemberRefToken token
-        | EntityTokenRemapKind.MethodSpec -> remapMethodSpecToken token
-        | EntityTokenRemapKind.TypeRef -> remapTypeRefToken token
-        | EntityTokenRemapKind.Event -> remapWith eventTokenMap token
-        | EntityTokenRemapKind.Property -> remapWith propertyTokenMap token
-        | EntityTokenRemapKind.AssemblyRef -> remapAssemblyRefToken token
-        | EntityTokenRemapKind.Passthrough -> token
 
     let methodUpdateInputs =
         resolvedMethods
