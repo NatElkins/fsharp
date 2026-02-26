@@ -18,7 +18,7 @@ open FSharp.Compiler.SynthesizedTypeMaps
 open FSharp.Compiler.Text.Range
 
 /// Hot reload emit hook implementation used when --enable:hotreloaddeltas is active.
-type internal DefaultHotReloadEmitHook() =
+type internal DefaultHotReloadEmitHook(editAndContinueService: FSharpEditAndContinueLanguageService) =
 
     // Build and register a baseline snapshot from the exact emitted artifacts, then
     // activate synthesized-name replay for subsequent deltas in the same process.
@@ -42,7 +42,7 @@ type internal DefaultHotReloadEmitHook() =
                 portablePdbSnapshot
                 ilxGenEnvironment
 
-        FSharpEditAndContinueLanguageService.Instance.StartSession(baseline, artifacts.OptimizedImpls) |> ignore
+        editAndContinueService.StartSession(baseline, artifacts.OptimizedImpls) |> ignore
 
         match tryGetCompilerGeneratedNameMap (compilerGlobalState :> obj) with
         | Some map -> map.BeginSession()
@@ -65,14 +65,14 @@ type internal DefaultHotReloadEmitHook() =
                     let map = FSharpSynthesizedTypeMaps()
                     map.BeginSession()
                     setCompilerGeneratedNameMap (compilerGlobalState :> obj) (map :> ICompilerGeneratedNameMap)
-            elif FSharpEditAndContinueLanguageService.Instance.IsSessionActive then
+            elif editAndContinueService.IsSessionActive then
                 // Preserve synthesized-name replay while a hot reload session is active,
                 // even when the output build itself is emitted without capture flags.
                 let activeMap =
                     match tryGetCompilerGeneratedNameMap (compilerGlobalState :> obj) with
                     | Some existing -> Some existing
                     | None ->
-                        match FSharpEditAndContinueLanguageService.Instance.TryGetSession() with
+                        match editAndContinueService.TryGetSession() with
                         | ValueSome session ->
                             let restored = FSharpSynthesizedTypeMaps()
 
@@ -98,7 +98,7 @@ type internal DefaultHotReloadEmitHook() =
             // In IDE scenarios, MSBuild may run in the background and we don't want
             // to clear an active hot reload session being used for live editing.
             if not emitCaptureArtifacts then
-                FSharpEditAndContinueLanguageService.Instance.EndSession()
+                editAndContinueService.EndSession()
                 clearCompilerGeneratedNameMap (compilerGlobalState :> obj)
 
         // Emit through the in-memory writer first so disk bytes and baseline capture share
@@ -143,8 +143,11 @@ type internal DefaultHotReloadEmitHook() =
             captureArtifacts compilerGlobalState artifacts
 
         member _.FallbackEmit(compilerGlobalState) =
-            FSharpEditAndContinueLanguageService.Instance.EndSession()
+            editAndContinueService.EndSession()
             clearCompilerGeneratedNameMap (compilerGlobalState :> obj)
 
+let createHotReloadCompilerEmitHook (editAndContinueService: FSharpEditAndContinueLanguageService) : ICompilerEmitHook =
+    DefaultHotReloadEmitHook(editAndContinueService) :> ICompilerEmitHook
+
 let hotReloadCompilerEmitHook : ICompilerEmitHook =
-    DefaultHotReloadEmitHook() :> ICompilerEmitHook
+    createHotReloadCompilerEmitHook FSharpEditAndContinueLanguageService.Instance

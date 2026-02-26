@@ -180,6 +180,7 @@ type internal FSharpHotReloadService
     do FSharp.Compiler.HotReloadState.setSessionStore sessionStore
 
     let editAndContinueService = FSharpEditAndContinueLanguageService(sessionStore)
+    let serviceScopedEmitHook = createHotReloadCompilerEmitHook editAndContinueService
 
     // Snapshot of the last committed output assembly. If semantic edits are detected while this
     // fingerprint remains unchanged, we refuse to emit deltas from stale binaries.
@@ -256,7 +257,7 @@ type internal FSharpHotReloadService
 
                             // Scope ambient hook activation to explicit hot reload sessions so
                             // unrelated non-session compilations stay on the default emit path.
-                            setAmbientCompilerEmitHook hotReloadCompilerEmitHook
+                            setAmbientCompilerEmitHook serviceScopedEmitHook
 
                             if traceSessionTransitions then
                                 printfn

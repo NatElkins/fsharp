@@ -52,7 +52,8 @@ let ``compiler emit hook bootstrap remains explicit-only`` () =
 let ``hot reload service owns ambient emit hook lifecycle`` () =
     let source = readCompilerFile "src/Compiler/Service/service.fs"
 
-    Assert.Contains("setAmbientCompilerEmitHook hotReloadCompilerEmitHook", source)
+    Assert.Contains("let serviceScopedEmitHook = createHotReloadCompilerEmitHook editAndContinueService", source)
+    Assert.Contains("setAmbientCompilerEmitHook serviceScopedEmitHook", source)
     Assert.Contains("clearAmbientCompilerEmitHook()", source)
 
 [<Fact>]

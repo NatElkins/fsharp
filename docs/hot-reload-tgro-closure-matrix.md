@@ -21,6 +21,7 @@ Track each major review concern with objective status and evidence so follow-up 
 - Evidence:
   - `fsc` emit path now routes through generic emit hook abstraction rather than direct hot reload APIs: `src/Compiler/Driver/fsc.fs`.
   - Hot reload hook bootstrap is explicit-only (`--enable:hotreloaddeltas`), with ambient lifecycle owned by hot reload service session start/end: `src/Compiler/Driver/CompilerEmitHookBootstrap.fs`, `src/Compiler/Service/service.fs`.
+  - Service sessions now install a service-scoped emit hook (`createHotReloadCompilerEmitHook editAndContinueService`) instead of routing through singleton service state when the ambient hook is enabled: `src/Compiler/Driver/HotReloadEmitHook.fs`, `src/Compiler/Service/service.fs`.
   - `fsc` no longer imports `CompilerEmitHookState` directly; emit-hook resolution now flows through the bootstrap boundary adapter (`resolveCompilerEmitHookForCompile`): `src/Compiler/Driver/fsc.fs`, `src/Compiler/Driver/CompilerEmitHookBootstrap.fs`.
   - Architecture guards enforce these boundaries: `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
   - Output parity regression proves non-hot-reload artifacts stay unchanged when the flag is toggled: `tests/FSharp.Compiler.Service.Tests/HotReload/HotReloadCheckerTests.fs` (`Compiler outputs stay byte-identical when hot reload capture flag is toggled`).
