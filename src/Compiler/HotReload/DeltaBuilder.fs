@@ -145,23 +145,24 @@ and private ilTypeSpecIdentity (typeSpec: ILTypeSpec) =
 let private methodKeyMatchesSymbol (symbol: SymbolId) (key: MethodDefinitionKey) =
     let nameMatches = String.Equals(key.Name, methodNameOfSymbol symbol, StringComparison.Ordinal)
 
-    let argCountMatches =
-        match symbol.TotalArgCount with
-        | Some count -> key.ParameterTypes.Length = count
-        | None -> true
-
     let genericArityMatches =
         match symbol.GenericArity with
         | Some arity -> key.GenericArity = arity
         | None -> true
 
-    nameMatches && argCountMatches && genericArityMatches
+    nameMatches && genericArityMatches
+
+let private normalizeSymbolParameterTypeIdentities (symbol: SymbolId) (parameterTypeIdentities: string list) =
+    match symbol.TotalArgCount, parameterTypeIdentities with
+    | Some 0, [ unitType ] when String.Equals(unitType, "Microsoft.FSharp.Core.Unit", StringComparison.Ordinal) -> []
+    | _ -> parameterTypeIdentities
 
 let private methodParameterTypesMatchSymbol (symbol: SymbolId) (key: MethodDefinitionKey) =
     match symbol.ParameterTypeIdentities with
     | Some parameterTypeIdentities ->
         let methodParameterTypes = key.ParameterTypes |> List.map ilTypeIdentity
-        methodParameterTypes = parameterTypeIdentities
+        let normalizedParameterTypeIdentities = normalizeSymbolParameterTypeIdentities symbol parameterTypeIdentities
+        methodParameterTypes = normalizedParameterTypeIdentities
     | None -> false
 
 let private methodReturnTypeMatchesSymbol (symbol: SymbolId) (key: MethodDefinitionKey) =
@@ -201,11 +202,13 @@ let private methodIdentityKey (declaringTypeToken: int) (methodKey: MethodDefini
 let private tryMethodIdentityKeyFromSymbol (declaringTypeToken: int) (symbol: SymbolId) : MethodIdentityKey option =
     match symbol.GenericArity, symbol.ParameterTypeIdentities, symbol.ReturnTypeIdentity with
     | Some genericArity, Some parameterTypes, Some returnType ->
+        let normalizedParameterTypes = normalizeSymbolParameterTypeIdentities symbol parameterTypes
+
         Some
             { DeclaringTypeToken = declaringTypeToken
               Name = methodNameOfSymbol symbol
               GenericArity = genericArity
-              ParameterTypes = parameterTypes
+              ParameterTypes = normalizedParameterTypes
               ReturnType = returnType }
     | _ -> None
 
@@ -417,13 +420,11 @@ let mapSymbolChangesToDelta
 
                 match candidates with
                 | [] -> MethodMissing
-                | [ candidate ] -> MethodResolved candidate
                 | _ ->
                     let parameterMatchedCandidates =
                         candidates |> List.filter (methodParameterTypesMatchSymbol symbol)
 
                     match parameterMatchedCandidates with
-                    | [ candidate ] -> MethodResolved candidate
                     | [] -> MethodMissing
                     | _ ->
                         // Return type disambiguation mirrors Roslyn's signature equality only after parameter matching.
@@ -431,8 +432,8 @@ let mapSymbolChangesToDelta
                             parameterMatchedCandidates |> List.filter (methodReturnTypeMatchesSymbol symbol)
 
                         match returnMatchedCandidates with
-                        | [ candidate ] -> MethodResolved candidate
                         | [] -> MethodMissing
+                        | [ candidate ] -> MethodResolved candidate
                         | ambiguous -> MethodAmbiguous ambiguous
 
     let updatedMethods, methodResolutionErrors =

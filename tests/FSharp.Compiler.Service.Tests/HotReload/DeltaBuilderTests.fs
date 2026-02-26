@@ -326,3 +326,91 @@ module DeltaBuilderTests =
         | Ok _ -> failwith "Expected incomplete runtime method identity to fail closed"
         | Error errors ->
             Assert.Contains(errors, fun message -> message.Contains("runtime signature identity is incomplete", StringComparison.Ordinal))
+
+    [<Fact>]
+    let ``mapSymbolChangesToDelta fails closed when parameter identity mismatches`` () =
+        let baselineTypeName = "Sample.Container+Nested"
+
+        let methodKey: MethodDefinitionKey =
+            { DeclaringType = baselineTypeName
+              Name = "Run"
+              GenericArity = 0
+              ParameterTypes = [ ILType.TypeVar 0us ]
+              ReturnType = ILType.Void }
+
+        let baseline =
+            createBaseline
+                (Map.ofList [ baselineTypeName, 0x02000002 ])
+                (Map.ofList [ methodKey, 0x06000002 ])
+
+        let methodSymbol =
+            { mkSymbol [ "Sample"; "Container"; "Nested" ] "Run" 5L SymbolKind.Value (Some SymbolMemberKind.Method) with
+                CompiledName = Some "Run"
+                TotalArgCount = Some 1
+                GenericArity = Some 0
+                ParameterTypeIdentities = Some [ "System.String" ]
+                ReturnTypeIdentity = Some "System.Void" }
+
+        let changes: FSharpSymbolChanges =
+            { Added = []
+              Updated =
+                [ { UpdatedSymbolChange.Symbol = methodSymbol
+                    Kind = SemanticEditKind.MethodBody
+                    ContainingEntity = None } ]
+              Deleted = []
+              Synthesized = []
+              RudeEdits = [] }
+
+        match mapSymbolChangesToDelta baseline changes with
+        | Ok _ -> failwith "Expected parameter mismatch to fail closed"
+        | Error errors ->
+            Assert.Contains(
+                errors,
+                fun message ->
+                    message.Contains("Unable to resolve changed method symbol", StringComparison.Ordinal)
+                    && message.Contains("full rebuild required", StringComparison.Ordinal)
+            )
+
+    [<Fact>]
+    let ``mapSymbolChangesToDelta fails closed when return identity mismatches`` () =
+        let baselineTypeName = "Sample.Container+Nested"
+
+        let methodKey: MethodDefinitionKey =
+            { DeclaringType = baselineTypeName
+              Name = "Run"
+              GenericArity = 0
+              ParameterTypes = []
+              ReturnType = ILType.TypeVar 0us }
+
+        let baseline =
+            createBaseline
+                (Map.ofList [ baselineTypeName, 0x02000002 ])
+                (Map.ofList [ methodKey, 0x06000002 ])
+
+        let methodSymbol =
+            { mkSymbol [ "Sample"; "Container"; "Nested" ] "Run" 6L SymbolKind.Value (Some SymbolMemberKind.Method) with
+                CompiledName = Some "Run"
+                TotalArgCount = Some 0
+                GenericArity = Some 0
+                ParameterTypeIdentities = Some []
+                ReturnTypeIdentity = Some "System.Void" }
+
+        let changes: FSharpSymbolChanges =
+            { Added = []
+              Updated =
+                [ { UpdatedSymbolChange.Symbol = methodSymbol
+                    Kind = SemanticEditKind.MethodBody
+                    ContainingEntity = None } ]
+              Deleted = []
+              Synthesized = []
+              RudeEdits = [] }
+
+        match mapSymbolChangesToDelta baseline changes with
+        | Ok _ -> failwith "Expected return-type mismatch to fail closed"
+        | Error errors ->
+            Assert.Contains(
+                errors,
+                fun message ->
+                    message.Contains("Unable to resolve changed method symbol", StringComparison.Ordinal)
+                    && message.Contains("full rebuild required", StringComparison.Ordinal)
+            )

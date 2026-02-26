@@ -60,7 +60,8 @@ Track each major review concern with objective status and evidence so follow-up 
 - Evidence:
   - Declaring-type string heuristic removed.
   - Value-reference operation-name heuristics are now constrained to member references (`vref.MemberInfo.IsSome`) plus the explicit `MoveNext` sentinel, removing module-binding name heuristics while preserving lowered-shape detection: `src/Compiler/TypedTree/TypedTreeDiff.fs`.
-  - Architecture guard enforces member-only value-branch gating: `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
+  - Lowered-shape collection now also records structural trait-call fingerprints (`traitConstraintShapeDigest`) for `TraitCall`/`WitnessArg`, so new builder operations contribute non-name-only evidence without changing current rude-edit outcomes: `src/Compiler/TypedTree/TypedTreeDiff.fs`.
+  - Architecture guard enforces both member-only value-branch gating and trait-shape collection: `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
 - Remaining gap:
   - Lowered-shape classification still uses operation-name heuristics; move to stronger semantic signals where feasible.
 
@@ -71,7 +72,9 @@ Track each major review concern with objective status and evidence so follow-up 
   - Method token resolution is fail-closed and rejects incomplete runtime signature identity instead of permissive fallback: `src/Compiler/HotReload/DeltaBuilder.fs`.
   - Explicit `ContainingEntity` mapping now resolves through baseline type-token normalization and fails closed when the explicit entity cannot resolve, avoiding permissive candidate fallback: `src/Compiler/HotReload/DeltaBuilder.fs`.
   - Method resolution now pre-indexes baseline methods by normalized containing-type token + full runtime signature identity before applying compatibility fallback matching, reducing accidental cross-type string matches while preserving existing supported shapes: `src/Compiler/HotReload/DeltaBuilder.fs`.
-  - Regression tests cover incomplete identity, ambiguous mapping, explicit-entity normalization, and explicit-entity mismatch fail-closed behavior: `tests/FSharp.Compiler.Service.Tests/HotReload/DeltaBuilderTests.fs`.
+  - Method fallback disambiguation is now fail-closed across both parameter and return signature stages (including single-candidate paths), preventing name-only resolution when signature identities diverge: `src/Compiler/HotReload/DeltaBuilder.fs`.
+  - Added no-arg/unit signature normalization for symbol-side parameter identities so strict signature matching remains stable for generated `unit` cases without reopening permissive matching: `src/Compiler/HotReload/DeltaBuilder.fs`.
+  - Regression tests now include parameter-mismatch and return-mismatch fail-closed scenarios, plus architecture guards for staged fallback disambiguation: `tests/FSharp.Compiler.Service.Tests/HotReload/DeltaBuilderTests.fs`, `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
 - Remaining gap:
   - End-to-end symbol identity still relies on string identities (`SymbolId`, `MethodDefinitionKey`) rather than semantic symbol objects.
 
@@ -132,5 +135,5 @@ Track each major review concern with objective status and evidence so follow-up 
 ## Validation performed for this update
 
 - `./.dotnet/dotnet build FSharp.sln -c Debug -v minimal`
-- `./.dotnet/dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload -v minimal` (`317` passed)
+- `./.dotnet/dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload -v minimal` (`322` passed)
 - `./.dotnet/dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload -v minimal` (`110` passed)

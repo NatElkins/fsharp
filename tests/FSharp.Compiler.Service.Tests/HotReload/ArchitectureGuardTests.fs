@@ -162,3 +162,13 @@ let ``ilx delta emitter phases stay explicit`` () =
     Assert.Contains("buildPropertyEventAndSemanticsRows", emitDeltaSource)
     Assert.Contains("buildCustomAttributeRows", emitDeltaSource)
     Assert.Contains("        finalizeDeltaArtifacts", source)
+
+[<Fact>]
+let ``delta builder fallback keeps staged signature disambiguation`` () =
+    let source = readCompilerFile "src/Compiler/HotReload/DeltaBuilder.fs"
+
+    Assert.Contains("methodKeyMatchesSymbol symbol key", source)
+    Assert.Contains("let parameterMatchedCandidates =", source)
+    Assert.Contains("let returnMatchedCandidates =", source)
+    Assert.Contains("normalizeSymbolParameterTypeIdentities", source)
+    Assert.DoesNotContain("| _ -> MethodResolved", source)
