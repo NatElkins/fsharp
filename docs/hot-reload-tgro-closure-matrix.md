@@ -125,6 +125,7 @@ Track each major review concern with objective status and evidence so follow-up 
   - Guard now enforces allowlist + mandatory hash-locking for every drifted `.fsi`: `tests/scripts/check-main-fsi-drift.sh`.
   - Refresh helper added: `tests/scripts/refresh-main-fsi-drift-hashes.sh`.
   - Reduced one main-relative signature drift by localizing hot-reload activity tag literals in `EditAndContinueLanguageService` and removing `Activity.fsi` from the allowlisted drift set (`10 -> 9` files).
+  - Removed hot-reload-specific `FSharpCheckProjectResults` signature exposure (`TypedImplementationFiles`, `HotReloadOptimizationData`) and switched service retrieval to non-public reflection so this branch no longer grows explicit hot-reload API surface in `FSharpCheckerResults.fsi`.
 - Remaining gap:
   - The allowlisted drift set is still non-trivial and should be reduced through targeted refactors.
 
