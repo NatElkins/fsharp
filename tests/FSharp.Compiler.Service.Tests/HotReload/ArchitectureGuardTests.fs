@@ -178,4 +178,7 @@ let ``delta builder fallback keeps staged signature disambiguation`` () =
     Assert.Contains("let parameterMatchedCandidates =", source)
     Assert.Contains("let returnMatchedCandidates =", source)
     Assert.Contains("normalizeSymbolParameterTypeIdentities", source)
+    Assert.Contains("if List.isEmpty resolvedTypeTokens then", source)
+    Assert.Contains("resolvedTypeNames |> List.exists (typeNamesEquivalent key.DeclaringType)", source)
+    Assert.Contains("Ok rawCandidates", source)
     Assert.DoesNotContain("| _ -> MethodResolved", source)

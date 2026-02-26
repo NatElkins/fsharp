@@ -78,19 +78,29 @@ let private buildTypePathLookup (typeTokens: Map<string, int>) =
             acc |> Map.add key (name :: existing))
         Map.empty
 
-let private tryResolveTypeNameByPath
+type private TypeNameResolution =
+    | TypeNameResolved of string
+    | TypeNameMissing
+    | TypeNameAmbiguous of string list
+
+let private resolveTypeNameByPath
     (typeTokens: Map<string, int>)
     (typePathLookup: Map<string list, string list>)
     (names: string list)
     =
-    names
-    |> List.tryPick (fun name ->
-        match typePathLookup |> Map.tryFind (splitTypePath name) with
-        | Some [ resolved ] -> Some resolved
-        | Some resolvedNames ->
-            resolvedNames
-            |> List.tryFind (fun candidate -> typeTokens |> Map.containsKey candidate)
-        | None -> None)
+    let candidates =
+        names
+        |> List.collect (fun name ->
+            typePathLookup
+            |> Map.tryFind (splitTypePath name)
+            |> Option.defaultValue [])
+        |> List.distinct
+        |> List.filter (fun candidate -> typeTokens |> Map.containsKey candidate)
+
+    match candidates with
+    | [] -> TypeNameMissing
+    | [ resolved ] -> TypeNameResolved resolved
+    | ambiguous -> TypeNameAmbiguous ambiguous
 
 let private typeNamesEquivalent (left: string) (right: string) =
     String.Equals(left, right, StringComparison.Ordinal)
@@ -273,24 +283,37 @@ let mapSymbolChangesToDelta
             deletedText
             updatedText
 
-    let candidateEntityNames (symbol: SymbolId) =
-        let segments = symbol.Path @ [ symbol.LogicalName ]
+    let singlePathCandidate (segments: string list) =
+        match segments with
+        | [] -> []
+        | _ -> [ joinPath segments ]
 
+    let candidateEntityNames (symbol: SymbolId) =
+        singlePathCandidate (symbol.Path @ [ symbol.LogicalName ])
+
+    let suffixPathCandidates (segments: string list) =
         let rec tails acc remaining =
             match remaining with
             | [] -> List.rev acc
-            | _ :: tail as segs ->
-                let name = joinPath segs
-                tails (name :: acc) tail
+            | _ :: tail as segs -> tails (joinPath segs :: acc) tail
 
         tails [] segments
 
+    let candidateContainingTypeNames (symbol: SymbolId) =
+        suffixPathCandidates symbol.Path
+
     let typePathLookup = buildTypePathLookup baseline.TypeTokens
 
-    let tryResolveTypeName (names: string list) =
-        names
-        |> List.tryFind (fun name -> Map.containsKey name baseline.TypeTokens)
-        |> Option.orElseWith (fun () -> tryResolveTypeNameByPath baseline.TypeTokens typePathLookup names)
+    let resolveTypeName (names: string list) =
+        let exactMatches =
+            names
+            |> List.filter (fun name -> Map.containsKey name baseline.TypeTokens)
+            |> deduplicate
+
+        match exactMatches with
+        | [ resolved ] -> TypeNameResolved resolved
+        | _ :: _ as ambiguous -> TypeNameAmbiguous ambiguous
+        | [] -> resolveTypeNameByPath baseline.TypeTokens typePathLookup names
 
     let methodIdentityIndex =
         let index = System.Collections.Generic.Dictionary<MethodIdentityKey, ResizeArray<MethodDefinitionKey>>(HashIdentity.Structural)
@@ -313,15 +336,9 @@ let mapSymbolChangesToDelta
 
         index
 
-    let lookupMethodsByIdentity (symbol: SymbolId) (typeNames: string list) =
+    let lookupMethodsByIdentity (symbol: SymbolId) (resolvedTypeNames: string list) =
         let typeTokens =
-            baseline.TypeTokens
-            |> Map.toSeq
-            |> Seq.choose (fun (declaringTypeName, declaringTypeToken) ->
-                if typeNames |> List.exists (typeNamesEquivalent declaringTypeName) then
-                    Some declaringTypeToken
-                else
-                    None)
+            resolvedTypeNames |> List.choose (fun name -> baseline.TypeTokens |> Map.tryFind name)
             |> Seq.toList
             |> deduplicate
 
@@ -344,9 +361,14 @@ let mapSymbolChangesToDelta
         |> List.fold (fun (resolvedTypes, errors) symbol ->
             let candidates = symbol |> candidateEntityNames
 
-            match candidates |> tryResolveTypeName with
-            | Some resolvedTypeName -> resolvedTypeName :: resolvedTypes, errors
-            | None ->
+            match resolveTypeName candidates with
+            | TypeNameResolved resolvedTypeName -> resolvedTypeName :: resolvedTypes, errors
+            | TypeNameAmbiguous ambiguousMatches ->
+                let errorMessage =
+                    $"Ambiguous changed type symbol '{formatSymbolIdentity symbol}' to baseline type token mapping (candidates={candidates}, matches={ambiguousMatches}); full rebuild required."
+
+                resolvedTypes, errorMessage :: errors
+            | TypeNameMissing ->
                 let errorMessage =
                     $"Unable to resolve changed type symbol '{formatSymbolIdentity symbol}' to a baseline type token (candidates={candidates}); full rebuild required."
 
@@ -356,44 +378,60 @@ let mapSymbolChangesToDelta
     let updatedTypes = updatedTypes |> List.rev |> deduplicate
     let typeResolutionErrors = typeResolutionErrors |> List.rev
 
-    let candidateContainingTypeNames (change: UpdatedSymbolChange) =
-        let pathSuffixes =
-            let rec tails acc segments =
-                match segments with
-                | [] -> List.rev acc
-                | _ :: tail as segs -> tails (joinPath segs :: acc) tail
-
-            tails [] change.Symbol.Path
-
+    let resolveContainingTypeCandidates (change: UpdatedSymbolChange) =
         let explicitEntity =
             match change.ContainingEntity with
             | Some name -> [ name ]
             | None -> []
 
-        deduplicate (explicitEntity @ pathSuffixes)
+        let pathCandidates = change.Symbol |> candidateContainingTypeNames
+        let rawCandidates = deduplicate (explicitEntity @ pathCandidates)
 
-    let resolveContainingTypeCandidates (change: UpdatedSymbolChange) =
-        let rawCandidates = candidateContainingTypeNames change
-
-        let normalizedCandidates =
+        // Keep explicit ambiguity details instead of collapsing into a generic "missing" state.
+        // This keeps failure diagnostics deterministic when type-path normalization yields multiple matches.
+        let normalizedCandidates, ambiguousCandidates =
             rawCandidates
-            |> List.choose (fun candidate -> tryResolveTypeName [ candidate ])
-            |> deduplicate
+            |> List.fold
+                (fun (resolved, ambiguous) candidate ->
+                    match resolveTypeName [ candidate ] with
+                    | TypeNameResolved resolvedName -> resolvedName :: resolved, ambiguous
+                    | TypeNameAmbiguous matches -> resolved, (candidate, matches) :: ambiguous
+                    | TypeNameMissing -> resolved, ambiguous)
+                ([], [])
+
+        let normalizedCandidates = normalizedCandidates |> List.rev |> deduplicate
+        let ambiguousCandidates = ambiguousCandidates |> List.rev
 
         match change.ContainingEntity with
         | Some explicitEntity ->
-            match tryResolveTypeName [ explicitEntity ] with
-            | Some resolvedExplicit -> Ok [ resolvedExplicit ]
-            | None ->
+            match resolveTypeName [ explicitEntity ] with
+            | TypeNameResolved resolvedExplicit -> Ok [ resolvedExplicit ]
+            | TypeNameAmbiguous ambiguousMatches ->
+                Error
+                    ($"Ambiguous explicit containing entity '{explicitEntity}' for symbol '{formatSymbolIdentity change.Symbol}' to baseline type token mapping (matches={ambiguousMatches}); full rebuild required.")
+            | TypeNameMissing ->
                 Error
                     ($"Unable to resolve explicit containing entity '{explicitEntity}' for symbol '{formatSymbolIdentity change.Symbol}' to a baseline type token; full rebuild required.")
         | None ->
-            if List.isEmpty normalizedCandidates then
+            if not (List.isEmpty ambiguousCandidates) then
+                let ambiguityDetails =
+                    ambiguousCandidates
+                    |> List.map (fun (candidate, matches) -> $"{candidate} -> {matches}")
+                    |> String.concat "; "
+
+                Error
+                    ($"Ambiguous containing type mapping for symbol '{formatSymbolIdentity change.Symbol}' to baseline type tokens (candidates={rawCandidates}, ambiguous={ambiguityDetails}); full rebuild required.")
+            elif List.isEmpty normalizedCandidates then
+                // Compatibility fallback: some baseline method keys may reference declaring
+                // types missing from baseline.TypeTokens. Preserve name-based fallback in that case.
                 Ok rawCandidates
+            elif normalizedCandidates.Length > 1 then
+                Error
+                    ($"Ambiguous containing type mapping for symbol '{formatSymbolIdentity change.Symbol}' to baseline type tokens (candidates={rawCandidates}, matches={normalizedCandidates}); full rebuild required.")
             else
                 Ok normalizedCandidates
 
-    let resolveMethodKey (symbol: SymbolId) (typeNames: string list) =
+    let resolveMethodKey (symbol: SymbolId) (resolvedTypeNames: string list) =
         let missingIdentityParts = missingRuntimeSignatureIdentityParts symbol
 
         if not (List.isEmpty missingIdentityParts) then
@@ -401,7 +439,12 @@ let mapSymbolChangesToDelta
             // avoid best-effort token matching that could map edits to the wrong method.
             MethodIdentityMissing missingIdentityParts
         else
-            let _, identityMatchedCandidates = lookupMethodsByIdentity symbol typeNames
+            let resolvedTypeTokens =
+                resolvedTypeNames
+                |> List.choose (fun name -> baseline.TypeTokens |> Map.tryFind name)
+                |> deduplicate
+
+            let _, identityMatchedCandidates = lookupMethodsByIdentity symbol resolvedTypeNames
 
             match identityMatchedCandidates with
             | [ candidate ] -> MethodResolved candidate
@@ -411,7 +454,15 @@ let mapSymbolChangesToDelta
                     baseline.MethodTokens
                     |> Map.toSeq
                     |> Seq.choose (fun (key, _) ->
-                        if (typeNames |> List.exists (typeNamesEquivalent key.DeclaringType)) && methodKeyMatchesSymbol symbol key then
+                        let containingTypeMatches =
+                            if List.isEmpty resolvedTypeTokens then
+                                resolvedTypeNames |> List.exists (typeNamesEquivalent key.DeclaringType)
+                            else
+                                match baseline.TypeTokens |> Map.tryFind key.DeclaringType with
+                                | Some declaringTypeToken -> resolvedTypeTokens |> List.contains declaringTypeToken
+                                | None -> false
+
+                        if containingTypeMatches && methodKeyMatchesSymbol symbol key then
                             Some key
                         else
                             None)
@@ -486,28 +537,71 @@ let mapSymbolChangesToDelta
     let updatedMethods = updatedMethods |> List.rev |> deduplicate
     let methodResolutionErrors = methodResolutionErrors |> List.rev
 
-    let accessorSymbols =
-        [ yield! FSharpSymbolChanges.propertyAccessorsAdded changes
-          yield! FSharpSymbolChanges.propertyAccessorsUpdated changes |> Seq.map (fun change -> change.Symbol)
-          yield! FSharpSymbolChanges.propertyAccessorsDeleted changes
-          yield! FSharpSymbolChanges.eventAccessorsAdded changes
-          yield! FSharpSymbolChanges.eventAccessorsUpdated changes |> Seq.map (fun change -> change.Symbol)
-          yield! FSharpSymbolChanges.eventAccessorsDeleted changes ]
-        |> List.filter (fun symbol ->
+    let accessorCandidates =
+        [ yield! FSharpSymbolChanges.propertyAccessorsAdded changes |> List.map (fun symbol -> symbol, None)
+          yield! FSharpSymbolChanges.propertyAccessorsUpdated changes |> List.map (fun change -> change.Symbol, change.ContainingEntity)
+          yield! FSharpSymbolChanges.propertyAccessorsDeleted changes |> List.map (fun symbol -> symbol, None)
+          yield! FSharpSymbolChanges.eventAccessorsAdded changes |> List.map (fun symbol -> symbol, None)
+          yield! FSharpSymbolChanges.eventAccessorsUpdated changes |> List.map (fun change -> change.Symbol, change.ContainingEntity)
+          yield! FSharpSymbolChanges.eventAccessorsDeleted changes |> List.map (fun symbol -> symbol, None) ]
+        |> List.filter (fun (symbol, _) ->
             match symbol.MemberKind with
             | Some SymbolMemberKind.Method -> false
             | Some _ -> true
             | None -> false)
-        |> deduplicateSymbols
+        |> List.fold
+            (fun (seen, acc) ((symbol, _) as candidate) ->
+                if seen |> Set.contains symbol.Stamp then
+                    seen, acc
+                else
+                    Set.add symbol.Stamp seen, candidate :: acc)
+            (Set.empty, [])
+        |> snd
+        |> List.rev
+
+    let resolveAccessorContainingTypeCandidates (symbol: SymbolId) (explicitContainingEntity: string option) =
+        let explicitCandidates = explicitContainingEntity |> Option.toList
+        let pathCandidates = symbol |> candidateContainingTypeNames
+        let rawCandidates = deduplicate (explicitCandidates @ pathCandidates)
+
+        let normalizedCandidates =
+            rawCandidates
+            |> List.choose (fun candidate ->
+                match resolveTypeName [ candidate ] with
+                | TypeNameResolved resolved -> Some resolved
+                | _ -> None)
+            |> deduplicate
+
+        match explicitContainingEntity with
+        | Some explicitEntity ->
+            match resolveTypeName [ explicitEntity ] with
+            | TypeNameResolved resolved -> Ok [ resolved ]
+            | TypeNameAmbiguous ambiguousMatches ->
+                Error
+                    ($"Ambiguous explicit accessor containing entity '{explicitEntity}' for symbol '{formatSymbolIdentity symbol}' to baseline type token mapping (matches={ambiguousMatches}); full rebuild required.")
+            | TypeNameMissing ->
+                Error
+                    ($"Unable to resolve explicit accessor containing entity '{explicitEntity}' for symbol '{formatSymbolIdentity symbol}' to a baseline type token; full rebuild required.")
+        | None ->
+            if List.isEmpty normalizedCandidates then
+                // Preserve historical behavior for synthesized accessors whose containing
+                // type cannot be resolved from typed-tree symbol path information.
+                Ok []
+            elif normalizedCandidates.Length > 1 then
+                Error
+                    ($"Ambiguous accessor containing type mapping for symbol '{formatSymbolIdentity symbol}' (candidates={rawCandidates}, matches={normalizedCandidates}); full rebuild required.")
+            else
+                Ok normalizedCandidates
 
     let accessorUpdates, accessorResolutionErrors =
-        accessorSymbols
-        |> List.fold (fun (resolvedAccessors, errors) symbol ->
-            let containingTypeCandidates = symbol |> candidateEntityNames
-
-            match containingTypeCandidates |> tryResolveTypeName with
-            | None -> resolvedAccessors, errors
-            | Some typeName ->
+        accessorCandidates
+        |> List.fold (fun (resolvedAccessors, errors) (symbol, explicitContainingEntity) ->
+            match resolveAccessorContainingTypeCandidates symbol explicitContainingEntity with
+            | Error errorMessage ->
+                resolvedAccessors, errorMessage :: errors
+            | Ok [] ->
+                resolvedAccessors, errors
+            | Ok [ typeName ] ->
                 let method, updatedErrors =
                     match resolveMethodKey symbol [ typeName ] with
                     | MethodResolved methodKey -> Some methodKey, errors
@@ -533,7 +627,12 @@ let mapSymbolChangesToDelta
                   ContainingType = typeName
                   MemberKind = symbol.MemberKind.Value
                   Method = method }
-                :: resolvedAccessors, updatedErrors)
+                :: resolvedAccessors, updatedErrors
+            | Ok typeNames ->
+                let errorMessage =
+                    $"Ambiguous accessor containing type mapping for symbol '{formatSymbolIdentity symbol}' (matches={typeNames}); full rebuild required."
+
+                resolvedAccessors, errorMessage :: errors)
             ([], [])
 
     let accessorUpdates = accessorUpdates |> List.rev

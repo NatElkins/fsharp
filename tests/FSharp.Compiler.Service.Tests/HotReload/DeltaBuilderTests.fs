@@ -240,9 +240,9 @@ module DeltaBuilderTests =
             )
 
     [<Fact>]
-    let ``mapSymbolChangesToDelta fails closed on ambiguous method mapping`` () =
+    let ``mapSymbolChangesToDelta fails closed on ambiguous containing type mapping`` () =
         let primaryTypeName = "Sample.Container+Nested"
-        let secondaryTypeName = "Container+Nested"
+        let secondaryTypeName = "Sample+Container+Nested"
 
         let primaryMethod: MethodDefinitionKey =
             { DeclaringType = primaryTypeName
@@ -284,9 +284,9 @@ module DeltaBuilderTests =
               RudeEdits = [] }
 
         match mapSymbolChangesToDelta baseline changes with
-        | Ok _ -> failwith "Expected ambiguous method mapping to fail closed"
+        | Ok _ -> failwith "Expected ambiguous containing type mapping to fail closed"
         | Error errors ->
-            Assert.Contains(errors, fun message -> message.Contains("Ambiguous baseline method mapping", StringComparison.Ordinal))
+            Assert.Contains(errors, fun message -> message.Contains("Ambiguous containing type mapping", StringComparison.Ordinal))
 
     [<Fact>]
     let ``mapSymbolChangesToDelta fails closed when runtime method identity is incomplete`` () =
@@ -370,6 +370,33 @@ module DeltaBuilderTests =
                     message.Contains("Unable to resolve changed method symbol", StringComparison.Ordinal)
                     && message.Contains("full rebuild required", StringComparison.Ordinal)
             )
+
+    [<Fact>]
+    let ``mapSymbolChangesToDelta fails closed when explicit accessor containing entity cannot resolve`` () =
+        let accessorSymbol =
+            { mkSymbol [ "Sample"; "Container" ] "get_Value" 99L SymbolKind.Value (Some(SymbolMemberKind.PropertyGet "Value")) with
+                CompiledName = Some "get_Value"
+                TotalArgCount = Some 0
+                GenericArity = Some 0
+                ParameterTypeIdentities = Some []
+                ReturnTypeIdentity = Some "System.Int32" }
+
+        let changes: FSharpSymbolChanges =
+            { Added = []
+              Updated =
+                [ { UpdatedSymbolChange.Symbol = accessorSymbol
+                    Kind = SemanticEditKind.MethodBody
+                    ContainingEntity = Some "Sample.Missing" } ]
+              Deleted = []
+              Synthesized = []
+              RudeEdits = [] }
+
+        let baseline = createBaseline Map.empty Map.empty
+
+        match mapSymbolChangesToDelta baseline changes with
+        | Ok _ -> failwith "Expected explicit accessor containing entity mismatch to fail closed"
+        | Error errors ->
+            Assert.Contains(errors, fun message -> message.Contains("explicit accessor containing entity", StringComparison.Ordinal))
 
     [<Fact>]
     let ``mapSymbolChangesToDelta fails closed when return identity mismatches`` () =

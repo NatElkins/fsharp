@@ -71,13 +71,15 @@ Track each major review concern with objective status and evidence so follow-up 
 - Status: **Partially addressed**
 - Evidence:
   - Method token resolution is fail-closed and rejects incomplete runtime signature identity instead of permissive fallback: `src/Compiler/HotReload/DeltaBuilder.fs`.
-  - Explicit `ContainingEntity` mapping now resolves through baseline type-token normalization and fails closed when the explicit entity cannot resolve, avoiding permissive candidate fallback: `src/Compiler/HotReload/DeltaBuilder.fs`.
+  - Explicit `ContainingEntity` mapping now resolves through baseline type-token normalization and fails closed when the explicit entity cannot resolve or resolves ambiguously, avoiding permissive candidate fallback: `src/Compiler/HotReload/DeltaBuilder.fs`.
   - Method resolution now pre-indexes baseline methods by normalized containing-type token + full runtime signature identity before applying compatibility fallback matching, reducing accidental cross-type string matches while preserving existing supported shapes: `src/Compiler/HotReload/DeltaBuilder.fs`.
+  - Containing-type candidate resolution now surfaces ambiguous path matches explicitly and only falls back to raw name candidates when baseline type-token rows are missing, reducing silent mis-binding risk while keeping legacy module scenarios working: `src/Compiler/HotReload/DeltaBuilder.fs`.
+  - Accessor mapping now carries explicit containing-entity context for updated accessors and fails closed when that explicit mapping is missing or ambiguous, while preserving legacy best-effort skip behavior for unresolved synthesized accessor paths: `src/Compiler/HotReload/DeltaBuilder.fs`.
   - Method fallback disambiguation is now fail-closed across both parameter and return signature stages (including single-candidate paths), preventing name-only resolution when signature identities diverge: `src/Compiler/HotReload/DeltaBuilder.fs`.
   - Added no-arg/unit signature normalization for symbol-side parameter identities so strict signature matching remains stable for generated `unit` cases without reopening permissive matching: `src/Compiler/HotReload/DeltaBuilder.fs`.
-  - Regression tests now include parameter-mismatch and return-mismatch fail-closed scenarios, plus architecture guards for staged fallback disambiguation: `tests/FSharp.Compiler.Service.Tests/HotReload/DeltaBuilderTests.fs`, `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
+  - Regression tests now include parameter-mismatch, return-mismatch, ambiguous-containing-type, and explicit-accessor-containing-entity fail-closed scenarios, plus architecture guards for staged fallback disambiguation and guarded compatibility fallback behavior: `tests/FSharp.Compiler.Service.Tests/HotReload/DeltaBuilderTests.fs`, `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
 - Remaining gap:
-  - End-to-end symbol identity still relies on string identities (`SymbolId`, `MethodDefinitionKey`) rather than semantic symbol objects.
+  - End-to-end symbol identity still relies on string identities (`SymbolId`, `MethodDefinitionKey`) rather than semantic symbol objects; remaining work is introducing typed semantic identity transport from typed-tree diff into delta mapping.
 
 ### 8) Manual metadata serialization evolution risk
 
