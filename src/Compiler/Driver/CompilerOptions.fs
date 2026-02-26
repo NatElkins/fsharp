@@ -1291,6 +1291,10 @@ let advancedFlagsBoth tcConfigB =
                 | "hotreloaddeltas" ->
                     tcConfigB.emitCaptureArtifacts <- true
                     configureHotReloadEmitHook tcConfigB
+                | "hotreloadhook" ->
+                    // Hook-only mode keeps synthesized-name replay active for hot reload sessions
+                    // without enabling baseline-capture emission for the current compilation.
+                    configureHotReloadEmitHook tcConfigB
                 | _ -> error (Error(FSComp.SR.optsUnknownArgumentToTheTestSwitch arg, rangeCmdArgs))),
             None,
             Some "Enable experimental compiler features."

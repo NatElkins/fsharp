@@ -49,12 +49,19 @@ let ``compiler emit hook bootstrap remains explicit-only`` () =
     Assert.DoesNotContain("setAmbientCompilerEmitHook", source)
 
 [<Fact>]
-let ``hot reload service owns ambient emit hook lifecycle`` () =
+let ``hot reload service no longer mutates ambient emit-hook state`` () =
     let source = readCompilerFile "src/Compiler/Service/service.fs"
 
-    Assert.Contains("let serviceScopedEmitHook = createHotReloadCompilerEmitHook editAndContinueService", source)
-    Assert.Contains("setAmbientCompilerEmitHook serviceScopedEmitHook", source)
-    Assert.Contains("clearAmbientCompilerEmitHook()", source)
+    Assert.DoesNotContain("createHotReloadCompilerEmitHook", source)
+    Assert.DoesNotContain("setAmbientCompilerEmitHook", source)
+    Assert.DoesNotContain("clearAmbientCompilerEmitHook", source)
+
+[<Fact>]
+let ``checker compile injects explicit hook-only argument for active hot reload sessions`` () =
+    let source = readCompilerFile "src/Compiler/Service/service.fs"
+
+    Assert.Contains("--enable:hotreloadhook", source)
+    Assert.Contains("ensureHotReloadSessionHookArgument", source)
 
 [<Fact>]
 let ``hot reload checker path uses service-owned enc instance`` () =
@@ -97,6 +104,15 @@ let ``typed tree diff constrains value-reference operation-name heuristics to me
     Assert.Contains("elif vref.MemberInfo.IsSome then", source)
     Assert.Contains("if isLikelyQueryOperationName vref.LogicalName then", source)
     Assert.DoesNotContain("vref.IsModuleBinding", source)
+
+[<Fact>]
+let ``compiler emit hook state no longer carries ambient mutable hook`` () =
+    let source = readCompilerFile "src/Compiler/Driver/CompilerEmitHookState.fs"
+
+    Assert.DoesNotContain("ambientCompilerEmitHook", source)
+    Assert.DoesNotContain("setAmbientCompilerEmitHook", source)
+    Assert.DoesNotContain("clearAmbientCompilerEmitHook", source)
+    Assert.Contains("Option.defaultValue defaultCompilerEmitHook", source)
 
 [<Fact>]
 let ``driver hot reload implementation references stay behind boundary files`` () =

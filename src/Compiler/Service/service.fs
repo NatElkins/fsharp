@@ -24,7 +24,6 @@ open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.CodeAnalysis.TransparentCompiler
 open FSharp.Compiler.CompilerConfig
 open FSharp.Compiler.CompilerGeneratedNameMapState
-open FSharp.Compiler.CompilerEmitHookState
 open FSharp.Compiler.CompilerOptions
 open FSharp.Compiler.Diagnostics
 open FSharp.Compiler.Driver
@@ -38,7 +37,6 @@ open FSharp.Compiler.BuildGraph
 open FSharp.Compiler.HotReload
 open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.HotReload.DeltaBuilder
-open FSharp.Compiler.HotReloadEmitHook
 open FSharp.Compiler.IlxDeltaEmitter
 open FSharp.Compiler.TypedTree
 open FSharp.Compiler.GeneratedNames
@@ -181,7 +179,6 @@ type internal FSharpHotReloadService
     do FSharp.Compiler.HotReloadState.setSessionStore sessionStore
 
     let editAndContinueService = FSharpEditAndContinueLanguageService(sessionStore)
-    let serviceScopedEmitHook = createHotReloadCompilerEmitHook editAndContinueService
 
     // Snapshot of the last committed output assembly. If semantic edits are detected while this
     // fingerprint remains unchanged, we refuse to emit deltas from stale binaries.
@@ -256,9 +253,6 @@ type internal FSharpHotReloadService
                             editAndContinueService.EndSession()
                             let startTransition = editAndContinueService.StartSession(baseline, implementationFiles)
 
-                            // Scope ambient hook activation to explicit hot reload sessions so
-                            // unrelated non-session compilations stay on the default emit path.
-                            setAmbientCompilerEmitHook serviceScopedEmitHook
 
                             if traceSessionTransitions then
                                 printfn
@@ -393,7 +387,6 @@ type internal FSharpHotReloadService
         lock hotReloadGate (fun () ->
             currentSynthesizedTypeMaps <- None
             currentOutputFingerprint <- None
-            clearAmbientCompilerEmitHook()
             editAndContinueService.ResetSessionState())
 
     member _.SessionActive = editAndContinueService.IsSessionActive
@@ -1010,6 +1003,36 @@ type FSharpChecker
     member _.Compile(argv: string[], ?userOpName: string) =
         let _userOpName = defaultArg userOpName "Unknown"
         use _ = Activity.start "FSharpChecker.Compile" [| Activity.Tags.userOpName, _userOpName |]
+
+        let hasEnableArgument (feature: string) (argv: string[]) =
+            let inlineEnabled =
+                argv
+                |> Array.exists (fun arg ->
+                    arg.StartsWith("--enable:", StringComparison.OrdinalIgnoreCase)
+                    && arg.Substring("--enable:".Length).Equals(feature, StringComparison.OrdinalIgnoreCase))
+
+            let splitEnabled =
+                argv
+                |> Array.pairwise
+                |> Array.exists (fun (arg, value) ->
+                    arg.Equals("--enable", StringComparison.OrdinalIgnoreCase)
+                    && value.Equals(feature, StringComparison.OrdinalIgnoreCase))
+
+            inlineEnabled || splitEnabled
+
+        let ensureHotReloadSessionHookArgument (argv: string[]) =
+            // Keep synthesized-name replay active for checker-owned hot reload sessions even when
+            // callers intentionally compile updates without --enable:hotreloaddeltas.
+            if
+                hotReloadService.SessionActive
+                && not (hasEnableArgument "hotreloaddeltas" argv)
+                && not (hasEnableArgument "hotreloadhook" argv)
+            then
+                Array.append argv [| "--enable:hotreloadhook" |]
+            else
+                argv
+
+        let argv = ensureHotReloadSessionHookArgument argv
 
         async {
             let ctok = CompilationThreadToken()

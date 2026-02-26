@@ -8,8 +8,7 @@ open FSharp.Compiler.HotReloadEmitHook
 /// independent from hot reload implementation details.
 ///
 /// This wiring is intentionally explicit-only: enabling the compiler flag wires
-/// the hook for the current compilation invocation, while ambient/session wiring
-/// is owned by the hot reload service lifecycle.
+/// the hook for the current compilation invocation only.
 let configureHotReloadEmitHook (tcConfigB: TcConfigBuilder) =
     tcConfigB.compilerEmitHook <- Some hotReloadCompilerEmitHook
 

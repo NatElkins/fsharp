@@ -1,6 +1,6 @@
 # Hot Reload: T-Gro Feedback Closure Matrix
 
-Last updated: 2026-02-25
+Last updated: 2026-02-26
 Source comments: NatElkins/fsharp#1 (T-Gro top-level review comments, 2026-02-20)
 
 ## Goal
@@ -17,16 +17,16 @@ Track each major review concern with objective status and evidence so follow-up 
 
 ### 1) Plugin boundary / layering safety-first
 
-- Status: **Partially addressed**
+- Status: **Addressed**
 - Evidence:
-  - `fsc` emit path now routes through generic emit hook abstraction rather than direct hot reload APIs: `src/Compiler/Driver/fsc.fs`.
-  - Hot reload hook bootstrap is explicit-only (`--enable:hotreloaddeltas`), with ambient lifecycle owned by hot reload service session start/end: `src/Compiler/Driver/CompilerEmitHookBootstrap.fs`, `src/Compiler/Service/service.fs`.
-  - Service sessions now install a service-scoped emit hook (`createHotReloadCompilerEmitHook editAndContinueService`) instead of routing through singleton service state when the ambient hook is enabled: `src/Compiler/Driver/HotReloadEmitHook.fs`, `src/Compiler/Service/service.fs`.
-  - `fsc` no longer imports `CompilerEmitHookState` directly; emit-hook resolution now flows through the bootstrap boundary adapter (`resolveCompilerEmitHookForCompile`): `src/Compiler/Driver/fsc.fs`, `src/Compiler/Driver/CompilerEmitHookBootstrap.fs`.
-  - Architecture guards enforce these boundaries: `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
+  - `fsc` emit path routes through a generic emit hook abstraction rather than direct hot reload APIs: `src/Compiler/Driver/fsc.fs`.
+  - Hot reload hook bootstrap remains explicit-only (`--enable:hotreloaddeltas`) and wires hook behavior per compilation invocation: `src/Compiler/Driver/CompilerEmitHookBootstrap.fs`.
+  - Ambient compiler emit-hook mutation has been removed; hook resolution is now explicit-config-only with no process-wide mutable fallback: `src/Compiler/Driver/CompilerEmitHookState.fs`.
+  - Hot reload service no longer mutates compiler-wide hook state during session start/end: `src/Compiler/Service/service.fs`.
+- Checker compile now injects explicit hook-only enablement (`--enable:hotreloadhook`) while a session is active, preserving synthesized-name replay without ambient mutable hooks: `src/Compiler/Service/service.fs`, `src/Compiler/Driver/CompilerOptions.fs`.
+  - `fsc` still does not import hot reload implementation modules directly and resolves hooks through the bootstrap boundary adapter: `src/Compiler/Driver/fsc.fs`, `src/Compiler/Driver/CompilerEmitHookBootstrap.fs`.
+  - Architecture guards enforce explicit-only/no-ambient wiring boundaries: `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
   - Output parity regression proves non-hot-reload artifacts stay unchanged when the flag is toggled: `tests/FSharp.Compiler.Service.Tests/HotReload/HotReloadCheckerTests.fs` (`Compiler outputs stay byte-identical when hot reload capture flag is toggled`).
-- Remaining gap:
-  - Compiler-wide hook/global state boundaries are still inside core compiler assemblies (not a separate plugin assembly boundary).
 
 ### 2) Remove IlxGen-specific hot reload naming hook drift
 
