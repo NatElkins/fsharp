@@ -456,6 +456,27 @@ type private LoweredShapeCollector =
       StateMachineOperations: ResizeArray<string>
       QueryOperations: ResizeArray<string> }
 
+let private traitConstraintShapeDigest (denv: DisplayEnv) (traitInfo: TraitConstraintInfo) =
+    // Capture a structural trait-call fingerprint alongside operation-name heuristics.
+    // This lets lowered-shape classification track new builder operations without
+    // requiring this matcher to be updated for every new member name.
+    let supportTypes =
+        traitInfo.SupportTypes
+        |> List.map (tyToString denv)
+        |> String.concat ","
+
+    let argumentTypes =
+        traitInfo.GetCompiledArgumentTypes()
+        |> List.map (tyToString denv)
+        |> String.concat ","
+
+    let returnType =
+        traitInfo.CompiledReturnType
+        |> Option.map (tyToString denv)
+        |> Option.defaultValue "System.Void"
+
+    $"member={traitInfo.MemberLogicalName}|kind={traitInfo.MemberFlags.MemberKind}|instance={traitInfo.MemberFlags.IsInstance}|support=[{supportTypes}]|args=[{argumentTypes}]|ret={returnType}"
+
 let private isLikelyQueryOperationName (name: string) =
     match name with
     | "For"
@@ -493,7 +514,7 @@ let private addDistinct (items: ResizeArray<string>) (value: string) =
     if not (String.IsNullOrEmpty value) && not (items.Contains value) then
         items.Add value
 
-let private collectLoweredShapeInfo (expr: Expr) =
+let private collectLoweredShapeInfo (denv: DisplayEnv) (expr: Expr) =
     let collector =
         { LambdaArities = ResizeArray()
           StateMachineOperations = ResizeArray()
@@ -542,6 +563,9 @@ let private collectLoweredShapeInfo (expr: Expr) =
             | TOp.While _ -> addDistinct collector.StateMachineOperations "While"
             | TOp.IntegerForLoop _ -> addDistinct collector.StateMachineOperations "ForLoop"
             | TOp.TraitCall traitInfo ->
+                let traitDigest = traitConstraintShapeDigest denv traitInfo
+                addDistinct collector.QueryOperations traitDigest
+
                 if isLikelyQueryOperationName traitInfo.MemberLogicalName then
                     addDistinct collector.QueryOperations traitInfo.MemberLogicalName
                 elif isLikelyStateMachineOperationName traitInfo.MemberLogicalName then
@@ -568,6 +592,9 @@ let private collectLoweredShapeInfo (expr: Expr) =
         | Expr.TyChoose (_, bodyExpr, _) ->
             walk bodyExpr
         | Expr.WitnessArg (traitInfo, _) ->
+            let traitDigest = traitConstraintShapeDigest denv traitInfo
+            addDistinct collector.QueryOperations traitDigest
+
             if isLikelyQueryOperationName traitInfo.MemberLogicalName then
                 addDistinct collector.QueryOperations traitInfo.MemberLogicalName
             elif isLikelyStateMachineOperationName traitInfo.MemberLogicalName then
@@ -852,7 +879,7 @@ and private snapshotBinding g denv path (TBind (var, expr, _)) =
     let signature = tyToString denv var.Type
     let constraints = typarConstraintsDigest denv var.Typars
     let bodyHash = exprDigest denv expr
-    let lambdaShapeDigest, stateMachineShapeDigest, queryShapeDigest = collectLoweredShapeInfo expr
+    let lambdaShapeDigest, stateMachineShapeDigest, queryShapeDigest = collectLoweredShapeInfo denv expr
     let containingEntity = tryGetContainingEntityFullName var
     let memberKind = memberKindOfVal var
     let vref = mkLocalValRef var

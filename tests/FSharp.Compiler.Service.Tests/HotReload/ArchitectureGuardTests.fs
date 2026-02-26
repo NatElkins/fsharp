@@ -97,11 +97,11 @@ let ``typed tree diff no longer relies on state-machine declaring-type string he
     Assert.DoesNotContain("\"QueryBuilder\"", source)
 
 [<Fact>]
-let ``typed tree diff constrains value-reference operation-name heuristics to members`` () =
+let ``typed tree diff supplements operation-name heuristics with trait-shape fingerprints`` () =
     let source = readCompilerFile "src/Compiler/TypedTree/TypedTreeDiff.fs"
 
     Assert.Contains("if vref.LogicalName.Equals(\"MoveNext\", StringComparison.Ordinal) then", source)
-    Assert.Contains("elif vref.MemberInfo.IsSome then", source)
+    Assert.Contains("traitConstraintShapeDigest denv traitInfo", source)
     Assert.Contains("if isLikelyQueryOperationName vref.LogicalName then", source)
     Assert.DoesNotContain("vref.IsModuleBinding", source)
 
