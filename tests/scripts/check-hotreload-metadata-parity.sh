@@ -15,4 +15,7 @@ cd "${ROOT}"
 "${DOTNET}" test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj \
   -c Debug --no-build --filter FullyQualifiedName~SrmParityTests -v minimal
 
-echo "hotreload-metadata-parity-check: SRM parity test slice passed."
+"${DOTNET}" test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj \
+  -c Debug --no-build --filter FullyQualifiedName~HotReload.MdvValidationTests -v minimal
+
+echo "hotreload-metadata-parity-check: SRM + mdv parity slices passed."

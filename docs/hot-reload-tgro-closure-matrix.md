@@ -79,7 +79,7 @@ Track each major review concern with objective status and evidence so follow-up 
 - Status: **Partially addressed**
 - Evidence:
   - Delta metadata serialization remains hand-rolled in hot reload writer path (`DeltaMetadataSerializer`, `DeltaMetadataTables`, `ILBaselineReader`).
-  - Automated SRM parity gate now validates table/heap parity across scenarios and multi-generation chains: `tests/FSharp.Compiler.Service.Tests/HotReload/SrmParityTests.fs`, `tests/scripts/check-hotreload-metadata-parity.sh`.
+  - Automated parity gate now validates SRM table/heap parity plus mdv component scenarios across generations: `tests/FSharp.Compiler.Service.Tests/HotReload/SrmParityTests.fs`, `tests/FSharp.Compiler.ComponentTests/HotReload/MdvValidationTests.fs`, `tests/scripts/check-hotreload-metadata-parity.sh`.
 - Remaining gap:
   - Keep parity coverage current as runtime/metadata shapes evolve; this is still not a direct `System.Reflection.Metadata` writer reuse path.
 
