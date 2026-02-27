@@ -1,6 +1,6 @@
 # Hot Reload: T-Gro Feedback Closure Matrix
 
-Last updated: 2026-02-26
+Last updated: 2026-02-27
 Source comments: NatElkins/fsharp#1 (T-Gro top-level review comments, 2026-02-20)
 
 ## Goal
@@ -56,15 +56,15 @@ Track each major review concern with objective status and evidence so follow-up 
 
 ### 6) State-machine/query string heuristics
 
-- Status: **Partially addressed**
+- Status: **Addressed**
 - Evidence:
   - Declaring-type string heuristic removed.
-  - Value-reference operation-name heuristics are now constrained to member references (`vref.MemberInfo.IsSome`) plus the explicit `MoveNext` sentinel, removing module-binding name heuristics while preserving lowered-shape detection: `src/Compiler/TypedTree/TypedTreeDiff.fs`.
-  - Lowered-shape collection now also records structural trait-call fingerprints (`traitConstraintShapeDigest`) for `TraitCall`/`WitnessArg`, so new builder operations contribute non-name-only evidence without changing current rude-edit outcomes: `src/Compiler/TypedTree/TypedTreeDiff.fs`.
-  - Lowered-shape digests now split structural vs heuristic signals (`formatLoweredShapeDigest`) and synthesized rude-edit classification explicitly evaluates both segments (`hasLoweredShapeDigestSegmentValues`), making fallback-to-name heuristics explicit instead of implicit: `src/Compiler/TypedTree/TypedTreeDiff.fs`.
-  - Architecture guard enforces member-only value-branch gating, trait-shape collection, and explicit structural/heuristic digest helpers: `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
-- Remaining gap:
-  - Remaining work is to reduce or remove the final operation-name heuristic lists (`isLikelyQueryOperationName` / `isLikelyStateMachineOperationName`) once equivalent semantic signals are available for all covered constructs.
+  - Operation-name list heuristics were removed from lowered-shape collection/classification (`isLikelyQueryOperationName` / `isLikelyStateMachineOperationName` no longer exist): `src/Compiler/TypedTree/TypedTreeDiff.fs`.
+  - Lowered-shape digests are now structural-only (`formatLoweredShapeDigest` emits `struct=[...]`), and synthesized classification uses structural evidence plus the explicit `MoveNext` sentinel: `src/Compiler/TypedTree/TypedTreeDiff.fs`.
+  - Structural trait-call fingerprints (`traitConstraintShapeDigest`) remain in `TraitCall`/`WitnessArg` paths, preserving query-lowering evidence without name-list matching: `src/Compiler/TypedTree/TypedTreeDiff.fs`.
+  - Architecture guards now enforce structural-only lowered-shape classification and explicit absence of operation-name heuristics: `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
+  - Service regressions verify query-like/state-machine-like member names without lowered rewrites do not emit query/state-machine rude edits: `tests/FSharp.Compiler.Service.Tests/HotReload/TypedTreeDiffTests.fs`.
+  - Existing async/query lowered-shape edits are now explicitly locked to structural-only fallback (`LambdaShapeChange`) when no dedicated query/state structural marker is present, so classification no longer depends on operation-name lists: `tests/FSharp.Compiler.Service.Tests/HotReload/TypedTreeDiffTests.fs`.
 
 ### 7) String-based symbol identity chain
 
@@ -142,5 +142,5 @@ Track each major review concern with objective status and evidence so follow-up 
 ## Validation performed for this update
 
 - `./.dotnet/dotnet build FSharp.sln -c Debug -v minimal`
-- `./.dotnet/dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload -v minimal` (`322` passed)
+- `./.dotnet/dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload -v minimal` (`327` passed)
 - `./.dotnet/dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload -v minimal` (`110` passed)

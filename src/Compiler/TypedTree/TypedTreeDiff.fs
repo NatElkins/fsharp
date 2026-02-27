@@ -454,9 +454,7 @@ let private opDigest (denv: DisplayEnv) (op: TOp) =
 type private LoweredShapeCollector =
     { LambdaArities: ResizeArray<int>
       StateMachineStructuralOperations: ResizeArray<string>
-      StateMachineHeuristicOperations: ResizeArray<string>
-      QueryStructuralOperations: ResizeArray<string>
-      QueryHeuristicOperations: ResizeArray<string> }
+      QueryStructuralOperations: ResizeArray<string> }
 
 let private traitConstraintShapeDigest (denv: DisplayEnv) (traitInfo: TraitConstraintInfo) =
     // Capture a structural trait-call fingerprint for lowered-shape classification.
@@ -479,78 +477,32 @@ let private traitConstraintShapeDigest (denv: DisplayEnv) (traitInfo: TraitConst
 
     $"member={traitInfo.MemberLogicalName}|kind={traitInfo.MemberFlags.MemberKind}|instance={traitInfo.MemberFlags.IsInstance}|support=[{supportTypes}]|args=[{argumentTypes}]|ret={returnType}"
 
-let private isLikelyQueryOperationName (name: string) =
-    match name with
-    | "For"
-    | "Select"
-    | "SelectMany"
-    | "Where"
-    | "GroupBy"
-    | "Join"
-    | "LeftOuterJoin"
-    | "SortBy"
-    | "SortByDescending"
-    | "ThenBy"
-    | "ThenByDescending"
-    | "Yield"
-    | "YieldFrom"
-    | "Run"
-    | "Zero"
-    | "Source"
-    | "Quote" -> true
-    | _ -> false
-
-let private isLikelyStateMachineOperationName (name: string) =
-    match name with
-    | "Bind"
-    | "Return"
-    | "ReturnFrom"
-    | "Delay"
-    | "Combine"
-    | "Using"
-    | "TryWith"
-    | "TryFinally" -> true
-    | _ -> false
-
 let private addDistinct (items: ResizeArray<string>) (value: string) =
     if not (String.IsNullOrEmpty value) && not (items.Contains value) then
         items.Add value
 
-let private formatLoweredShapeDigest (structural: ResizeArray<string>) (heuristic: ResizeArray<string>) =
+let private formatLoweredShapeDigest (structural: ResizeArray<string>) =
     let structuralDigest =
         structural
         |> Seq.sort
         |> String.concat ","
 
-    let heuristicDigest =
-        heuristic
-        |> Seq.sort
-        |> String.concat ","
-
-    $"struct=[{structuralDigest}];heuristic=[{heuristicDigest}]"
+    $"struct=[{structuralDigest}]"
 
 let private collectLoweredShapeInfo (denv: DisplayEnv) (expr: Expr) =
     let collector =
         { LambdaArities = ResizeArray()
           StateMachineStructuralOperations = ResizeArray()
-          StateMachineHeuristicOperations = ResizeArray()
-          QueryStructuralOperations = ResizeArray()
-          QueryHeuristicOperations = ResizeArray() }
+          QueryStructuralOperations = ResizeArray() }
 
     let rec walk (expr: Expr) =
         match expr with
         | Expr.Const _ -> ()
         | Expr.Val (vref, _, _) ->
-            // Keep operation-name heuristics constrained to member references only.
-            // This avoids broad local/module-binding name matching while preserving
-            // lowered query/state-machine signal collection.
+            // Keep state-machine classification tied to structural evidence from
+            // compiler-generated MoveNext references instead of fragile name lists.
             if vref.LogicalName.Equals("MoveNext", StringComparison.Ordinal) then
                 addDistinct collector.StateMachineStructuralOperations vref.LogicalName
-            elif vref.MemberInfo.IsSome then
-                if isLikelyQueryOperationName vref.LogicalName then
-                    addDistinct collector.QueryHeuristicOperations vref.LogicalName
-                elif isLikelyStateMachineOperationName vref.LogicalName then
-                    addDistinct collector.StateMachineHeuristicOperations vref.LogicalName
         | Expr.App (funcExpr, _, _, args, _) ->
             walk funcExpr
             args |> List.iter walk
@@ -582,11 +534,6 @@ let private collectLoweredShapeInfo (denv: DisplayEnv) (expr: Expr) =
             | TOp.TraitCall traitInfo ->
                 let traitDigest = traitConstraintShapeDigest denv traitInfo
                 addDistinct collector.QueryStructuralOperations traitDigest
-
-                if isLikelyQueryOperationName traitInfo.MemberLogicalName then
-                    addDistinct collector.QueryHeuristicOperations traitInfo.MemberLogicalName
-                elif isLikelyStateMachineOperationName traitInfo.MemberLogicalName then
-                    addDistinct collector.StateMachineHeuristicOperations traitInfo.MemberLogicalName
             | _ -> ()
 
             args |> List.iter walk
@@ -611,11 +558,6 @@ let private collectLoweredShapeInfo (denv: DisplayEnv) (expr: Expr) =
         | Expr.WitnessArg (traitInfo, _) ->
             let traitDigest = traitConstraintShapeDigest denv traitInfo
             addDistinct collector.QueryStructuralOperations traitDigest
-
-            if isLikelyQueryOperationName traitInfo.MemberLogicalName then
-                addDistinct collector.QueryHeuristicOperations traitInfo.MemberLogicalName
-            elif isLikelyStateMachineOperationName traitInfo.MemberLogicalName then
-                addDistinct collector.StateMachineHeuristicOperations traitInfo.MemberLogicalName
         | Expr.StaticOptimization (_, onExpr, elseExpr, _) ->
             walk onExpr
             walk elseExpr
@@ -628,14 +570,10 @@ let private collectLoweredShapeInfo (denv: DisplayEnv) (expr: Expr) =
         |> String.concat ","
 
     let stateMachineDigest =
-        formatLoweredShapeDigest
-            collector.StateMachineStructuralOperations
-            collector.StateMachineHeuristicOperations
+        formatLoweredShapeDigest collector.StateMachineStructuralOperations
 
     let queryDigest =
-        formatLoweredShapeDigest
-            collector.QueryStructuralOperations
-            collector.QueryHeuristicOperations
+        formatLoweredShapeDigest collector.QueryStructuralOperations
 
     lambdaDigest, stateMachineDigest, queryDigest
 
@@ -821,22 +759,14 @@ let private tryClassifySynthesizedLoweredShapeChurn (snapshot: BindingSnapshot) 
         let hasQueryStructuralEvidence =
             hasLoweredShapeDigestSegmentValues "struct" snapshot.QueryShapeDigest
 
-        let hasQueryHeuristicEvidence =
-            hasLoweredShapeDigestSegmentValues "heuristic" snapshot.QueryShapeDigest
-
         let hasQueryEvidence =
             hasQueryStructuralEvidence
-            || hasQueryHeuristicEvidence
 
         let hasStateMachineStructuralEvidence =
             hasLoweredShapeDigestSegmentValues "struct" snapshot.StateMachineShapeDigest
 
-        let hasStateMachineHeuristicEvidence =
-            hasLoweredShapeDigestSegmentValues "heuristic" snapshot.StateMachineShapeDigest
-
         let hasStateMachineEvidence =
             hasStateMachineStructuralEvidence
-            || hasStateMachineHeuristicEvidence
             || logicalName.Equals("MoveNext", StringComparison.Ordinal)
 
         let hasLambdaEvidence =

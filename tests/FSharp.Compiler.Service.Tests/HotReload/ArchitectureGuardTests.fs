@@ -97,14 +97,16 @@ let ``typed tree diff no longer relies on state-machine declaring-type string he
     Assert.DoesNotContain("\"QueryBuilder\"", source)
 
 [<Fact>]
-let ``typed tree diff supplements operation-name heuristics with trait-shape fingerprints`` () =
+let ``typed tree diff uses structural lowered-shape evidence only`` () =
     let source = readCompilerFile "src/Compiler/TypedTree/TypedTreeDiff.fs"
 
     Assert.Contains("if vref.LogicalName.Equals(\"MoveNext\", StringComparison.Ordinal) then", source)
     Assert.Contains("traitConstraintShapeDigest denv traitInfo", source)
     Assert.Contains("formatLoweredShapeDigest", source)
     Assert.Contains("hasLoweredShapeDigestSegmentValues", source)
-    Assert.Contains("if isLikelyQueryOperationName vref.LogicalName then", source)
+    Assert.DoesNotContain("isLikelyQueryOperationName", source)
+    Assert.DoesNotContain("isLikelyStateMachineOperationName", source)
+    Assert.DoesNotContain("heuristic=[", source)
     Assert.DoesNotContain("vref.IsModuleBinding", source)
 
 [<Fact>]

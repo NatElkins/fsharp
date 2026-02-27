@@ -268,7 +268,7 @@ let evaluate () =
         Assert.Contains(result.RudeEdits, fun rude -> rude.Kind = RudeEditKind.LambdaShapeChange)
 
     [<Fact>]
-    let ``state machine lowering shape change triggers rude edit`` () =
+    let ``state machine lowering shape change falls back to lambda rude edit in structural-only mode`` () =
         use harness = new DiffTestHarness()
         let baseline_source = """
 module Library
@@ -293,10 +293,10 @@ let runAsync () =
         let result = harness.Diff baseline updated
 
         Assert.NotEmpty(result.RudeEdits)
-        Assert.Equal(RudeEditKind.StateMachineShapeChange, result.RudeEdits[0].Kind)
+        Assert.Equal(RudeEditKind.LambdaShapeChange, result.RudeEdits[0].Kind)
 
     [<Fact>]
-    let ``state machine lowering shape change with async resource scope triggers rude edit`` () =
+    let ``state machine lowering shape change with async resource scope falls back to lambda rude edit in structural-only mode`` () =
         use harness = new DiffTestHarness()
         let baseline_source = """
 module Library
@@ -321,12 +321,12 @@ let runAsync () =
         let result = harness.Diff baseline updated
 
         Assert.NotEmpty(result.RudeEdits)
-        Assert.Contains(result.RudeEdits, fun rude -> rude.Kind = RudeEditKind.StateMachineShapeChange)
+        Assert.Contains(result.RudeEdits, fun rude -> rude.Kind = RudeEditKind.LambdaShapeChange)
         Assert.DoesNotContain(result.RudeEdits, fun rude -> rude.Kind = RudeEditKind.DeclarationAdded)
         Assert.DoesNotContain(result.RudeEdits, fun rude -> rude.Kind = RudeEditKind.DeclarationRemoved)
 
     [<Fact>]
-    let ``query lowering shape change triggers rude edit`` () =
+    let ``query lowering shape change falls back to lambda rude edit in structural-only mode`` () =
         use harness = new DiffTestHarness()
         let baseline_source = """
 module Library
@@ -359,10 +359,10 @@ let queryValues () =
         let result = harness.Diff baseline updated
 
         Assert.NotEmpty(result.RudeEdits)
-        Assert.Equal(RudeEditKind.QueryExpressionShapeChange, result.RudeEdits[0].Kind)
+        Assert.Equal(RudeEditKind.LambdaShapeChange, result.RudeEdits[0].Kind)
 
     [<Fact>]
-    let ``query lowering shape change with sort clause triggers rude edit`` () =
+    let ``query lowering shape change with sort clause falls back to lambda rude edit in structural-only mode`` () =
         use harness = new DiffTestHarness()
         let baseline_source = """
 module Library
@@ -394,7 +394,73 @@ let queryValues () =
 
         let result = harness.Diff baseline updated
 
-        Assert.Contains(result.RudeEdits, fun rude -> rude.Kind = RudeEditKind.QueryExpressionShapeChange)
+        Assert.Contains(result.RudeEdits, fun rude -> rude.Kind = RudeEditKind.LambdaShapeChange)
+
+    [<Fact>]
+    let ``query-like member names without query lowering do not trigger query rude edit`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+
+type QueryLike() =
+    member _.Where(x: int) = x
+
+let evaluate () =
+    let q = QueryLike()
+    q.Where(41)
+"""
+        let updated_source = """
+module Library
+
+type QueryLike() =
+    member _.Where(x: int) = x + 1
+
+let evaluate () =
+    let q = QueryLike()
+    q.Where(41)
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        Assert.DoesNotContain(result.RudeEdits, fun rude -> rude.Kind = RudeEditKind.QueryExpressionShapeChange)
+        Assert.DoesNotContain(result.RudeEdits, fun rude -> rude.Kind = RudeEditKind.StateMachineShapeChange)
+
+    [<Fact>]
+    let ``state-machine-like member names without lowered shape do not trigger state-machine rude edit`` () =
+        use harness = new DiffTestHarness()
+        let baseline_source = """
+module Library
+
+type WorkflowLike() =
+    member _.Bind(x: int) = x
+
+let run () =
+    let workflow = WorkflowLike()
+    workflow.Bind(41)
+"""
+        let updated_source = """
+module Library
+
+type WorkflowLike() =
+    member _.Bind(x: int) = x + 1
+
+let run () =
+    let workflow = WorkflowLike()
+    workflow.Bind(41)
+"""
+        harness.Rewrite(baseline_source)
+        let baseline = harness.Compile()
+        harness.Rewrite(updated_source)
+        let updated = harness.Compile()
+
+        let result = harness.Diff baseline updated
+
+        Assert.DoesNotContain(result.RudeEdits, fun rude -> rude.Kind = RudeEditKind.QueryExpressionShapeChange)
+        Assert.DoesNotContain(result.RudeEdits, fun rude -> rude.Kind = RudeEditKind.StateMachineShapeChange)
 
     // =========================================================================
     // Method Addition Tests
