@@ -90,14 +90,14 @@ Track each major review concern with objective status and evidence so follow-up 
 
 ### 9) Large `IlxDeltaEmitter` single-function blast radius
 
-- Status: **Partially addressed**
+- Status: **Addressed**
 - Evidence:
   - `emitDelta` now routes metadata row assembly through explicit helper phases (`buildMethodAndParameterRows`, `buildPropertyEventAndSemanticsRows`, `buildCustomAttributeRows`).
   - Final payload assembly (`added/changed method projection`, `PDB delta`, `baseline apply`) now runs through dedicated `finalizeDeltaArtifacts` helpers (`buildAddedOrChangedMethods`, `buildDeltaToUpdatedMethodTokenMap`) instead of inline logic.
-  - Metadata reference remapping (`TypeRef`, `MemberRef`, `MethodSpec`, `AssemblyRef`, entity-token dispatch) is now extracted into `createMetadataReferenceRemapper`, reducing direct token-remap state mutation inside `emitDelta`: `src/Compiler/CodeGen/IlxDeltaEmitter.fs`.
-  - Architecture guard enforces that phase extraction remains explicit: `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
-- Remaining gap:
-  - Additional extraction is still needed to fully separate remap and metadata-reference remapping responsibilities.
+  - Metadata reference remapping (`TypeRef`, `MemberRef`, `MethodSpec`, `AssemblyRef`, entity-token dispatch) is extracted into `createMetadataReferenceRemapper`: `src/Compiler/CodeGen/IlxDeltaEmitter.fs`.
+  - Definition-token remapping is extracted into `createDefinitionTokenRemapper` and consumed separately for definition/association resolution (`Property`/`Event`) so metadata-reference remap flow no longer carries definition-map dictionaries: `src/Compiler/CodeGen/IlxDeltaEmitter.fs`.
+  - Architecture guards now enforce both explicit emitter phases and remapper separation (`MetadataReferenceRemapContext` stays reference-focused while emit flow wires both remappers explicitly): `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
+
 
 ### 10) HR files in core directories
 

@@ -1723,6 +1723,39 @@ let private finalizeDeltaArtifacts
 
     delta
 
+// Definition-table token remapping stays isolated from metadata-reference row remapping
+// so accessor/association resolution can evolve without touching TypeRef/MemberRef/MethodSpec logic.
+type private DefinitionTokenRemapper =
+    { RemapDefinitionToken: int -> int
+      RemapPropertyAssociationToken: int -> int
+      RemapEventAssociationToken: int -> int }
+
+type private DefinitionTokenRemapContext =
+    { TypeTokenMap: Dictionary<int, int>
+      FieldTokenMap: Dictionary<int, int>
+      MethodTokenMap: Dictionary<int, int>
+      PropertyTokenMap: Dictionary<int, int>
+      EventTokenMap: Dictionary<int, int> }
+
+let private createDefinitionTokenRemapper (context: DefinitionTokenRemapContext) : DefinitionTokenRemapper =
+    let inline remapWith (dict: Dictionary<int, int>) token =
+        match dict.TryGetValue token with
+        | true, mapped -> mapped
+        | _ -> token
+
+    let remapDefinitionToken token =
+        match classifyEntityTokenRemapKind token with
+        | EntityTokenRemapKind.TypeDef -> remapWith context.TypeTokenMap token
+        | EntityTokenRemapKind.FieldDef -> remapWith context.FieldTokenMap token
+        | EntityTokenRemapKind.MethodDef -> remapWith context.MethodTokenMap token
+        | EntityTokenRemapKind.Event -> remapWith context.EventTokenMap token
+        | EntityTokenRemapKind.Property -> remapWith context.PropertyTokenMap token
+        | _ -> token
+
+    { RemapDefinitionToken = remapDefinitionToken
+      RemapPropertyAssociationToken = remapWith context.PropertyTokenMap
+      RemapEventAssociationToken = remapWith context.EventTokenMap }
+
 type private MetadataReferenceRemapper =
     { RemapEntityToken: int -> int
       RemapAssemblyRefToken: int -> int }
@@ -1732,11 +1765,7 @@ type private MetadataReferenceRemapContext =
       TraceMetadata: bool
       BaselineMemberRefRowCount: int
       TryReuseBaselineTypeRef: string -> string -> string -> int option
-      TypeTokenMap: Dictionary<int, int>
-      FieldTokenMap: Dictionary<int, int>
-      MethodTokenMap: Dictionary<int, int>
-      PropertyTokenMap: Dictionary<int, int>
-      EventTokenMap: Dictionary<int, int>
+      RemapDefinitionToken: int -> int
       TypeReferenceRows: ResizeArray<TypeReferenceRowInfo>
       MemberReferenceRows: ResizeArray<MemberReferenceRowInfo>
       AssemblyReferenceRows: ResizeArray<AssemblyReferenceRowInfo>
@@ -1757,11 +1786,6 @@ type private MetadataReferenceRemapContext =
 let private createMetadataReferenceRemapper (context: MetadataReferenceRemapContext) : MetadataReferenceRemapper =
     let metadataReader = context.MetadataReader
     let traceMetadata = context.TraceMetadata
-
-    let inline remapWith (dict: Dictionary<int, int>) token =
-        match dict.TryGetValue token with
-        | true, mapped -> mapped
-        | _ -> token
 
     let rec remapAssemblyRefToken token =
         match context.AssemblyRefTokenMap.TryGetValue token with
@@ -1867,7 +1891,7 @@ let private createMetadataReferenceRemapper (context: MetadataReferenceRemapCont
                         let parentToken = MetadataTokens.GetToken(row.Parent)
                         match row.Parent.Kind with
                         | HandleKind.TypeDefinition ->
-                            let mapped = remapWith context.TypeTokenMap parentToken
+                            let mapped = context.RemapDefinitionToken parentToken
                             MRP_TypeDef(TypeDefHandle(mapped &&& 0x00FFFFFF))
                         | HandleKind.TypeReference ->
                             let mapped = remapTypeRefToken parentToken
@@ -1876,7 +1900,7 @@ let private createMetadataReferenceRemapper (context: MetadataReferenceRemapCont
                             let rowId = parentToken &&& 0x00FFFFFF
                             MRP_TypeSpec(TypeSpecHandle rowId)
                         | HandleKind.MethodDefinition ->
-                            let mapped = remapWith context.MethodTokenMap parentToken
+                            let mapped = context.RemapDefinitionToken parentToken
                             MRP_MethodDef(MethodDefHandle(mapped &&& 0x00FFFFFF))
                         | HandleKind.ModuleReference ->
                             let rowId = parentToken &&& 0x00FFFFFF
@@ -1968,14 +1992,14 @@ let private createMetadataReferenceRemapper (context: MetadataReferenceRemapCont
 
     and remapEntityToken token =
         match classifyEntityTokenRemapKind token with
-        | EntityTokenRemapKind.TypeDef -> remapWith context.TypeTokenMap token
-        | EntityTokenRemapKind.FieldDef -> remapWith context.FieldTokenMap token
-        | EntityTokenRemapKind.MethodDef -> remapWith context.MethodTokenMap token
+        | EntityTokenRemapKind.TypeDef
+        | EntityTokenRemapKind.FieldDef
+        | EntityTokenRemapKind.MethodDef
+        | EntityTokenRemapKind.Event
+        | EntityTokenRemapKind.Property -> context.RemapDefinitionToken token
         | EntityTokenRemapKind.MemberRef -> remapMemberRefToken token
         | EntityTokenRemapKind.MethodSpec -> remapMethodSpecToken token
         | EntityTokenRemapKind.TypeRef -> remapTypeRefToken token
-        | EntityTokenRemapKind.Event -> remapWith context.EventTokenMap token
-        | EntityTokenRemapKind.Property -> remapWith context.PropertyTokenMap token
         | EntityTokenRemapKind.AssemblyRef -> remapAssemblyRefToken token
         | EntityTokenRemapKind.Passthrough -> token
 
@@ -2459,17 +2483,22 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             addedMethodDeltaTokens[key] <- deltaToken
             addMapping methodTokenMap newToken deltaToken
 
+    // Keep definition-token projection separate from metadata-reference remapping.
+    let definitionTokenRemapper =
+        createDefinitionTokenRemapper
+            { TypeTokenMap = typeTokenMap
+              FieldTokenMap = fieldTokenMap
+              MethodTokenMap = methodTokenMap
+              PropertyTokenMap = propertyTokenMap
+              EventTokenMap = eventTokenMap }
+
     let metadataReferenceRemapper =
         createMetadataReferenceRemapper
             { MetadataReader = metadataReader
               TraceMetadata = traceMetadata.Value
               BaselineMemberRefRowCount = baselineMemberRefRowCount
               TryReuseBaselineTypeRef = tryReuseBaselineTypeRef
-              TypeTokenMap = typeTokenMap
-              FieldTokenMap = fieldTokenMap
-              MethodTokenMap = methodTokenMap
-              PropertyTokenMap = propertyTokenMap
-              EventTokenMap = eventTokenMap
+              RemapDefinitionToken = definitionTokenRemapper.RemapDefinitionToken
               TypeReferenceRows = typeReferenceRows
               MemberReferenceRows = memberReferenceRows
               AssemblyReferenceRows = assemblyReferenceRows
@@ -2489,11 +2518,6 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
 
     let remapEntityToken = metadataReferenceRemapper.RemapEntityToken
     let remapAssemblyRefToken = metadataReferenceRemapper.RemapAssemblyRefToken
-
-    let inline remapWith (dict: Dictionary<int, int>) token =
-        match dict.TryGetValue token with
-        | true, mapped -> mapped
-        | _ -> token
 
     let methodUpdateInputs =
         resolvedMethods
@@ -2781,7 +2805,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             if traceMethodUpdates.Value then
                 printfn "[fsharp-hotreload][accessor] property handle matched token=0x%08X" (MetadataTokens.GetToken(EntityHandle.op_Implicit propertyHandle))
             let associationToken = MetadataTokens.GetToken(EntityHandle.op_Implicit propertyHandle)
-            let baselineToken = remapWith propertyTokenMap associationToken
+            let baselineToken = definitionTokenRemapper.RemapPropertyAssociationToken associationToken
             match propertyTokenToKey.TryGetValue(baselineToken) with
             | true, key ->
                 let baselineHandle = MetadataTokens.PropertyDefinitionHandle baselineToken
@@ -2793,7 +2817,7 @@ let emitDelta (request: IlxDeltaRequest) : IlxDelta =
             match eventAccessorLookup.TryGetValue methodHandle with
             | true, eventHandle ->
                 let associationToken = MetadataTokens.GetToken(EntityHandle.op_Implicit eventHandle)
-                let baselineToken = remapWith eventTokenMap associationToken
+                let baselineToken = definitionTokenRemapper.RemapEventAssociationToken associationToken
                 match eventTokenToKey.TryGetValue(baselineToken) with
                 | true, key ->
                     let baselineHandle = MetadataTokens.EventDefinitionHandle baselineToken

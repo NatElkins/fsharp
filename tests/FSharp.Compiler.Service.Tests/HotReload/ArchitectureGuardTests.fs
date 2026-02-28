@@ -162,15 +162,37 @@ let ``ilx delta emitter phases stay explicit`` () =
     Assert.Contains("let private finalizeDeltaArtifacts", source)
     Assert.Contains("let private buildAddedOrChangedMethods", source)
     Assert.Contains("let private buildDeltaToUpdatedMethodTokenMap", source)
+    Assert.Contains("let private createDefinitionTokenRemapper", source)
     Assert.Contains("let private createMetadataReferenceRemapper", source)
+    Assert.Contains("let definitionTokenRemapper =", emitDeltaSource)
+    Assert.Contains("createDefinitionTokenRemapper", emitDeltaSource)
     Assert.Contains("let metadataReferenceRemapper =", emitDeltaSource)
     Assert.Contains("createMetadataReferenceRemapper", emitDeltaSource)
+    Assert.Contains("RemapDefinitionToken = definitionTokenRemapper.RemapDefinitionToken", emitDeltaSource)
+    Assert.Contains("definitionTokenRemapper.RemapPropertyAssociationToken", emitDeltaSource)
+    Assert.Contains("definitionTokenRemapper.RemapEventAssociationToken", emitDeltaSource)
     Assert.Contains("let remapEntityToken = metadataReferenceRemapper.RemapEntityToken", emitDeltaSource)
     Assert.Contains("let remapAssemblyRefToken = metadataReferenceRemapper.RemapAssemblyRefToken", emitDeltaSource)
     Assert.Contains("buildMethodAndParameterRows", emitDeltaSource)
     Assert.Contains("buildPropertyEventAndSemanticsRows", emitDeltaSource)
     Assert.Contains("buildCustomAttributeRows", emitDeltaSource)
     Assert.Contains("        finalizeDeltaArtifacts", source)
+
+[<Fact>]
+let ``metadata reference remap context stays reference-focused`` () =
+    let source = readCompilerFile "src/Compiler/CodeGen/IlxDeltaEmitter.fs"
+    let contextSource =
+        sliceBetween
+            source
+            "type private MetadataReferenceRemapContext ="
+            "let private createMetadataReferenceRemapper"
+
+    Assert.Contains("RemapDefinitionToken: int -> int", contextSource)
+    Assert.DoesNotContain("TypeTokenMap: Dictionary<int, int>", contextSource)
+    Assert.DoesNotContain("FieldTokenMap: Dictionary<int, int>", contextSource)
+    Assert.DoesNotContain("MethodTokenMap: Dictionary<int, int>", contextSource)
+    Assert.DoesNotContain("PropertyTokenMap: Dictionary<int, int>", contextSource)
+    Assert.DoesNotContain("EventTokenMap: Dictionary<int, int>", contextSource)
 
 [<Fact>]
 let ``delta builder fallback keeps staged signature disambiguation`` () =
