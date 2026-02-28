@@ -131,7 +131,7 @@ module DeltaBuilderTests =
                 TotalArgCount = Some 0
                 GenericArity = Some 0
                 ParameterTypeIdentities = Some []
-                ReturnTypeIdentity = Some "System.Void" }
+                ReturnTypeIdentity = Some RuntimeTypeIdentity.VoidType }
 
         let changes: FSharpSymbolChanges =
             { Added = []
@@ -174,7 +174,7 @@ module DeltaBuilderTests =
                 TotalArgCount = Some 0
                 GenericArity = Some 0
                 ParameterTypeIdentities = Some []
-                ReturnTypeIdentity = Some "System.Void" }
+                ReturnTypeIdentity = Some RuntimeTypeIdentity.VoidType }
 
         let changes: FSharpSymbolChanges =
             { Added = []
@@ -217,7 +217,7 @@ module DeltaBuilderTests =
                 TotalArgCount = Some 0
                 GenericArity = Some 0
                 ParameterTypeIdentities = Some []
-                ReturnTypeIdentity = Some "System.Void" }
+                ReturnTypeIdentity = Some RuntimeTypeIdentity.VoidType }
 
         let changes: FSharpSymbolChanges =
             { Added = []
@@ -271,7 +271,7 @@ module DeltaBuilderTests =
                 TotalArgCount = Some 0
                 GenericArity = Some 0
                 ParameterTypeIdentities = Some []
-                ReturnTypeIdentity = Some "System.Void" }
+                ReturnTypeIdentity = Some RuntimeTypeIdentity.VoidType }
 
         let changes: FSharpSymbolChanges =
             { Added = []
@@ -310,7 +310,7 @@ module DeltaBuilderTests =
                 TotalArgCount = Some 0
                 GenericArity = Some 0
                 ParameterTypeIdentities = None
-                ReturnTypeIdentity = Some "System.Void" }
+                ReturnTypeIdentity = Some RuntimeTypeIdentity.VoidType }
 
         let changes: FSharpSymbolChanges =
             { Added = []
@@ -348,8 +348,8 @@ module DeltaBuilderTests =
                 CompiledName = Some "Run"
                 TotalArgCount = Some 1
                 GenericArity = Some 0
-                ParameterTypeIdentities = Some [ "System.String" ]
-                ReturnTypeIdentity = Some "System.Void" }
+                ParameterTypeIdentities = Some [ RuntimeTypeIdentity.NamedType("System.String", []) ]
+                ReturnTypeIdentity = Some RuntimeTypeIdentity.VoidType }
 
         let changes: FSharpSymbolChanges =
             { Added = []
@@ -379,7 +379,7 @@ module DeltaBuilderTests =
                 TotalArgCount = Some 0
                 GenericArity = Some 0
                 ParameterTypeIdentities = Some []
-                ReturnTypeIdentity = Some "System.Int32" }
+                ReturnTypeIdentity = Some(RuntimeTypeIdentity.NamedType("System.Int32", [])) }
 
         let changes: FSharpSymbolChanges =
             { Added = []
@@ -420,7 +420,7 @@ module DeltaBuilderTests =
                 TotalArgCount = Some 0
                 GenericArity = Some 0
                 ParameterTypeIdentities = Some []
-                ReturnTypeIdentity = Some "System.Void" }
+                ReturnTypeIdentity = Some RuntimeTypeIdentity.VoidType }
 
         let changes: FSharpSymbolChanges =
             { Added = []

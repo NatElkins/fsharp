@@ -118,39 +118,25 @@ let private deduplicateSymbols symbols =
 let private methodNameOfSymbol (symbol: SymbolId) =
     symbol.CompiledName |> Option.defaultValue symbol.LogicalName
 
-let rec private ilTypeIdentity (ilType: ILType) =
+let rec private ilTypeIdentity (ilType: ILType) : RuntimeTypeIdentity =
     match ilType with
-    | ILType.Void -> "System.Void"
+    | ILType.Void -> RuntimeTypeIdentity.VoidType
     | ILType.Array(ILArrayShape shape, elementType) ->
-        let rankSuffix =
-            if shape.Length <= 1 then
-                "[]"
-            else
-                "[" + String(',', shape.Length - 1) + "]"
-
-        ilTypeIdentity elementType + rankSuffix
+        RuntimeTypeIdentity.ArrayType(shape.Length, ilTypeIdentity elementType)
     | ILType.Value typeSpec
     | ILType.Boxed typeSpec -> ilTypeSpecIdentity typeSpec
-    | ILType.Ptr elementType -> ilTypeIdentity elementType + "*"
-    | ILType.Byref elementType -> ilTypeIdentity elementType + "&"
+    | ILType.Ptr elementType -> RuntimeTypeIdentity.PointerType(ilTypeIdentity elementType)
+    | ILType.Byref elementType -> RuntimeTypeIdentity.ByRefType(ilTypeIdentity elementType)
     | ILType.FunctionPointer signature ->
-        let args = signature.ArgTypes |> List.map ilTypeIdentity |> String.concat ","
-        $"{ilTypeIdentity signature.ReturnType} ({args})"
-    | ILType.TypeVar index -> "!" + string index
+        RuntimeTypeIdentity.FunctionPointerType(
+            ilTypeIdentity signature.ReturnType,
+            signature.ArgTypes |> List.map ilTypeIdentity
+        )
+    | ILType.TypeVar index -> RuntimeTypeIdentity.TypeVariable(int index)
     | ILType.Modified(_, _, innerType) -> ilTypeIdentity innerType
 
-and private ilTypeSpecIdentity (typeSpec: ILTypeSpec) =
-    let fullName = typeSpec.TypeRef.FullName
-
-    if List.isEmpty typeSpec.GenericArgs then
-        fullName
-    else
-        let encodedArgs =
-            typeSpec.GenericArgs
-            |> List.map (fun arg -> $"[{ilTypeIdentity arg}]")
-            |> String.concat ","
-
-        $"{fullName}[{encodedArgs}]"
+and private ilTypeSpecIdentity (typeSpec: ILTypeSpec) : RuntimeTypeIdentity =
+    RuntimeTypeIdentity.NamedType(typeSpec.TypeRef.FullName, typeSpec.GenericArgs |> List.map ilTypeIdentity)
 
 let private methodKeyMatchesSymbol (symbol: SymbolId) (key: MethodDefinitionKey) =
     let nameMatches = String.Equals(key.Name, methodNameOfSymbol symbol, StringComparison.Ordinal)
@@ -162,9 +148,15 @@ let private methodKeyMatchesSymbol (symbol: SymbolId) (key: MethodDefinitionKey)
 
     nameMatches && genericArityMatches
 
-let private normalizeSymbolParameterTypeIdentities (symbol: SymbolId) (parameterTypeIdentities: string list) =
+let private fsharpUnitRuntimeTypeIdentity =
+    RuntimeTypeIdentity.NamedType("Microsoft.FSharp.Core.Unit", [])
+
+let private normalizeSymbolParameterTypeIdentities
+    (symbol: SymbolId)
+    (parameterTypeIdentities: RuntimeTypeIdentity list)
+    =
     match symbol.TotalArgCount, parameterTypeIdentities with
-    | Some 0, [ unitType ] when String.Equals(unitType, "Microsoft.FSharp.Core.Unit", StringComparison.Ordinal) -> []
+    | Some 0, [ unitType ] when unitType = fsharpUnitRuntimeTypeIdentity -> []
     | _ -> parameterTypeIdentities
 
 let private methodParameterTypesMatchSymbol (symbol: SymbolId) (key: MethodDefinitionKey) =
@@ -199,8 +191,8 @@ type private MethodIdentityKey =
     { DeclaringTypeToken: int
       Name: string
       GenericArity: int
-      ParameterTypes: string list
-      ReturnType: string }
+      ParameterTypes: RuntimeTypeIdentity list
+      ReturnType: RuntimeTypeIdentity }
 
 let private methodIdentityKey (declaringTypeToken: int) (methodKey: MethodDefinitionKey) : MethodIdentityKey =
     { DeclaringTypeToken = declaringTypeToken

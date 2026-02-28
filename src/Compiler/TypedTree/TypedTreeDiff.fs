@@ -28,6 +28,19 @@ type SymbolMemberKind =
     | EventRemove of eventName: string
     | EventInvoke of eventName: string
 
+[<RequireQualifiedAccess>]
+[<StructuralEquality; StructuralComparison>]
+/// Typed runtime method-signature identity transported from typed-tree diff into delta mapping.
+/// This avoids string-only parameter/return matching in DeltaBuilder.
+type RuntimeTypeIdentity =
+    | NamedType of fullName: string * genericArguments: RuntimeTypeIdentity list
+    | ArrayType of rank: int * elementType: RuntimeTypeIdentity
+    | ByRefType of elementType: RuntimeTypeIdentity
+    | PointerType of elementType: RuntimeTypeIdentity
+    | FunctionPointerType of returnType: RuntimeTypeIdentity * argumentTypes: RuntimeTypeIdentity list
+    | TypeVariable of ordinal: int
+    | VoidType
+
 /// Stable identity for values and entities tracked across baseline/hot reload sessions.
 type SymbolId =
     { Path: string list
@@ -39,8 +52,8 @@ type SymbolId =
       CompiledName: string option
       TotalArgCount: int option
       GenericArity: int option
-      ParameterTypeIdentities: string list option
-      ReturnTypeIdentity: string option }
+      ParameterTypeIdentities: RuntimeTypeIdentity list option
+      ReturnTypeIdentity: RuntimeTypeIdentity option }
 
     member x.QualifiedName =
         match x.Path with
@@ -220,16 +233,16 @@ let private normalizeTypeString (text: string) =
 let private tyToString (_: DisplayEnv) (ty: TType) =
     normalizeTypeString (ty.ToString())
 
-let private formatGenericTypeIdentity (typeName: string) (args: string list) =
-    if List.isEmpty args then
-        typeName
-    else
-        let encodedArgs = args |> List.map (fun arg -> $"[{arg}]") |> String.concat ","
-        $"{typeName}[{encodedArgs}]"
+let private runtimeNamedTypeIdentity (typeName: string) (args: RuntimeTypeIdentity list) =
+    RuntimeTypeIdentity.NamedType(typeName, args)
 
-/// Encodes typed-tree parameter types using the same generic argument shape as ILType.QualifiedName.
-/// This lets DeltaBuilder compare source-level method symbols to baseline MethodDefinitionKey signatures.
-let rec private tryTypeIdentityFromTType (g: TcGlobals) (typarOrdinals: Map<Stamp, int>) (ty: TType) : string option =
+/// Encodes typed-tree parameter types into a typed runtime identity model that mirrors
+/// IL signature structure closely enough for structural token matching in DeltaBuilder.
+let rec private tryTypeIdentityFromTType
+    (g: TcGlobals)
+    (typarOrdinals: Map<Stamp, int>)
+    (ty: TType)
+    : RuntimeTypeIdentity option =
     let ty = stripTyEqnsAndMeasureEqns g ty
 
     let tryEncodeGenericArgs (args: TType list) =
@@ -242,6 +255,20 @@ let rec private tryTypeIdentityFromTType (g: TcGlobals) (typarOrdinals: Map<Stam
 
     match ty with
     | TType_forall(_, bodyTy) -> tryTypeIdentityFromTType g typarOrdinals bodyTy
+    | _ when isVoidTy g ty -> Some RuntimeTypeIdentity.VoidType
+    | _ when isArrayTy g ty ->
+        let rank = rankOfArrayTy g ty
+        let elementType = destArrayTy g ty
+        tryTypeIdentityFromTType g typarOrdinals elementType
+        |> Option.map (fun elementIdentity -> RuntimeTypeIdentity.ArrayType(rank, elementIdentity))
+    | _ when isByrefTy g ty ->
+        let elementType = destByrefTy g ty
+        tryTypeIdentityFromTType g typarOrdinals elementType
+        |> Option.map RuntimeTypeIdentity.ByRefType
+    | _ when isNativePtrTy g ty ->
+        let elementType = destNativePtrTy g ty
+        tryTypeIdentityFromTType g typarOrdinals elementType
+        |> Option.map RuntimeTypeIdentity.PointerType
     | TType_app(tcref, tinst, _) ->
         let fullName =
             try
@@ -250,10 +277,10 @@ let rec private tryTypeIdentityFromTType (g: TcGlobals) (typarOrdinals: Map<Stam
                 tcref.CompiledName
 
         tryEncodeGenericArgs tinst
-        |> Option.map (formatGenericTypeIdentity fullName)
+        |> Option.map (runtimeNamedTypeIdentity fullName)
     | TType_anon(anonInfo, tys) ->
         tryEncodeGenericArgs tys
-        |> Option.map (formatGenericTypeIdentity anonInfo.ILTypeRef.FullName)
+        |> Option.map (runtimeNamedTypeIdentity anonInfo.ILTypeRef.FullName)
     | TType_tuple(tupInfo, tys) ->
         let tupleName =
             if evalTupInfoIsStruct tupInfo then
@@ -262,11 +289,11 @@ let rec private tryTypeIdentityFromTType (g: TcGlobals) (typarOrdinals: Map<Stam
                 $"System.Tuple`{List.length tys}"
 
         tryEncodeGenericArgs tys
-        |> Option.map (formatGenericTypeIdentity tupleName)
+        |> Option.map (runtimeNamedTypeIdentity tupleName)
     | TType_fun(domainTy, rangeTy, _) ->
         match tryTypeIdentityFromTType g typarOrdinals domainTy, tryTypeIdentityFromTType g typarOrdinals rangeTy with
         | Some domainIdentity, Some rangeIdentity ->
-            Some(formatGenericTypeIdentity "Microsoft.FSharp.Core.FSharpFunc`2" [ domainIdentity; rangeIdentity ])
+            Some(runtimeNamedTypeIdentity "Microsoft.FSharp.Core.FSharpFunc`2" [ domainIdentity; rangeIdentity ])
         | _ -> None
     | TType_ucase(ucref, tinst) ->
         let fullName =
@@ -276,10 +303,10 @@ let rec private tryTypeIdentityFromTType (g: TcGlobals) (typarOrdinals: Map<Stam
                 ucref.TyconRef.CompiledName
 
         tryEncodeGenericArgs tinst
-        |> Option.map (formatGenericTypeIdentity fullName)
+        |> Option.map (runtimeNamedTypeIdentity fullName)
     | TType_var (typar, _) ->
         Map.tryFind typar.Stamp typarOrdinals
-        |> Option.map (fun ordinal -> "!" + string ordinal)
+        |> Option.map RuntimeTypeIdentity.TypeVariable
     | TType_measure _ -> None
 
 let private tryGetMethodTyparOrdinalsAndGenericArity (g: TcGlobals) (var: Val) =
@@ -334,7 +361,7 @@ let private tryGetReturnTypeIdentity (g: TcGlobals) (typarOrdinals: Map<Stamp, i
         let _, _, _, returnTy, _ = GetValReprTypeInCompiledForm g valReprInfo numEnclosingTypars var.Type var.Range
 
         match returnTy with
-        | None -> Some "System.Void"
+        | None -> Some RuntimeTypeIdentity.VoidType
         | Some ty -> tryTypeIdentityFromTType g typarOrdinals ty
     | None -> None
 

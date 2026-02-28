@@ -20,6 +20,18 @@ type SymbolMemberKind =
     | EventRemove of eventName: string
     | EventInvoke of eventName: string
 
+[<RequireQualifiedAccess>]
+[<StructuralEquality; StructuralComparison>]
+/// Typed runtime method-signature identity transported from typed-tree diff into delta mapping.
+type RuntimeTypeIdentity =
+    | NamedType of fullName: string * genericArguments: RuntimeTypeIdentity list
+    | ArrayType of rank: int * elementType: RuntimeTypeIdentity
+    | ByRefType of elementType: RuntimeTypeIdentity
+    | PointerType of elementType: RuntimeTypeIdentity
+    | FunctionPointerType of returnType: RuntimeTypeIdentity * argumentTypes: RuntimeTypeIdentity list
+    | TypeVariable of ordinal: int
+    | VoidType
+
 /// Stable identity for values and entities tracked across baseline/hot reload sessions.
 type SymbolId =
     { Path: string list
@@ -31,8 +43,8 @@ type SymbolId =
       CompiledName: string option
       TotalArgCount: int option
       GenericArity: int option
-      ParameterTypeIdentities: string list option
-      ReturnTypeIdentity: string option }
+      ParameterTypeIdentities: RuntimeTypeIdentity list option
+      ReturnTypeIdentity: RuntimeTypeIdentity option }
 
     member QualifiedName: string
 

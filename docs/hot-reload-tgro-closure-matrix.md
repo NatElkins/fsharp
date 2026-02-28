@@ -1,6 +1,6 @@
 # Hot Reload: T-Gro Feedback Closure Matrix
 
-Last updated: 2026-02-27
+Last updated: 2026-02-28
 Source comments: NatElkins/fsharp#1 (T-Gro top-level review comments, 2026-02-20)
 
 ## Goal
@@ -68,18 +68,14 @@ Track each major review concern with objective status and evidence so follow-up 
 
 ### 7) String-based symbol identity chain
 
-- Status: **Partially addressed**
+- Status: **Addressed**
 - Evidence:
-  - Method token resolution is fail-closed and rejects incomplete runtime signature identity instead of permissive fallback: `src/Compiler/HotReload/DeltaBuilder.fs`.
-  - Explicit `ContainingEntity` mapping now resolves through baseline type-token normalization and fails closed when the explicit entity cannot resolve or resolves ambiguously, avoiding permissive candidate fallback: `src/Compiler/HotReload/DeltaBuilder.fs`.
-  - Method resolution now pre-indexes baseline methods by normalized containing-type token + full runtime signature identity before applying compatibility fallback matching, reducing accidental cross-type string matches while preserving existing supported shapes: `src/Compiler/HotReload/DeltaBuilder.fs`.
-  - Containing-type candidate resolution now surfaces ambiguous path matches explicitly and only falls back to raw name candidates when baseline type-token rows are missing, reducing silent mis-binding risk while keeping legacy module scenarios working: `src/Compiler/HotReload/DeltaBuilder.fs`.
-  - Accessor mapping now carries explicit containing-entity context for updated accessors and fails closed when that explicit mapping is missing or ambiguous, while preserving legacy best-effort skip behavior for unresolved synthesized accessor paths: `src/Compiler/HotReload/DeltaBuilder.fs`.
-  - Method fallback disambiguation is now fail-closed across both parameter and return signature stages (including single-candidate paths), preventing name-only resolution when signature identities diverge: `src/Compiler/HotReload/DeltaBuilder.fs`.
-  - Added no-arg/unit signature normalization for symbol-side parameter identities so strict signature matching remains stable for generated `unit` cases without reopening permissive matching: `src/Compiler/HotReload/DeltaBuilder.fs`.
-  - Regression tests now include parameter-mismatch, return-mismatch, ambiguous-containing-type, and explicit-accessor-containing-entity fail-closed scenarios, plus architecture guards for staged fallback disambiguation and guarded compatibility fallback behavior: `tests/FSharp.Compiler.Service.Tests/HotReload/DeltaBuilderTests.fs`, `tests/FSharp.Compiler.Service.Tests/HotReload/ArchitectureGuardTests.fs`.
-- Remaining gap:
-  - End-to-end symbol identity still relies on string identities (`SymbolId`, `MethodDefinitionKey`) rather than semantic symbol objects; remaining work is introducing typed semantic identity transport from typed-tree diff into delta mapping.
+  - `TypedTreeDiff.SymbolId` now transports typed runtime signature identity (`RuntimeTypeIdentity`) for method parameters/return values instead of string signatures: `src/Compiler/TypedTree/TypedTreeDiff.fs`, `src/Compiler/TypedTree/TypedTreeDiff.fsi`.
+  - Typed-tree signature encoding now includes void/array/byref/native pointer identities and method generic type-variable ordinals, keeping symbol-side signatures structurally comparable to emitted IL signatures: `src/Compiler/TypedTree/TypedTreeDiff.fs`.
+  - `DeltaBuilder` now converts baseline `ILType`/`ILTypeSpec` signatures into the same typed `RuntimeTypeIdentity` model and performs structural identity matching in both pre-index and fallback disambiguation paths: `src/Compiler/HotReload/DeltaBuilder.fs`.
+  - Existing fail-closed behavior is preserved: incomplete/ambiguous runtime method identity still returns full-rebuild diagnostics rather than permissive token binding: `src/Compiler/HotReload/DeltaBuilder.fs`.
+  - Regression coverage updated to validate typed method-signature identity mapping and mismatch fail-closed behavior under the new typed identity path: `tests/FSharp.Compiler.Service.Tests/HotReload/DeltaBuilderTests.fs`.
+
 
 ### 8) Manual metadata serialization evolution risk
 
