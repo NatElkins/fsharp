@@ -1,6 +1,6 @@
 # Hot Reload: T-Gro Feedback Closure Matrix
 
-Last updated: 2026-02-28
+Last updated: 2026-03-02
 Source comments: NatElkins/fsharp#1 (T-Gro top-level review comments, 2026-02-20)
 
 ## Goal
@@ -79,14 +79,12 @@ Track each major review concern with objective status and evidence so follow-up 
 
 ### 8) Manual metadata serialization evolution risk
 
-- Status: **Partially addressed**
+- Status: **Addressed**
 - Evidence:
-  - Delta metadata serialization remains hand-rolled in hot reload writer path (`DeltaMetadataSerializer`, `DeltaMetadataTables`, `ILBaselineReader`).
-  - Automated parity gate now validates SRM table/heap parity plus mdv component scenarios across generations: `tests/FSharp.Compiler.Service.Tests/HotReload/SrmParityTests.fs`, `tests/FSharp.Compiler.ComponentTests/HotReload/MdvValidationTests.fs`, `tests/scripts/check-hotreload-metadata-parity.sh`.
-  - Table serialization now fail-fast validates string/blob heap offset indices before dereferencing mirrored heap arrays, preventing silent corruption or delayed index exceptions in malformed delta construction paths: `src/Compiler/CodeGen/DeltaMetadataSerializer.fs`.
-  - Regression tests exercise both invalid string-heap and invalid blob-heap index paths directly through `buildTableStream`: `tests/FSharp.Compiler.Service.Tests/HotReload/FSharpDeltaMetadataWriterTests.fs`.
-- Remaining gap:
-  - Keep parity coverage current as runtime/metadata shapes evolve; this is still not a direct `System.Reflection.Metadata` writer reuse path.
+  - Delta metadata emission now supports a parallel `System.Reflection.Metadata` writer path that consumes the same row model as the hand-rolled serializer (`DeltaMetadataSrmWriter`) so preview runs can exercise both implementations without perturbing the default writer: `src/Compiler/CodeGen/DeltaMetadataSrmWriter.fs`, `src/Compiler/CodeGen/FSharpDeltaMetadataWriter.fs`.
+  - `FSharpDeltaMetadataWriter` now supports strict SRM shadow parity checks (`FSHARP_HOTRELOAD_COMPARE_SRM_METADATA=1`) and optional SRM output mode (`FSHARP_HOTRELOAD_USE_SRM_TABLES=1`), with fail-fast structural diagnostics over tracked table row-counts plus `EncLog`/`EncMap` entries so table-shape drift cannot hide: `src/Compiler/CodeGen/FSharpDeltaMetadataWriter.fs`.
+  - Automated parity gate now executes with SRM shadow comparison enabled before mdv component validation: `tests/scripts/check-hotreload-metadata-parity.sh`, `tests/FSharp.Compiler.Service.Tests/HotReload/SrmParityTests.fs`, `tests/FSharp.Compiler.ComponentTests/HotReload/MdvValidationTests.fs`.
+  - Existing serializer hardening remains in place (heap-offset validation + malformed index tests): `src/Compiler/CodeGen/DeltaMetadataSerializer.fs`, `tests/FSharp.Compiler.Service.Tests/HotReload/FSharpDeltaMetadataWriterTests.fs`.
 
 ### 9) Large `IlxDeltaEmitter` single-function blast radius
 
@@ -138,5 +136,6 @@ Track each major review concern with objective status and evidence so follow-up 
 ## Validation performed for this update
 
 - `./.dotnet/dotnet build FSharp.sln -c Debug -v minimal`
-- `./.dotnet/dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload -v minimal` (`327` passed)
+- `./.dotnet/dotnet test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload -v minimal` (`328` passed)
 - `./.dotnet/dotnet test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj -c Debug --no-build --filter FullyQualifiedName~HotReload -v minimal` (`110` passed)
+- `./tests/scripts/check-hotreload-metadata-parity.sh`

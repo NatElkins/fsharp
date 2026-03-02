@@ -12,10 +12,10 @@ fi
 
 cd "${ROOT}"
 
-"${DOTNET}" test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj \
+FSHARP_HOTRELOAD_COMPARE_SRM_METADATA=1 "${DOTNET}" test tests/FSharp.Compiler.Service.Tests/FSharp.Compiler.Service.Tests.fsproj \
   -c Debug --no-build --filter FullyQualifiedName~SrmParityTests -v minimal
 
-"${DOTNET}" test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj \
+FSHARP_HOTRELOAD_COMPARE_SRM_METADATA=1 "${DOTNET}" test tests/FSharp.Compiler.ComponentTests/FSharp.Compiler.ComponentTests.fsproj \
   -c Debug --no-build --filter FullyQualifiedName~HotReload.MdvValidationTests -v minimal
 
 echo "hotreload-metadata-parity-check: SRM + mdv parity slices passed."
