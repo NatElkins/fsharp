@@ -187,18 +187,6 @@ let embeddedSourceGuid =
 let sourceLinkGuid =
     Guid(0xcc110556u, 0xa091us, 0x4d38us, 0x9fuy, 0xecuy, 0x25uy, 0xabuy, 0x9auy, 0x35uy, 0x1auy, 0x6auy)
 
-/// Create a deterministic content ID provider for Portable PDB serialization.
-/// The content ID is computed by hashing the PDB content using the specified algorithm.
-let createContentIdProvider (checksumAlgorithm: HashAlgorithm) : Func<IEnumerable<Blob>, BlobContentId> =
-    let hashAlgorithm =
-        match checksumAlgorithm with
-        | HashAlgorithm.Sha1 -> SHA1.Create() :> System.Security.Cryptography.HashAlgorithm
-        | HashAlgorithm.Sha256 -> SHA256.Create() :> System.Security.Cryptography.HashAlgorithm
-
-    Func<IEnumerable<Blob>, BlobContentId>(fun content ->
-        let contentBytes = content |> Seq.collect (fun c -> c.GetBytes()) |> Array.ofSeq
-        let hash = hashAlgorithm.ComputeHash contentBytes
-        BlobContentId.FromHash hash)
 
 let checkSum (url: string) (checksumAlgorithm: HashAlgorithm) =
     try

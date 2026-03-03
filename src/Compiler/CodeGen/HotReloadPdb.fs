@@ -17,6 +17,7 @@ open System.Collections.Generic
 open System.Collections.Immutable
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
+open System.Security.Cryptography
 open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
 open FSharp.Compiler.AbstractIL.ILPdbWriter
@@ -36,6 +37,17 @@ let private shouldTracePdb () =
 
 /// Create a PDB snapshot from Portable PDB bytes.
 /// Uses pure F# parsing instead of SRM for the reading path.
+let private createPortablePdbContentIdProvider (checksumAlgorithm: HashAlgorithm) : Func<IEnumerable<Blob>, BlobContentId> =
+    let algorithm =
+        match checksumAlgorithm with
+        | HashAlgorithm.Sha1 -> SHA1.Create() :> System.Security.Cryptography.HashAlgorithm
+        | HashAlgorithm.Sha256 -> SHA256.Create() :> System.Security.Cryptography.HashAlgorithm
+
+    Func<IEnumerable<Blob>, BlobContentId>(fun content ->
+        let contentBytes = content |> Seq.collect (fun c -> c.GetBytes()) |> Array.ofSeq
+        let hash = algorithm.ComputeHash contentBytes
+        BlobContentId.FromHash hash)
+
 let createSnapshot (pdbBytes: byte[]) : PortablePdbSnapshot =
     match ILBaselineReader.readPortablePdbMetadata pdbBytes with
     | None -> failwith "Failed to parse Portable PDB metadata"
@@ -198,7 +210,7 @@ let emitDelta
                     | None -> MethodDefinitionHandle()
 
                 // Use shared content ID provider from ILPdbWriter
-                let idProvider = createContentIdProvider HashAlgorithm.Sha256
+                let idProvider = createPortablePdbContentIdProvider HashAlgorithm.Sha256
 
                 let zeroCounts =
                     ImmutableArray.CreateRange(Array.zeroCreate<int> DeltaTokens.TableCount)
