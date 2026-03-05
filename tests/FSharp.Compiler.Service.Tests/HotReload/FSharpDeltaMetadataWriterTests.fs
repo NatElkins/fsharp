@@ -32,6 +32,8 @@ module DeltaWriter = FSharp.Compiler.CodeGen.FSharpDeltaMetadataWriter
 
 module FSharpDeltaMetadataWriterTests =
 
+    module Encoding = FSharp.Compiler.CodeGen.DeltaMetadataEncoding
+
     // String heap delta includes method names like "get_Message", property names, etc.
     // SRM's StringHeap.TrimEnd removes trailing padding zeros, so GetHeapSize returns unpadded size.
     // A typical property delta needs: null byte (1) + "get_Message" (12) + "Message" (8) + other strings
@@ -2480,7 +2482,7 @@ module FSharpDeltaMetadataWriterTests =
     let ``table serializer fails fast on invalid string heap offset index`` () =
         let input =
             createSerializerInputWithModuleElement
-                { Tag = RowElementTags.String
+                { Tag = Encoding.RowElementTags.String
                   Value = 2
                   IsAbsolute = false }
 
@@ -2494,7 +2496,7 @@ module FSharpDeltaMetadataWriterTests =
     let ``table serializer fails fast on invalid blob heap offset index`` () =
         let input =
             createSerializerInputWithModuleElement
-                { Tag = RowElementTags.Blob
+                { Tag = Encoding.RowElementTags.Blob
                   Value = 2
                   IsAbsolute = false }
 

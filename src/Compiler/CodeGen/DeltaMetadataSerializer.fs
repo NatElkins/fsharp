@@ -11,6 +11,8 @@ open FSharp.Compiler.CodeGen.DeltaMetadataTables
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 open FSharp.Compiler.CodeGen.DeltaTableLayout
 
+module Encoding = FSharp.Compiler.CodeGen.DeltaMetadataEncoding
+
 let private padTo4 (bytes: byte[]) =
     if bytes.Length % 4 = 0 then
         bytes
@@ -164,11 +166,11 @@ let private writeRowElement (writer: BinaryWriter) (indexSizes: DeltaIndexSizing
     let tag = element.Tag
     let value = element.Value
 
-    if tag = RowElementTags.UShort then
+    if tag = Encoding.RowElementTags.UShort then
         writeUInt16 writer value
-    elif tag = RowElementTags.ULong then
+    elif tag = Encoding.RowElementTags.ULong then
         writeUInt32 writer value
-    elif tag = RowElementTags.String then
+    elif tag = Encoding.RowElementTags.String then
         let offset =
             if element.IsAbsolute then
                 value
@@ -179,7 +181,7 @@ let private writeRowElement (writer: BinaryWriter) (indexSizes: DeltaIndexSizing
             else
                 input.HeapOffsets.StringHeapStart + input.StringHeapOffsets.[value]
         writeHeapIndex writer indexSizes.StringsBig offset
-    elif tag = RowElementTags.Blob then
+    elif tag = Encoding.RowElementTags.Blob then
         let offset =
             if element.IsAbsolute then
                 value
@@ -190,7 +192,7 @@ let private writeRowElement (writer: BinaryWriter) (indexSizes: DeltaIndexSizing
             else
                 input.HeapOffsets.BlobHeapStart + input.BlobHeapOffsets.[value]
         writeHeapIndex writer indexSizes.BlobsBig offset
-    elif tag = RowElementTags.Guid then
+    elif tag = Encoding.RowElementTags.Guid then
         // Encode GUID columns as byte offsets into the *combined* Guid heap
         // (baseline length + delta entries). Each Guid entry is 16 bytes.
         // Absolute handles are already full offsets and are written verbatim.
@@ -206,48 +208,48 @@ let private writeRowElement (writer: BinaryWriter) (indexSizes: DeltaIndexSizing
         if Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_HEAP_OFFSETS") = "1" then
             printfn "[fsharp-hotreload][guid-serialize] isAbsolute=%b value=%d adjusted=%d guidsBig=%b" element.IsAbsolute value adjusted indexSizes.GuidsBig
         writeHeapIndex writer indexSizes.GuidsBig adjusted
-    elif tag >= RowElementTags.SimpleIndexMin && tag <= RowElementTags.SimpleIndexMax then
-        let tableIndex = tag - RowElementTags.SimpleIndexMin
+    elif tag >= Encoding.RowElementTags.SimpleIndexMin && tag <= Encoding.RowElementTags.SimpleIndexMax then
+        let tableIndex = tag - Encoding.RowElementTags.SimpleIndexMin
         writeHeapIndex writer indexSizes.SimpleIndexBig.[tableIndex] value
-    elif tag >= RowElementTags.TypeDefOrRefOrSpecMin && tag <= RowElementTags.TypeDefOrRefOrSpecMax then
-        let subTag = tag - RowElementTags.TypeDefOrRefOrSpecMin
-        writeTaggedIndex writer 2 indexSizes.TypeDefOrRefBig subTag value
-    elif tag >= RowElementTags.TypeOrMethodDefMin && tag <= RowElementTags.TypeOrMethodDefMax then
-        let subTag = tag - RowElementTags.TypeOrMethodDefMin
-        writeTaggedIndex writer 1 indexSizes.TypeOrMethodDefBig subTag value
-    elif tag >= RowElementTags.HasConstantMin && tag <= RowElementTags.HasConstantMax then
-        let subTag = tag - RowElementTags.HasConstantMin
-        writeTaggedIndex writer 2 indexSizes.HasConstantBig subTag value
-    elif tag >= RowElementTags.HasCustomAttributeMin && tag <= RowElementTags.HasCustomAttributeMax then
-        let subTag = tag - RowElementTags.HasCustomAttributeMin
-        writeTaggedIndex writer 5 indexSizes.HasCustomAttributeBig subTag value
-    elif tag >= RowElementTags.HasFieldMarshalMin && tag <= RowElementTags.HasFieldMarshalMax then
-        let subTag = tag - RowElementTags.HasFieldMarshalMin
-        writeTaggedIndex writer 1 indexSizes.HasFieldMarshalBig subTag value
-    elif tag >= RowElementTags.HasDeclSecurityMin && tag <= RowElementTags.HasDeclSecurityMax then
-        let subTag = tag - RowElementTags.HasDeclSecurityMin
-        writeTaggedIndex writer 2 indexSizes.HasDeclSecurityBig subTag value
-    elif tag >= RowElementTags.MemberRefParentMin && tag <= RowElementTags.MemberRefParentMax then
-        let subTag = tag - RowElementTags.MemberRefParentMin
-        writeTaggedIndex writer 3 indexSizes.MemberRefParentBig subTag value
-    elif tag >= RowElementTags.HasSemanticsMin && tag <= RowElementTags.HasSemanticsMax then
-        let subTag = tag - RowElementTags.HasSemanticsMin
-        writeTaggedIndex writer 1 indexSizes.HasSemanticsBig subTag value
-    elif tag >= RowElementTags.MethodDefOrRefMin && tag <= RowElementTags.MethodDefOrRefMax then
-        let subTag = tag - RowElementTags.MethodDefOrRefMin
-        writeTaggedIndex writer 1 indexSizes.MethodDefOrRefBig subTag value
-    elif tag >= RowElementTags.MemberForwardedMin && tag <= RowElementTags.MemberForwardedMax then
-        let subTag = tag - RowElementTags.MemberForwardedMin
-        writeTaggedIndex writer 1 indexSizes.MemberForwardedBig subTag value
-    elif tag >= RowElementTags.ImplementationMin && tag <= RowElementTags.ImplementationMax then
-        let subTag = tag - RowElementTags.ImplementationMin
-        writeTaggedIndex writer 2 indexSizes.ImplementationBig subTag value
-    elif tag >= RowElementTags.CustomAttributeTypeMin && tag <= RowElementTags.CustomAttributeTypeMax then
-        let subTag = tag - RowElementTags.CustomAttributeTypeMin
-        writeTaggedIndex writer 3 indexSizes.CustomAttributeTypeBig subTag value
-    elif tag >= RowElementTags.ResolutionScopeMin && tag <= RowElementTags.ResolutionScopeMax then
-        let subTag = tag - RowElementTags.ResolutionScopeMin
-        writeTaggedIndex writer 2 indexSizes.ResolutionScopeBig subTag value
+    elif tag >= Encoding.RowElementTags.TypeDefOrRefOrSpecMin && tag <= Encoding.RowElementTags.TypeDefOrRefOrSpecMax then
+        let subTag = tag - Encoding.RowElementTags.TypeDefOrRefOrSpecMin
+        writeTaggedIndex writer Encoding.CodedIndices.TypeDefOrRef.TagBits indexSizes.TypeDefOrRefBig subTag value
+    elif tag >= Encoding.RowElementTags.TypeOrMethodDefMin && tag <= Encoding.RowElementTags.TypeOrMethodDefMax then
+        let subTag = tag - Encoding.RowElementTags.TypeOrMethodDefMin
+        writeTaggedIndex writer Encoding.CodedIndices.TypeOrMethodDef.TagBits indexSizes.TypeOrMethodDefBig subTag value
+    elif tag >= Encoding.RowElementTags.HasConstantMin && tag <= Encoding.RowElementTags.HasConstantMax then
+        let subTag = tag - Encoding.RowElementTags.HasConstantMin
+        writeTaggedIndex writer Encoding.CodedIndices.HasConstant.TagBits indexSizes.HasConstantBig subTag value
+    elif tag >= Encoding.RowElementTags.HasCustomAttributeMin && tag <= Encoding.RowElementTags.HasCustomAttributeMax then
+        let subTag = tag - Encoding.RowElementTags.HasCustomAttributeMin
+        writeTaggedIndex writer Encoding.CodedIndices.HasCustomAttribute.TagBits indexSizes.HasCustomAttributeBig subTag value
+    elif tag >= Encoding.RowElementTags.HasFieldMarshalMin && tag <= Encoding.RowElementTags.HasFieldMarshalMax then
+        let subTag = tag - Encoding.RowElementTags.HasFieldMarshalMin
+        writeTaggedIndex writer Encoding.CodedIndices.HasFieldMarshal.TagBits indexSizes.HasFieldMarshalBig subTag value
+    elif tag >= Encoding.RowElementTags.HasDeclSecurityMin && tag <= Encoding.RowElementTags.HasDeclSecurityMax then
+        let subTag = tag - Encoding.RowElementTags.HasDeclSecurityMin
+        writeTaggedIndex writer Encoding.CodedIndices.HasDeclSecurity.TagBits indexSizes.HasDeclSecurityBig subTag value
+    elif tag >= Encoding.RowElementTags.MemberRefParentMin && tag <= Encoding.RowElementTags.MemberRefParentMax then
+        let subTag = tag - Encoding.RowElementTags.MemberRefParentMin
+        writeTaggedIndex writer Encoding.CodedIndices.MemberRefParent.TagBits indexSizes.MemberRefParentBig subTag value
+    elif tag >= Encoding.RowElementTags.HasSemanticsMin && tag <= Encoding.RowElementTags.HasSemanticsMax then
+        let subTag = tag - Encoding.RowElementTags.HasSemanticsMin
+        writeTaggedIndex writer Encoding.CodedIndices.HasSemantics.TagBits indexSizes.HasSemanticsBig subTag value
+    elif tag >= Encoding.RowElementTags.MethodDefOrRefMin && tag <= Encoding.RowElementTags.MethodDefOrRefMax then
+        let subTag = tag - Encoding.RowElementTags.MethodDefOrRefMin
+        writeTaggedIndex writer Encoding.CodedIndices.MethodDefOrRef.TagBits indexSizes.MethodDefOrRefBig subTag value
+    elif tag >= Encoding.RowElementTags.MemberForwardedMin && tag <= Encoding.RowElementTags.MemberForwardedMax then
+        let subTag = tag - Encoding.RowElementTags.MemberForwardedMin
+        writeTaggedIndex writer Encoding.CodedIndices.MemberForwarded.TagBits indexSizes.MemberForwardedBig subTag value
+    elif tag >= Encoding.RowElementTags.ImplementationMin && tag <= Encoding.RowElementTags.ImplementationMax then
+        let subTag = tag - Encoding.RowElementTags.ImplementationMin
+        writeTaggedIndex writer Encoding.CodedIndices.Implementation.TagBits indexSizes.ImplementationBig subTag value
+    elif tag >= Encoding.RowElementTags.CustomAttributeTypeMin && tag <= Encoding.RowElementTags.CustomAttributeTypeMax then
+        let subTag = tag - Encoding.RowElementTags.CustomAttributeTypeMin
+        writeTaggedIndex writer Encoding.CodedIndices.CustomAttributeType.TagBits indexSizes.CustomAttributeTypeBig subTag value
+    elif tag >= Encoding.RowElementTags.ResolutionScopeMin && tag <= Encoding.RowElementTags.ResolutionScopeMax then
+        let subTag = tag - Encoding.RowElementTags.ResolutionScopeMin
+        writeTaggedIndex writer Encoding.CodedIndices.ResolutionScope.TagBits indexSizes.ResolutionScopeBig subTag value
     else
         invalidArg "element" $"Unsupported row element tag: {tag} (value={value})"
 

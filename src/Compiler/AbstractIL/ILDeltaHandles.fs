@@ -1,8 +1,11 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 /// F# types and utilities for hot reload delta metadata emission.
-/// Common types (handles, heap offsets, coded index DUs) are defined in BinaryConstants (ilbinary.fs).
-/// This module provides delta-specific utilities and re-exports.
+///
+/// These handles/coded-index unions are intentionally delta-owned to keep the
+/// hot-reload pipeline isolated from broad mainline signature churn.
+/// The core IL writer keeps its own row models; adapters below convert between
+/// delta-owned and core-owned representations when boundary crossings are needed.
 module internal FSharp.Compiler.AbstractIL.ILDeltaHandles
 
 open System
@@ -301,6 +304,34 @@ type MethodDefOrRef =
         match this with
         | MDOR_MethodDef h -> h.RowId
         | MDOR_MemberRef h -> h.RowId
+
+// ----------------------------------------------------------------------------
+// Adapters from delta-owned coded indices to boundary-safe primitives.
+// ilbinary.fsi intentionally hides core handle/coded-index unions; by using
+// primitives at boundaries we keep hot-reload isolated without widening core APIs.
+// ----------------------------------------------------------------------------
+module CoreTypeAdapters =
+    let moduleRowId (ModuleHandle rowId) = rowId
+    let typeRefRowId (TypeRefHandle rowId) = rowId
+    let typeDefRowId (TypeDefHandle rowId) = rowId
+    let memberRefRowId (MemberRefHandle rowId) = rowId
+    let methodDefRowId (MethodDefHandle rowId) = rowId
+    let typeSpecRowId (TypeSpecHandle rowId) = rowId
+    let moduleRefRowId (ModuleRefHandle rowId) = rowId
+    let assemblyRefRowId (AssemblyRefHandle rowId) = rowId
+
+    /// Returns (coded tag, row id) for TypeDefOrRef.
+    let typeDefOrRefParts (value: TypeDefOrRef) = value.CodedTag, value.RowId
+
+    /// Returns (coded tag, row id) for MemberRefParent.
+    let memberRefParentParts (value: MemberRefParent) = value.CodedTag, value.RowId
+
+    /// Returns (coded tag, row id) for MethodDefOrRef.
+    let methodDefOrRefParts (value: MethodDefOrRef) = value.CodedTag, value.RowId
+
+    /// Returns (coded tag, row id) for ResolutionScope.
+    let resolutionScopeParts (value: ResolutionScope) = value.CodedTag, value.RowId
+
 // ============================================================================
 // Additional Coded Index Types (less frequently used)
 // ============================================================================

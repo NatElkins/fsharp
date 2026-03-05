@@ -14,6 +14,8 @@ open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.CodeGen.DeltaMetadataTypes
 
+module Encoding = FSharp.Compiler.CodeGen.DeltaMetadataEncoding
+
 let private traceHeapOffsets =
     lazy (
         match Environment.GetEnvironmentVariable("FSHARP_HOTRELOAD_TRACE_HEAP_OFFSETS") with
@@ -322,36 +324,36 @@ type DeltaMetadataTables(?heapOffsets: MetadataHeapOffsets) =
           Value = value
           IsAbsolute = true }
 
-    let rowElementUShort (value: uint16) = rowElement RowElementTags.UShort (int value)
-    let rowElementULong (value: int) = rowElement RowElementTags.ULong value
-    let rowElementString value = rowElement RowElementTags.String value
-    let rowElementBlob value = rowElement RowElementTags.Blob value
-    let rowElementStringAbsolute value = rowElementAbsolute RowElementTags.String value
-    let rowElementBlobAbsolute value = rowElementAbsolute RowElementTags.Blob value
-    let rowElementGuid value = rowElement RowElementTags.Guid value
-    let rowElementGuidAbsolute value = rowElementAbsolute RowElementTags.Guid value
-    let rowElementSimpleIndex table value = rowElement (RowElementTags.SimpleIndex table) value
-    let rowElementTypeDefOrRef tag value = rowElement (RowElementTags.TypeDefOrRefOrSpec tag) value
-    let rowElementHasSemantics tag value = rowElement (RowElementTags.HasSemantics tag) value
+    let rowElementUShort (value: uint16) = rowElement Encoding.RowElementTags.UShort (int value)
+    let rowElementULong (value: int) = rowElement Encoding.RowElementTags.ULong value
+    let rowElementString value = rowElement Encoding.RowElementTags.String value
+    let rowElementBlob value = rowElement Encoding.RowElementTags.Blob value
+    let rowElementStringAbsolute value = rowElementAbsolute Encoding.RowElementTags.String value
+    let rowElementBlobAbsolute value = rowElementAbsolute Encoding.RowElementTags.Blob value
+    let rowElementGuid value = rowElement Encoding.RowElementTags.Guid value
+    let rowElementGuidAbsolute value = rowElementAbsolute Encoding.RowElementTags.Guid value
+    let rowElementSimpleIndex table value = rowElement (Encoding.RowElementTags.SimpleIndex table) value
+    let rowElementTypeDefOrRef tag value = rowElement (Encoding.RowElementTags.TypeDefOrRefOrSpec tag) value
+    let rowElementHasSemantics tag value = rowElement (Encoding.RowElementTags.HasSemantics tag) value
     let rowElementMethodDefOrRef (methodRef: MethodDefOrRef) =
-        rowElement (RowElementTags.MethodDefOrRef (mkMethodDefOrRefTag methodRef.CodedTag)) methodRef.RowId
+        rowElement (Encoding.RowElementTags.MethodDefOrRef (mkMethodDefOrRefTag methodRef.CodedTag)) methodRef.RowId
 
     let rowElementResolutionScope (scope: ResolutionScope) =
-        rowElement (RowElementTags.ResolutionScopeMin + scope.CodedTag) scope.RowId
+        rowElement (Encoding.RowElementTags.ResolutionScopeMin + scope.CodedTag) scope.RowId
 
     let rowElementMemberRefParent (parent: MemberRefParent) =
-        rowElement (RowElementTags.MemberRefParentMin + parent.CodedTag) parent.RowId
+        rowElement (Encoding.RowElementTags.MemberRefParentMin + parent.CodedTag) parent.RowId
 
     /// HasCustomAttribute coded index per ECMA-335 II.24.2.6.
     /// Uses the HasCustomAttribute DU from ILDeltaHandles.
     let rowElementHasCustomAttribute (parent: HasCustomAttribute) =
-        rowElement (RowElementTags.HasCustomAttributeMin + parent.CodedTag) parent.RowId
+        rowElement (Encoding.RowElementTags.HasCustomAttributeMin + parent.CodedTag) parent.RowId
 
     /// CustomAttributeType coded index per ECMA-335 II.24.2.6.
     /// Uses the CustomAttributeType DU from ILDeltaHandles.
     let rowElementCustomAttributeType (ctor: CustomAttributeType) =
         let tag = mkILCustomAttributeTypeTag ctor.CodedTag
-        rowElement (RowElementTags.CustomAttributeType tag) ctor.RowId
+        rowElement (Encoding.RowElementTags.CustomAttributeType tag) ctor.RowId
 
     let addStringValue (value: string) = if String.IsNullOrEmpty value then 0 else strings.AddSharedEntry value
 

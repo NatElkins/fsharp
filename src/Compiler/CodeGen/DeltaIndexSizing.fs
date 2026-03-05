@@ -11,6 +11,7 @@ module internal FSharp.Compiler.CodeGen.DeltaIndexSizing
 
 open FSharp.Compiler.AbstractIL.BinaryConstants
 open FSharp.Compiler.AbstractIL.ILDeltaHandles
+open FSharp.Compiler.CodeGen.DeltaMetadataEncoding
 
 type MetadataHeapSizes = FSharp.Compiler.AbstractIL.ILBinaryWriter.MetadataHeapSizes
 
@@ -128,112 +129,57 @@ let compute
 
     // TypeDefOrRef: TypeDef(0), TypeRef(1), TypeSpec(2) - 2-bit tag
     let typeDefOrRefBig =
-        coded 2
-            [| TableNames.TypeDef.Index
-               TableNames.TypeRef.Index
-               TableNames.TypeSpec.Index |]
+        coded CodedIndices.TypeDefOrRef.TagBits CodedIndices.TypeDefOrRef.Tables
 
     // TypeOrMethodDef: TypeDef(0), MethodDef(1) - 1-bit tag
     let typeOrMethodDefBig =
-        coded 1
-            [| TableNames.TypeDef.Index
-               TableNames.Method.Index |]
+        coded CodedIndices.TypeOrMethodDef.TagBits CodedIndices.TypeOrMethodDef.Tables
 
     // HasConstant: Field(0), Param(1), Property(2) - 2-bit tag
     let hasConstantBig =
-        coded 2
-            [| TableNames.Field.Index
-               TableNames.Param.Index
-               TableNames.Property.Index |]
+        coded CodedIndices.HasConstant.TagBits CodedIndices.HasConstant.Tables
 
     // HasCustomAttribute: 22 possible parent types - 5-bit tag
     // This is the largest coded index, covering most metadata entities
     let hasCustomAttributeBig =
-        coded 5
-            [| TableNames.Method.Index        // 0: MethodDef
-               TableNames.Field.Index         // 1: Field
-               TableNames.TypeRef.Index       // 2: TypeRef
-               TableNames.TypeDef.Index       // 3: TypeDef
-               TableNames.Param.Index         // 4: Param
-               TableNames.InterfaceImpl.Index // 5: InterfaceImpl
-               TableNames.MemberRef.Index     // 6: MemberRef
-               TableNames.Module.Index        // 7: Module
-               TableNames.Permission.Index    // 8: DeclSecurity (Permission in TableNames)
-               TableNames.Property.Index      // 9: Property
-               TableNames.Event.Index         // 10: Event
-               TableNames.StandAloneSig.Index // 11: StandAloneSig
-               TableNames.ModuleRef.Index     // 12: ModuleRef
-               TableNames.TypeSpec.Index      // 13: TypeSpec
-               TableNames.Assembly.Index      // 14: Assembly
-               TableNames.AssemblyRef.Index   // 15: AssemblyRef
-               TableNames.File.Index          // 16: File
-               TableNames.ExportedType.Index  // 17: ExportedType
-               TableNames.ManifestResource.Index // 18: ManifestResource
-               TableNames.GenericParam.Index  // 19: GenericParam
-               TableNames.GenericParamConstraint.Index // 20: GenericParamConstraint
-               TableNames.MethodSpec.Index |] // 21: MethodSpec
+        coded CodedIndices.HasCustomAttribute.TagBits CodedIndices.HasCustomAttribute.Tables
 
     // HasFieldMarshal: Field(0), Param(1) - 1-bit tag
     let hasFieldMarshalBig =
-        coded 1
-            [| TableNames.Field.Index
-               TableNames.Param.Index |]
+        coded CodedIndices.HasFieldMarshal.TagBits CodedIndices.HasFieldMarshal.Tables
 
     // HasDeclSecurity: TypeDef(0), MethodDef(1), Assembly(2) - 2-bit tag
     let hasDeclSecurityBig =
-        coded 2
-            [| TableNames.TypeDef.Index
-               TableNames.Method.Index
-               TableNames.Assembly.Index |]
+        coded CodedIndices.HasDeclSecurity.TagBits CodedIndices.HasDeclSecurity.Tables
 
     // MemberRefParent: TypeDef(0), TypeRef(1), ModuleRef(2), MethodDef(3), TypeSpec(4) - 3-bit tag
     let memberRefParentBig =
-        coded 3
-            [| TableNames.TypeDef.Index
-               TableNames.TypeRef.Index
-               TableNames.ModuleRef.Index
-               TableNames.Method.Index
-               TableNames.TypeSpec.Index |]
+        coded CodedIndices.MemberRefParent.TagBits CodedIndices.MemberRefParent.Tables
 
     // HasSemantics: Event(0), Property(1) - 1-bit tag
     let hasSemanticsBig =
-        coded 1
-            [| TableNames.Event.Index
-               TableNames.Property.Index |]
+        coded CodedIndices.HasSemantics.TagBits CodedIndices.HasSemantics.Tables
 
     // MethodDefOrRef: MethodDef(0), MemberRef(1) - 1-bit tag
     let methodDefOrRefBig =
-        coded 1
-            [| TableNames.Method.Index
-               TableNames.MemberRef.Index |]
+        coded CodedIndices.MethodDefOrRef.TagBits CodedIndices.MethodDefOrRef.Tables
 
     // MemberForwarded: Field(0), MethodDef(1) - 1-bit tag
     let memberForwardedBig =
-        coded 1
-            [| TableNames.Field.Index
-               TableNames.Method.Index |]
+        coded CodedIndices.MemberForwarded.TagBits CodedIndices.MemberForwarded.Tables
 
     // Implementation: File(0), AssemblyRef(1), ExportedType(2) - 2-bit tag
     let implementationBig =
-        coded 2
-            [| TableNames.File.Index
-               TableNames.AssemblyRef.Index
-               TableNames.ExportedType.Index |]
+        coded CodedIndices.Implementation.TagBits CodedIndices.Implementation.Tables
 
     // CustomAttributeType: MethodDef(2), MemberRef(3) - 3-bit tag
     // Note: tags 0, 1, 4 are reserved/unused
     let customAttributeTypeBig =
-        coded 3
-            [| TableNames.Method.Index
-               TableNames.MemberRef.Index |]
+        coded CodedIndices.CustomAttributeType.TagBits CodedIndices.CustomAttributeType.Tables
 
     // ResolutionScope: Module(0), ModuleRef(1), AssemblyRef(2), TypeRef(3) - 2-bit tag
     let resolutionScopeBig =
-        coded 2
-            [| TableNames.Module.Index
-               TableNames.ModuleRef.Index
-               TableNames.AssemblyRef.Index
-               TableNames.TypeRef.Index |]
+        coded CodedIndices.ResolutionScope.TagBits CodedIndices.ResolutionScope.Tables
 
     { StringsBig = stringsBig
       GuidsBig = guidsBig

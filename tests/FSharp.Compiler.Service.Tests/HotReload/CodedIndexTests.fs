@@ -9,6 +9,8 @@ open Xunit
 /// to prevent metadata corruption bugs like the MemberRefParent issue fixed in Session 5.
 module CodedIndexTests =
 
+    module Encoding = FSharp.Compiler.CodeGen.DeltaMetadataEncoding
+
     // ECMA-335 II.24.2.6 Table Order Reference:
     // MemberRefParent: TypeDef(0), TypeRef(1), ModuleRef(2), MethodDef(3), TypeSpec(4)
     // HasDeclSecurity: TypeDef(0), MethodDef(1), Assembly(2)
@@ -248,37 +250,36 @@ module CodedIndexTests =
             Assert.True(22 <= pown 2 tagBitsFor22Tables)
 
     module RowElementTagTests =
-        open FSharp.Compiler.AbstractIL.ILBinaryWriter
 
         /// Tests that RowElementTags ranges are correctly defined
         [<Fact>]
         let ``MemberRefParent tag range is 155-159`` () =
-            Assert.Equal(155, RowElementTags.MemberRefParentMin)
-            Assert.Equal(159, RowElementTags.MemberRefParentMax)
+            Assert.Equal(155, Encoding.RowElementTags.MemberRefParentMin)
+            Assert.Equal(159, Encoding.RowElementTags.MemberRefParentMax)
             // 5 tags: 155, 156, 157, 158, 159
-            Assert.Equal(5, RowElementTags.MemberRefParentMax - RowElementTags.MemberRefParentMin + 1)
+            Assert.Equal(5, Encoding.RowElementTags.MemberRefParentMax - Encoding.RowElementTags.MemberRefParentMin + 1)
 
         [<Fact>]
         let ``HasDeclSecurity tag range is 152-154`` () =
-            Assert.Equal(152, RowElementTags.HasDeclSecurityMin)
-            Assert.Equal(154, RowElementTags.HasDeclSecurityMax)
+            Assert.Equal(152, Encoding.RowElementTags.HasDeclSecurityMin)
+            Assert.Equal(154, Encoding.RowElementTags.HasDeclSecurityMax)
             // 3 tags: 152, 153, 154
-            Assert.Equal(3, RowElementTags.HasDeclSecurityMax - RowElementTags.HasDeclSecurityMin + 1)
+            Assert.Equal(3, Encoding.RowElementTags.HasDeclSecurityMax - Encoding.RowElementTags.HasDeclSecurityMin + 1)
 
         [<Fact>]
         let ``HasCustomAttribute tag range is 128-149`` () =
-            Assert.Equal(128, RowElementTags.HasCustomAttributeMin)
-            Assert.Equal(149, RowElementTags.HasCustomAttributeMax)
+            Assert.Equal(128, Encoding.RowElementTags.HasCustomAttributeMin)
+            Assert.Equal(149, Encoding.RowElementTags.HasCustomAttributeMax)
             // 22 tags: 128-149
-            Assert.Equal(22, RowElementTags.HasCustomAttributeMax - RowElementTags.HasCustomAttributeMin + 1)
+            Assert.Equal(22, Encoding.RowElementTags.HasCustomAttributeMax - Encoding.RowElementTags.HasCustomAttributeMin + 1)
 
         [<Fact>]
         let ``MemberRefParent TypeDef tag value is MemberRefParentMin plus 0`` () =
-            let typeDefTag = RowElementTags.MemberRefParentMin + 0
+            let typeDefTag = Encoding.RowElementTags.MemberRefParentMin + 0
             Assert.Equal(155, typeDefTag)
 
         [<Fact>]
         let ``MemberRefParent TypeSpec tag value is MemberRefParentMin plus 4`` () =
-            let typeSpecTag = RowElementTags.MemberRefParentMin + 4
+            let typeSpecTag = Encoding.RowElementTags.MemberRefParentMin + 4
             Assert.Equal(159, typeSpecTag)
 
