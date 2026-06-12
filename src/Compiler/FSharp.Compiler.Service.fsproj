@@ -235,6 +235,8 @@
     <Compile Include="AbstractIL\ilbinary.fsi" />
     <Compile Include="AbstractIL\ilbinary.fs" />
     <Compile Include="AbstractIL\ILDeltaHandles.fs" />
+    <Compile Include="AbstractIL\ILMetadataHeaps.fs" />
+    <Compile Include="AbstractIL\ILRowIndexing.fs" />
     <Compile Include="AbstractIL\ILEncLogWriter.fs" />
     <Compile Include="AbstractIL\ilread.fsi" />
     <Compile Include="AbstractIL\ilread.fs" />
@@ -242,6 +244,7 @@
     <Compile Include="AbstractIL\ilwritepdb.fs" />
     <Compile Include="AbstractIL\ilwrite.fsi" />
     <Compile Include="AbstractIL\ilwrite.fs" />
+    <Compile Include="AbstractIL\ILBaselineReader.fs" />
     <Compile Include="AbstractIL\ilreflect.fsi" />
     <Compile Include="AbstractIL\ilreflect.fs" />
     <Compile Include="SyntaxTree\PrettyNaming.fsi" />
