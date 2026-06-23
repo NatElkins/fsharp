@@ -62,14 +62,17 @@ jobs:
         working-directory: fsharp
         run: ./build.sh -c Debug
 
-      - name: Build SDK (unix)
+      - name: Build SDK redist (unix)
         if: runner.os != 'Windows'
         shell: bash
         working-directory: sdk
-        # Full build. The repo's test projects carry analyzer violations (e.g. MSTEST0071) reported
-        # as errors; disable analyzers and warnings-as-errors so the product (and the redist) build.
-        # We do not run tests here, so the diagnostics are irrelevant.
-        run: ./build.sh -c Debug /p:RunAnalyzers=false /p:TreatWarningsAsErrors=false
+        # The default build compiles the repo's test projects, several of which do not build on this
+        # merged branch. So: (1) run the full build to RESTORE the whole repo (its restore phase runs
+        # before the build phase, which we let fail at the broken tests); (2) then build ONLY the
+        # redist project, which compiles no test projects and now has its transitive deps restored.
+        run: |
+          ./build.sh -c Debug /p:RunAnalyzers=false || true
+          ./build.sh --build --projects "$(pwd)/src/Layout/redist/redist.csproj" -c Debug /p:RunAnalyzers=false
 
       - name: Build F# compiler (Windows)
         if: runner.os == 'Windows'
