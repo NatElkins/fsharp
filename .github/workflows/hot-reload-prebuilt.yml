@@ -66,10 +66,10 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         working-directory: sdk
-        # Full build. The repo's test projects carry analyzer violations (e.g. MSTEST0071) that are
-        # promoted to errors by TreatWarningsAsErrors; disable that so the product (and the redist)
-        # build. We do not run tests here.
-        run: ./build.sh -c Debug /p:TreatWarningsAsErrors=false
+        # Full build. The repo's test projects carry analyzer violations (e.g. MSTEST0071) reported
+        # as errors; disable analyzers and warnings-as-errors so the product (and the redist) build.
+        # We do not run tests here, so the diagnostics are irrelevant.
+        run: ./build.sh -c Debug /p:RunAnalyzers=false /p:TreatWarningsAsErrors=false
 
       - name: Build F# compiler (Windows)
         if: runner.os == 'Windows'
@@ -81,7 +81,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: cmd
         working-directory: sdk
-        run: build.cmd -c Debug /p:TreatWarningsAsErrors=false
+        run: build.cmd -c Debug /p:RunAnalyzers=false /p:TreatWarningsAsErrors=false
 
       - name: Sync hot-reload FCS into the redist
         shell: bash
