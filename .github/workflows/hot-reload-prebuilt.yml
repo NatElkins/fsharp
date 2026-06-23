@@ -26,8 +26,9 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-latest,  rid: linux-x64 }
-          - { os: macos-latest,   rid: osx-arm64 }
-          - { os: windows-latest, rid: win-x64 }
+          # macos/windows re-enabled after the linux build is validated:
+          # - { os: macos-latest,   rid: osx-arm64 }
+          # - { os: windows-latest, rid: win-x64 }
     runs-on: ${{ matrix.os }}
     steps:
       - name: Free disk space (Linux)
@@ -61,16 +62,14 @@ jobs:
         working-directory: fsharp
         run: ./build.sh -c Debug
 
-      - name: Build SDK redist (unix)
+      - name: Build SDK (unix)
         if: runner.os != 'Windows'
         shell: bash
         working-directory: sdk
-        # Full restore first (the scoped build alone does a shallow restore that misses the
-        # redist's transitive project references), then build only the redist layout (which
-        # avoids compiling the repo's large test projects).
-        run: |
-          ./build.sh --restore -c Debug
-          ./build.sh --build --projects "$(pwd)/src/Layout/redist/redist.csproj" -c Debug
+        # Full build. The repo's test projects carry analyzer violations (e.g. MSTEST0071) that are
+        # promoted to errors by TreatWarningsAsErrors; disable that so the product (and the redist)
+        # build. We do not run tests here.
+        run: ./build.sh -c Debug /p:TreatWarningsAsErrors=false
 
       - name: Build F# compiler (Windows)
         if: runner.os == 'Windows'
@@ -78,11 +77,11 @@ jobs:
         working-directory: fsharp
         run: build.cmd -c Debug
 
-      - name: Build SDK redist (Windows)
+      - name: Build SDK (Windows)
         if: runner.os == 'Windows'
         shell: cmd
         working-directory: sdk
-        run: build.cmd --restore -c Debug && build.cmd --build --projects "%CD%\src\Layout\redist\redist.csproj" -c Debug
+        run: build.cmd -c Debug /p:TreatWarningsAsErrors=false
 
       - name: Sync hot-reload FCS into the redist
         shell: bash
