@@ -1,0 +1,106 @@
+name: Hot Reload Prebuilt SDK
+
+# Manually-dispatched: builds the F#-hot-reload compiler + the F#-aware SDK on each OS, syncs the
+# compiler into the SDK redist, and publishes the runnable SDK as a GitHub Release asset. Lives on
+# the fork's default branch so it is dispatchable, but it builds the feature branches (hot-reload-v2
+# and fsharp-hotreload-watch-v2) and never touches the review PR.
+#
+# NOTE: first run is expected to need tuning (per-OS build flags, runner disk space, the ~2 GB
+# redist). Validate on a dispatch, then iterate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish the binaries to"
+        required: true
+        default: "hot-reload-preview"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  rid: linux-x64 }
+          - { os: macos-latest,   rid: osx-arm64 }
+          - { os: windows-latest, rid: win-x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h
+
+      - name: Checkout F# compiler (hot-reload-v2)
+        uses: actions/checkout@v4
+        with:
+          repository: NatElkins/fsharp
+          ref: hot-reload-v2
+          path: fsharp
+
+      - name: Checkout SDK (fsharp-hotreload-watch-v2)
+        uses: actions/checkout@v4
+        with:
+          repository: NatElkins/sdk
+          ref: fsharp-hotreload-watch-v2
+          path: sdk
+
+      - name: Build F# compiler (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        working-directory: fsharp
+        run: ./build.sh -c Debug
+
+      - name: Build SDK redist (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        working-directory: sdk
+        run: ./build.sh --projects "$(pwd)/src/Layout/redist/redist.csproj" -c Debug
+
+      - name: Build F# compiler (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        working-directory: fsharp
+        run: build.cmd -c Debug
+
+      - name: Build SDK redist (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        working-directory: sdk
+        run: build.cmd --projects "%CD%\src\Layout\redist\redist.csproj" -c Debug
+
+      - name: Sync hot-reload FCS into the redist
+        shell: bash
+        run: |
+          fcs="$GITHUB_WORKSPACE/fsharp/artifacts/bin/FSharp.Compiler.Service/Debug/netstandard2.0"
+          for d in "$GITHUB_WORKSPACE"/sdk/artifacts/bin/redist/Debug/dotnet/sdk/*/FSharp; do
+            cp -f "$fcs/FSharp.Compiler.Service.dll" "$d/"
+            cp -f "$fcs/FSharp.Core.dll" "$d/"
+            echo "synced FCS -> $d"
+          done
+
+      - name: Package redist
+        shell: bash
+        run: tar -czf "fsharp-hotreload-sdk-${{ matrix.rid }}.tar.gz" -C "$GITHUB_WORKSPACE/sdk/artifacts/bin/redist/Debug" dotnet
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: F# hot reload preview SDK
+          body: |
+            Prebuilt .NET SDK with F# hot reload (the F#-aware `dotnet watch`).
+
+            Unpack the archive for your platform and use the `dotnet` inside it:
+
+                tar -xzf fsharp-hotreload-sdk-<rid>.tar.gz
+                export PATH="$PWD/dotnet:$PATH"   # Windows: add the dotnet folder to PATH
+                dotnet watch run                  # in an F# project that opts in
+
+            See docs/hot-reload-quickstart.md (step 4 onward) for the opt-in flag and what to try editing.
+          files: fsharp-hotreload-sdk-${{ matrix.rid }}.tar.gz
