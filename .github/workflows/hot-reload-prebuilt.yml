@@ -22,9 +22,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # linux/macos already validated and published; windows-only this iteration:
-          # - { os: ubuntu-latest,  rid: linux-x64 }
-          # - { os: macos-latest,   rid: osx-arm64 }
+          - { os: ubuntu-latest,  rid: linux-x64 }
+          - { os: macos-latest,   rid: osx-arm64 }
           - { os: windows-latest, rid: win-x64 }
     runs-on: ${{ matrix.os }}
     steps:
