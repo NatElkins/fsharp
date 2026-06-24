@@ -12,12 +12,52 @@ on:
         description: "Release tag to publish the binaries to"
         required: true
         default: "hot-reload-preview"
+  # Auto-refresh: on a schedule, rebuild ONLY if hot-reload-v2 or fsharp-hotreload-watch-v2 moved
+  # since the last publish. Cheap when nothing changed (just the `check` job runs, ~30s). Tune the
+  # cadence by editing the cron below.
+  schedule:
+    - cron: "0 */3 * * *"
+  # Instant trigger you can fire from anywhere (e.g. after pushing):
+  #   gh api repos/NatElkins/fsharp/dispatches -f event_type=rebuild-binaries
+  repository_dispatch:
+    types: [rebuild-binaries]
 
 permissions:
   contents: write
 
 jobs:
+  # Gate: build only when the source branches actually changed (always builds on manual/dispatch).
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.c.outputs.changed }}
+      combo: ${{ steps.c.outputs.combo }}
+      tag: ${{ steps.c.outputs.tag }}
+    steps:
+      - id: c
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.inputs.tag }}"
+          [ -z "$tag" ] && tag="hot-reload-preview"
+          fsha=$(git ls-remote https://github.com/NatElkins/fsharp.git hot-reload-v2 | cut -f1)
+          ssha=$(git ls-remote https://github.com/NatElkins/sdk.git fsharp-hotreload-watch-v2 | cut -f1)
+          combo="${fsha:0:12}-${ssha:0:12}"
+          last=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' 2>/dev/null \
+                 | grep -oE 'built-from: [a-f0-9-]+' | awk '{print $2}' || true)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "combo=$combo" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$combo" = "$last" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No source changes since last publish ($combo); skipping build."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Building. combo=$combo last=${last:-none} event=${{ github.event_name }}"
+          fi
+
   build:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -120,7 +160,7 @@ jobs:
       - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag }}
+          tag_name: ${{ needs.check.outputs.tag }}
           name: F# hot reload preview SDK
           body: |
             Prebuilt .NET SDK with F# hot reload (the F#-aware `dotnet watch`).
@@ -132,4 +172,6 @@ jobs:
                 dotnet watch run                  # in an F# project that opts in
 
             See docs/hot-reload-quickstart.md (step 4 onward) for the opt-in flag and what to try editing.
+
+            built-from: ${{ needs.check.outputs.combo }}
           files: fsharp-hotreload-sdk-${{ matrix.rid }}.tar.gz
