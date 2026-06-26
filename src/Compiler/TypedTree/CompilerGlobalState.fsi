@@ -19,6 +19,10 @@ type NiceNameGenerator =
     member FreshCompilerGeneratedName: name: string * m: range -> string
     member IncrementOnly: name: string * m: range -> int
 
+    /// Reset the per-(basicName, file) occurrence counters so subsequent codegen assigns the same
+    /// occurrence names a fresh process would. Used by emit-from-cache for baseline-consistent naming.
+    member ResetGeneratedNameCounters: unit -> unit
+
 /// Generates compiler-generated names marked up with a source code location, but if given the same unique value then
 /// return precisely the same name. Each name generated also includes the StartLine number of the range passed in
 /// at the point of first generation.
@@ -29,6 +33,9 @@ type StableNiceNameGenerator =
 
     new: unit -> StableNiceNameGenerator
     member GetUniqueCompilerGeneratedName: name: string * m: range * uniq: int64 -> string
+
+    /// Reset the stable-name cache and inner occurrence counters. Used by emit-from-cache.
+    member ResetGeneratedNameCounters: unit -> unit
 
 type internal CompilerGlobalState =
 
@@ -42,6 +49,11 @@ type internal CompilerGlobalState =
 
     /// A global generator of stable compiler generated names
     member StableNameGenerator: StableNiceNameGenerator
+
+    /// Reset all compiler-generated-name occurrence counters. Emit-from-cache calls this per emit so
+    /// closure occurrence names stay baseline-consistent across in-process compiles (Roslyn parity:
+    /// synthesized names are deterministic by identity+ordinal, not an accumulating global counter).
+    member ResetGeneratedNameCounters: unit -> unit
 
 type Unique = int64
 

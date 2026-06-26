@@ -1131,6 +1131,19 @@ type FSharpChecker
 
             ReportTime tcConfig "CompileFromCheckedProject: Setup"
 
+            // Emit-from-cache must lay out closures with normal @<line> names (matching a fresh fsc
+            // build), NOT the @hotreload stable names a leaked session emit-context would impose. The
+            // shared CompilerGlobalState can carry closure-name state from a prior in-process hot-reload
+            // emit; clear it so this full-module emit is baseline-consistent and the delta emitter does
+            // its own @<line>->stable bridging.
+            tcGlobals.CompilerGlobalState
+            |> Option.iter (fun cgs ->
+                FSharp.Compiler.ClosureNameAllocationState.clearClosureNameState (cgs :> obj)
+                FSharp.Compiler.CompilerGeneratedNameMapState.clearCompilerGeneratedNameMap (cgs :> obj)
+                // Reset occurrence counters so closure names (name@line-N) match a fresh-process
+                // build instead of drifting as the reused CompilerGlobalState accumulates across edits.
+                cgs.ResetGeneratedNameCounters())
+
             // The CCU from TransparentCompiler has unfinalized Contents (empty ModuleOrNamespaceType).
             // Finalize it using ccuSig, matching what CheckClosedInputSetFinish does.
             let ccuContents = Construct.NewCcuContents ILScopeRef.Local range0 unfinalizedCcu.AssemblyName ccuSig

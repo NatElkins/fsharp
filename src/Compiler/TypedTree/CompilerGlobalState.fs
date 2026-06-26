@@ -42,6 +42,12 @@ type NiceNameGenerator(getCompilerGeneratedNameMap: unit -> ICompilerGeneratedNa
 
     member _.IncrementOnly(name: string, m: range) = increment name m
 
+    /// Reset the per-(basicName, file) occurrence counters so a subsequent codegen run assigns the
+    /// same compiler-generated occurrence names it would in a fresh process. Needed for emit-from-cache:
+    /// the CompilerGlobalState is reused across in-process compiles, so without a reset the occurrence
+    /// suffixes (name@line-N) accumulate and drift between the baseline and the edit.
+    member _.ResetGeneratedNameCounters() = basicNameCounts.Clear()
+
     new () = NiceNameGenerator(fun () -> None)
 
 /// Generates compiler-generated names marked up with a source code location, but if given the same unique value then
@@ -59,6 +65,10 @@ type StableNiceNameGenerator(getCompilerGeneratedNameMap: unit -> ICompilerGener
         let basicName = GetBasicNameOfPossibleCompilerGeneratedName name
         let key = basicName, uniq
         niceNames.GetOrAdd(key, fun (basicName, _) -> innerGenerator.FreshCompilerGeneratedNameOfBasicName(basicName, m))
+
+    member _.ResetGeneratedNameCounters() =
+        niceNames.Clear()
+        innerGenerator.ResetGeneratedNameCounters()
 
     new () = StableNiceNameGenerator(fun () -> None)
 
@@ -83,6 +93,16 @@ type internal CompilerGlobalState () as this =
     member _.StableNameGenerator = globalStableNameGenerator
 
     member _.IlxGenNiceNameGenerator = ilxgenGlobalNng
+
+    /// Reset all compiler-generated-name occurrence counters on this state. Emit-from-cache reuses
+    /// one CompilerGlobalState across in-process compiles, so without this the closure occurrence
+    /// suffixes (name@line-N) drift from the baseline. Roslyn parity: synthesized-member names are a
+    /// deterministic function of syntactic identity + ordinal, not an accumulating global counter; a
+    /// per-emit reset reproduces that determinism for the existing line-based generator.
+    member _.ResetGeneratedNameCounters() =
+        globalNng.ResetGeneratedNameCounters()
+        ilxgenGlobalNng.ResetGeneratedNameCounters()
+        globalStableNameGenerator.ResetGeneratedNameCounters()
 
 /// Unique name generator for stamps attached to lambdas and object expressions
 type Unique = int64
