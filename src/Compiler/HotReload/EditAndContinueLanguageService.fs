@@ -406,8 +406,16 @@ type internal FSharpEditAndContinueLanguageService private (getSessionStore: uni
                         Activity.Tags.project, session.Baseline.ModuleId.ToString()
                     |]
 
+            let __sw = System.Diagnostics.Stopwatch.StartNew()
+            let __log (stage: string) =
+                let ms = __sw.ElapsedMilliseconds
+                (try System.IO.File.AppendAllText("/tmp/emitdelta-profile.log", sprintf "%s=%dms\n" stage ms) with _ -> ())
+                __sw.Restart()
+
             let symbolChanges =
                 computeSymbolChanges tcGlobals session.Capabilities session.ImplementationFiles updatedImplementation
+
+            __log "computeSymbolChanges"
 
             if not (List.isEmpty symbolChanges.RudeEdits) then
                 // Carry the per-edit structured diagnostics (Id + Severity + Message, including
@@ -427,6 +435,8 @@ type internal FSharpEditAndContinueLanguageService private (getSessionStore: uni
                 | Ok(updatedTypes, updatedMethods, accessorUpdates) ->
                     let updatedMethods =
                         augmentWithCompilerGeneratedCompanions session.Baseline updatedMethods
+
+                    __log "mapSymbolChanges+augment"
 
                     // Insert-only edits (for example, adding an allowed non-virtual method) may not produce
                     // method-body updates, but still need to flow to IlxDeltaEmitter so new MethodDef rows are emitted.
@@ -466,8 +476,11 @@ type internal FSharpEditAndContinueLanguageService private (getSessionStore: uni
                                 |> snd
                         }
 
+                    __log "buildRequest(refreshedEnc+closureNames)"
+
                     match this.EmitDelta(request, ?freshDebugPdb = freshDebugPdb, ?projectKey = projectKey) with
                     | Ok result ->
+                        __log "emitDeltaCore(IlxDeltaEmitter)"
                         let delta = result.Delta
 
                         if delta.UpdatedBaseline.IsSome then

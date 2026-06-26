@@ -291,7 +291,13 @@ type internal FSharpHotReloadService
             match outputPath with
             | None -> return Result.Error FSharpHotReloadError.MissingOutputPath
             | Some outputPath ->
+                let __sw = System.Diagnostics.Stopwatch.StartNew()
+                let __log (stage: string) =
+                    let ms = __sw.ElapsedMilliseconds
+                    (try System.IO.File.AppendAllText("/tmp/session-profile.log", sprintf "%s=%dms\n" stage ms) with _ -> ())
+                    __sw.Restart()
                 let! projectResults = parseAndCheckProject ()
+                __log "parseAndCheckProject"
 
                 let errors = getErrorDiagnostics projectResults.Diagnostics
 
@@ -306,8 +312,10 @@ type internal FSharpHotReloadService
                         )
                 else
                     let tcGlobals, implementationFiles = getHotReloadDiffInputs projectResults
+                    __log "getHotReloadDiffInputs(optimize)"
                     waitForStableFile outputPath
                     let outputFingerprint = tryGetOutputFingerprint outputPath
+                    __log "waitForStableFile+fingerprint"
 
                     let sessionActive =
                         lock hotReloadGate (fun () ->
@@ -385,12 +393,15 @@ type internal FSharpHotReloadService
                                         else
                                             None)
 
+                        __log "staleOutputCheck"
                         match staleOutputErrorOpt with
                         | Some staleError -> return Result.Error staleError
                         | None ->
                             let ilModuleResult: Result<_, FSharpHotReloadError> =
                                 try
-                                    readIlModule outputPath |> Ok
+                                    let r = readIlModule outputPath |> Ok
+                                    __log "readIlModule(obj DLL from disk)"
+                                    r
                                 with ex ->
                                     Result.Error(
                                         FSharpHotReloadError.DeltaEmissionFailed(
