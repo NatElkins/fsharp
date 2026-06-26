@@ -364,7 +364,18 @@ type FSharpChecker
         | Some _, None -> true
         | None, None -> false
 
+    // Emit-from-cache stashes the freshly built in-memory ILModuleDef here so the hot-reload session
+    // consumes it directly instead of serializing the ~390KB module to disk and re-parsing it (saving an
+    // OpenILModuleReader parse + the waitForStableFile poll). One-shot per output path; the external-build
+    // / dotnet-watch path never populates it and falls back to the disk read.
+    let inMemoryEmitCache = System.Collections.Concurrent.ConcurrentDictionary<string, ILModuleDef>()
+
     let readIlModule path =
+        let mutable stashed = Unchecked.defaultof<ILModuleDef>
+        if inMemoryEmitCache.TryRemove(path, &stashed) then
+            stashed
+        else
+
         waitForStableFile path
 
         let options: ILReaderOptions =
@@ -1313,6 +1324,9 @@ type FSharpChecker
                     )
                 // Strip native resources — default.win32manifest may not exist on all platforms.
                 { m with NativeResources = [] }
+
+            // Hand the in-memory module to the hot-reload session so it skips the disk re-parse.
+            inMemoryEmitCache[outfile] <- ilxMainModule
 
             let normalizeAssemblyRefs (aref: ILAssemblyRef) =
                 tcImports.NormalizeAssemblyRef(ctok, aref)
