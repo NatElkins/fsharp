@@ -88,6 +88,7 @@
   <!-- Hot reload relies on .NET Core-only APIs (MetadataUpdater.ApplyUpdate, AssemblyLoadContext),
        so its tests build and run on .NET Core only, not .NET Framework. -->
   <ItemGroup Condition="'$(TargetFrameworkIdentifier)' == '.NETCoreApp'">
+    <Compile Include="HotReload/PerfHarness.fs" />
     <Compile Include="HotReload/EditAndContinueCapabilitiesTests.fs" />
     <Compile Include="HotReload/TypedTreeDiffTests.fs" />
     <Compile Include="HotReload/HotReloadCheckerTests.fs" />

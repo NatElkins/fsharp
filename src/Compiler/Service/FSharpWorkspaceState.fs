@@ -246,27 +246,32 @@ type FSharpWorkspaceFiles internal (depGraph: IThreadSafeDependencyGraph<_, _>) 
 
     /// Indicates that a file has been opened and has the given content. Any updates to the file should be done through `Files.Edit`.
     member _.Open(file: Uri, content) =
-        use _ = Activity.start "Files.Open" [ Activity.Tags.fileName, file.LocalPath ]
+        // Normalize to the same canonical form the project source-file nodes use, so an open/edit
+        // updates the project's node (and open-content lookup) rather than a disconnected one.
+        let path = Path.GetFullPath file.LocalPath
+        use _ = Activity.start "Files.Open" [ Activity.Tags.fileName, path ]
 
-        openFiles.AddOrUpdate(file.LocalPath, content, (fun _ _ -> content)) |> ignore
-        depGraph.AddOrUpdateFile(file.LocalPath, FSharpFileSnapshot.CreateFromString(file.LocalPath, content))
+        openFiles.AddOrUpdate(path, content, (fun _ _ -> content)) |> ignore
+        depGraph.AddOrUpdateFile(path, FSharpFileSnapshot.CreateFromString(path, content))
 
     /// Indicates that a file has been changed and now has the given content. If it wasn't previously open it is considered open now.
     member _.Edit(file: Uri, content) =
-        use _ = Activity.start "Files.Edit" [ Activity.Tags.fileName, file.LocalPath ]
+        let path = Path.GetFullPath file.LocalPath
+        use _ = Activity.start "Files.Edit" [ Activity.Tags.fileName, path ]
 
-        openFiles.AddOrUpdate(file.LocalPath, content, (fun _ _ -> content)) |> ignore
-        depGraph.AddOrUpdateFile(file.LocalPath, FSharpFileSnapshot.CreateFromString(file.LocalPath, content))
+        openFiles.AddOrUpdate(path, content, (fun _ _ -> content)) |> ignore
+        depGraph.AddOrUpdateFile(path, FSharpFileSnapshot.CreateFromString(path, content))
 
     /// Indicates that a file has been closed. Any changes that were not saved to disk are undone and any further reading
     /// of the file's contents will be from the filesystem.
     member _.Close(file: Uri) =
-        use _ = Activity.start "Files.Close" [ Activity.Tags.fileName, file.LocalPath ]
+        let path = Path.GetFullPath file.LocalPath
+        use _ = Activity.start "Files.Close" [ Activity.Tags.fileName, path ]
 
-        openFiles.TryRemove(file.LocalPath) |> ignore
+        openFiles.TryRemove(path) |> ignore
 
         // The file may have had changes that weren't saved to disk and are therefore undone by closing it.
-        depGraph.AddOrUpdateFile(file.LocalPath, FSharpFileSnapshot.CreateFromFileSystem(file.LocalPath))
+        depGraph.AddOrUpdateFile(path, FSharpFileSnapshot.CreateFromFileSystem(path))
 
     /// Returns file paths for all source files of the given project.
     member _.OfProject(projectIdentifier: FSharpProjectIdentifier) =
@@ -407,7 +412,11 @@ type FSharpWorkspaceProjects internal (depGraph: IThreadSafeDependencyGraph<_, _
                 if not (isFSharpFile line) then
                     None
                 else
-                    Some(Path.Combine(directoryPath, line)))
+                    // Canonicalize to the same form Files.Open/Edit/Close use (Path.GetFullPath of
+                    // the file path) so an incremental Files.Edit updates THIS project's source-file
+                    // node (and open-content lookup) rather than a disconnected one, which would
+                    // otherwise leave the project snapshot stale after a per-edit change.
+                    Some(Path.GetFullPath(Path.Combine(directoryPath, line))))
 
         this.AddOrUpdate(projectPath, outputPath, sourceFiles, referencesOnDisk, otherOptions)
 

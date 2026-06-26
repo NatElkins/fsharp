@@ -342,6 +342,13 @@ type internal FSharpHotReloadService
                                     let symbolChanges =
                                         computeSymbolChanges tcGlobals session.Capabilities session.ImplementationFiles implementationFiles
 
+                                    do
+                                        (try
+                                            System.IO.File.AppendAllText(
+                                                "/tmp/symdiff.log",
+                                                sprintf "symbolChanges: added=%d updated=%d\n" symbolChanges.Added.Length symbolChanges.Updated.Length)
+                                         with _ -> ())
+
                                     match mapSymbolChangesToDelta session.Baseline symbolChanges with
                                     | Error mappingErrors ->
                                         Some(
