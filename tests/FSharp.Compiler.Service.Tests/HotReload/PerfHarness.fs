@@ -90,12 +90,27 @@ module PerfHarness =
                     SourceFiles = sourceFiles }
             FSharpProjectSnapshot.FromOptions(options, DocumentSource.FileSystem) |> Async.RunSynchronously
 
+        // HRPERF_COMPILECLEAN: emit the obj DLL through a SEPARATE checker so its CompilerGlobalState
+        // has no HR closure-name-state registered. The shared session checker leaks the @hotreload
+        // stable-naming state into the full-module compile, colliding closure names and exploding the
+        // baseline token map. A clean checker emits normal @<line> names like the external fsc.exe.
+        let compileChecker =
+            if isOn "HRPERF_COMPILECLEAN" then
+                FSharpChecker.Create(
+                    keepAssemblyContents = true,
+                    keepAllBackgroundResolutions = false,
+                    enablePartialTypeChecking = false,
+                    useTransparentCompiler = useTC,
+                    transparentCompilerCacheSizes = CacheSizes.Create cacheFactor)
+            else
+                checker
+
         let inprocCompile () =
             // HRPERF_SERIAL pins parallelcompilation off (parallel IlxGen / opt are the documented
             // source of non-deterministic synthesized closure/type names, dotnet/fsharp #19732/#19928).
             let extra = if isOn "HRPERF_SERIAL" then [| "--parallelcompilation-" |] else [||]
             let argv = Array.concat [ [| "fsc.exe" |]; args; extra ]
-            let _diags, exOpt = checker.Compile(argv) |> Async.RunSynchronously
+            let _diags, exOpt = compileChecker.Compile(argv) |> Async.RunSynchronously
             match exOpt with Some ex -> raise ex | None -> ()
 
         let compile () =
@@ -114,12 +129,20 @@ module PerfHarness =
 
         emit (sprintf "[HRPERF] proj=%s compile=%s transparentCompiler=%b iters=%d" proj compileMode useTC iters)
 
+        // HRPERF_RESETSTAMPS: reset the process-global stamp counter right before each session
+        // typecheck so the in-process compile's perturbation does not shift the baseline/edit
+        // typed-tree against the obj DLL (the root cause of the inproc updatedMethods explosion).
+        let resetStamps () =
+            if isOn "HRPERF_RESETSTAMPS" then
+                FSharp.Compiler.CompilerGlobalState.resetGlobalCountersForTest()
+
         // baseline build + AddProject (capture committed baseline)
         let (), tBuild0 = timeMs compile
         let session = checker.CreateHotReloadSession(capabilities)
         let snap0 = mkSnapshot ()
         emit (sprintf "[HRPERF] snapshot SourceFiles=%d" snap0.SourceFiles.Length)
         if not (isOn "HRPERF_NOSESSION") then
+            resetStamps ()
             let _add, tAdd = timeMs (fun () ->
                 session.AddProject(snap0, outputPath = outDll) |> Async.RunSynchronously)
             emit (sprintf "[HRPERF] baseline: build=%.0fms addProject=%.0fms" tBuild0 tAdd)
@@ -163,6 +186,11 @@ module PerfHarness =
                 emit (sprintf "[HRPERF] edit %d: PARALLEL total=%.0fms outcome=%s" i sw.Elapsed.TotalMilliseconds o)
             else
                 let (), tCompile = timeMs compile
+                (try
+                    use md5 = System.Security.Cryptography.MD5.Create()
+                    let h = md5.ComputeHash(File.ReadAllBytes outDll) |> System.BitConverter.ToString
+                    File.AppendAllText("/tmp/dllhash.log", sprintf "edit %d outDllHash=%s\n" i (h.Replace("-", "").Substring(0, 16)))
+                 with _ -> ())
                 let snap = mkSnap ()
                 let outcome, tEmit =
                     if isOn "HRPERF_NOSESSION" then
@@ -179,6 +207,7 @@ module PerfHarness =
                         let _r, t = timeMs (fun () -> chk.ParseAndCheckProject(snap) |> Async.RunSynchronously)
                         "noSession-check", t
                     else
+                        resetStamps ()
                         let res, t = timeMs (fun () -> session.EmitDelta(snap) |> Async.RunSynchronously)
                         session.Commit()
                         let o =

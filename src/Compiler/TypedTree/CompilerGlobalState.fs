@@ -97,3 +97,10 @@ let mutable private stampCount = 0L
 let newStamp() =
     let stamp = Interlocked.Increment &stampCount
     stamp
+
+/// TEST-ONLY: reset the process-global stamp/unique counters so a fresh whole-project
+/// typecheck produces the same stamps it would in a fresh process. Used to confirm the
+/// in-process hot-reload baseline-mismatch root cause.
+let resetGlobalCountersForTest() =
+    System.Threading.Interlocked.Exchange(&stampCount, 0L) |> ignore
+    System.Threading.Interlocked.Exchange(&uniqueCount, 0L) |> ignore

@@ -346,7 +346,9 @@ type internal FSharpHotReloadService
                                         (try
                                             System.IO.File.AppendAllText(
                                                 "/tmp/symdiff.log",
-                                                sprintf "symbolChanges: added=%d updated=%d\n" symbolChanges.Added.Length symbolChanges.Updated.Length)
+                                                sprintf "symbolChanges: added=%d updated=%d deleted=%d synthesized=%d rudeEdits=%d\n"
+                                                    symbolChanges.Added.Length symbolChanges.Updated.Length symbolChanges.Deleted.Length
+                                                    symbolChanges.Synthesized.Length symbolChanges.RudeEdits.Length)
                                          with _ -> ())
 
                                     match mapSymbolChangesToDelta session.Baseline symbolChanges with
