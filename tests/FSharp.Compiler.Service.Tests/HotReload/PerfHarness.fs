@@ -113,6 +113,13 @@ module PerfHarness =
             let _diags, exOpt = compileChecker.Compile(argv) |> Async.RunSynchronously
             match exOpt with Some ex -> raise ex | None -> ()
 
+        // fromcache: the emit-from-cache path (#19267). Check the snapshot once (shared with the
+        // session's EmitDelta via the TransparentCompiler cache), then emit the obj DLL in-process
+        // from those checked results - no external dotnet build, no second whole-project compile.
+        let fromcacheCompile (snap: FSharpProjectSnapshot) =
+            let results = checker.ParseAndCheckProject(snap) |> Async.RunSynchronously
+            checker.CompileFromCheckedProject(results, outDll) |> Async.RunSynchronously |> ignore
+
         let compile () =
             if compileMode = "inproc" then inprocCompile () else externalCompile dotnet proj
 
@@ -137,9 +144,11 @@ module PerfHarness =
                 FSharp.Compiler.CompilerGlobalState.resetGlobalCountersForTest()
 
         // baseline build + AddProject (capture committed baseline)
-        let (), tBuild0 = timeMs compile
-        let session = checker.CreateHotReloadSession(capabilities)
         let snap0 = mkSnapshot ()
+        let (), tBuild0 =
+            if compileMode = "fromcache" then timeMs (fun () -> fromcacheCompile snap0)
+            else timeMs compile
+        let session = checker.CreateHotReloadSession(capabilities)
         emit (sprintf "[HRPERF] snapshot SourceFiles=%d" snap0.SourceFiles.Length)
         if not (isOn "HRPERF_NOSESSION") then
             resetStamps ()
@@ -185,13 +194,15 @@ module PerfHarness =
                     | Error e -> let s = sprintf "Error %A" e in (if s.Length > 60 then s.Substring(0, 60) else s)
                 emit (sprintf "[HRPERF] edit %d: PARALLEL total=%.0fms outcome=%s" i sw.Elapsed.TotalMilliseconds o)
             else
-                let (), tCompile = timeMs compile
+                let snap = mkSnap ()
+                let (), tCompile =
+                    if compileMode = "fromcache" then timeMs (fun () -> fromcacheCompile snap)
+                    else timeMs compile
                 (try
                     use md5 = System.Security.Cryptography.MD5.Create()
                     let h = md5.ComputeHash(File.ReadAllBytes outDll) |> System.BitConverter.ToString
                     File.AppendAllText("/tmp/dllhash.log", sprintf "edit %d outDllHash=%s\n" i (h.Replace("-", "").Substring(0, 16)))
                  with _ -> ())
-                let snap = mkSnap ()
                 let outcome, tEmit =
                     if isOn "HRPERF_NOSESSION" then
                         // Isolation: pure repeated typecheck, no hot-reload session at all.
@@ -213,7 +224,9 @@ module PerfHarness =
                         let o =
                             match res with
                             | Ok delta -> sprintf "Ok updatedMethods=%d updatedTypes=%d" delta.UpdatedMethods.Length delta.UpdatedTypes.Length
-                            | Error e -> let s = sprintf "Error %A" e in (if s.Length > 70 then s.Substring(0, 70) else s)
+                            | Error e ->
+                                (try File.AppendAllText("/tmp/hrerror.log", sprintf "edit %d FULL ERROR: %A\n\n" i e) with _ -> ())
+                                let s = sprintf "Error %A" e in (if s.Length > 70 then s.Substring(0, 70) else s)
                         o, t
                 let asmCount = System.AppDomain.CurrentDomain.GetAssemblies().Length
                 emit (sprintf "[HRPERF] edit %d: compile1=%.0fms emitDelta=%.0fms total=%.0fms asm=%d outcome=%s" i tCompile tEmit (tCompile + tEmit) asmCount outcome)
