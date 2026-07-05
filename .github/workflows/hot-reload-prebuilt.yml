@@ -98,25 +98,22 @@ jobs:
           ref: fsharp-hotreload-watch-v2
           path: sdk
 
-      - name: Pre-seed dotnet-install script (Linux CDN workaround)
-        if: runner.os == 'Linux'
+      - name: Guard against checked-in toolchain paths
         shell: bash
-        # GitHub-hosted ubuntu runners have been unable to download dotnet-install.sh from
-        # builds.dotnet.microsoft.com since 2026-07-03 (chunked-encoding failures on every
-        # retry; macOS, Windows, and AzDO agents are unaffected). Arcade's
-        # GetDotNetInstallScript skips its download when the script and its freshness
-        # timestamp already exist, so seed both from the canonical GitHub mirror.
+        # A dev-machine .dotnet symlink once got committed to hot-reload-v2 and broke the
+        # toolchain bootstrap on every CI checkout (dangling symlink, so writing
+        # .dotnet/dotnet-install.sh failed in a way curl reports as a network error).
+        # Fail fast with a clear message if that ever happens again.
         run: |
           set -euo pipefail
-          seed() {
-            mkdir -p "$1"
-            curl -sSL --retry 5 -o "$1/dotnet-install.sh" \
-              https://raw.githubusercontent.com/dotnet/install-scripts/main/src/dotnet-install.sh
-            chmod +x "$1/dotnet-install.sh"
-            date +%s > "$1/.dotnet-install.timestamp"
-          }
-          seed "$GITHUB_WORKSPACE/fsharp/.dotnet"
-          seed "$GITHUB_WORKSPACE/sdk/.dotnet"
+          for repo in fsharp sdk; do
+            entry="$GITHUB_WORKSPACE/$repo/.dotnet"
+            if [ -L "$entry" ] || { [ -e "$entry" ] && [ ! -d "$entry" ]; }; then
+              echo "::error::$repo/.dotnet exists in the checkout as a non-directory (committed symlink or file). Remove it from the branch."
+              ls -la "$entry"
+              exit 1
+            fi
+          done
 
       - name: Build F# compiler (unix)
         if: runner.os != 'Windows'
