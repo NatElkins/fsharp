@@ -184,6 +184,12 @@ jobs:
     needs: [check, build]
     runs-on: ubuntu-latest
     steps:
+      # The release is refreshed in place on a fixed tag, so the page header keeps the
+      # original publish date; a visible build timestamp in the body is the freshness signal.
+      - name: Compute build timestamp
+        id: stamp
+        run: echo "date=$(date -u '+%Y-%m-%d %H:%M UTC')" >> "$GITHUB_OUTPUT"
+
       - name: Stamp GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -191,6 +197,8 @@ jobs:
           name: F# hot reload preview SDK
           body: |
             Prebuilt .NET SDK with F# hot reload (the F#-aware `dotnet watch`).
+
+            **Last built: ${{ steps.stamp.outputs.date }}** (the binaries below are replaced in place; ignore the release date in the header)
 
             Unpack the archive for your platform and use the `dotnet` inside it:
 
