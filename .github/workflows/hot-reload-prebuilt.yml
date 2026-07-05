@@ -161,6 +161,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.check.outputs.tag }}
+          files: fsharp-hotreload-sdk-${{ matrix.rid }}.tar.gz
+
+  finalize:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Stamp GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check.outputs.tag }}
           name: F# hot reload preview SDK
           body: |
             Prebuilt .NET SDK with F# hot reload (the F#-aware `dotnet watch`).
@@ -174,4 +184,3 @@ jobs:
             See docs/hot-reload-quickstart.md (step 4 onward) for the opt-in flag and what to try editing.
 
             built-from: ${{ needs.check.outputs.combo }}
-          files: fsharp-hotreload-sdk-${{ matrix.rid }}.tar.gz
