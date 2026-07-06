@@ -52,15 +52,24 @@ type Type =
             useTransparentCompiler = CompilerAssertHelpers.UseTransparentCompiler
         )
 
-    let private prepareProjectOptions
+    let private withEnvironmentVariable name value =
+        let previous = Environment.GetEnvironmentVariable(name)
+        Environment.SetEnvironmentVariable(name, value)
+
+        { new IDisposable with
+            member _.Dispose() =
+                Environment.SetEnvironmentVariable(name, previous) }
+
+    let private prepareProjectOptionsWithSources
         (checker: FSharpChecker)
-        (fsPath: string)
+        (projectFsPath: string)
         (dllPath: string)
         (source: string)
+        (sourceFiles: string[])
         =
         let projectOptions, _ =
             checker.GetProjectOptionsFromScript(
-                fsPath,
+                projectFsPath,
                 SourceText.ofString source,
                 assumeDotNetFramework = false,
                 useSdkRefs = true,
@@ -69,7 +78,7 @@ type Type =
             |> Async.RunImmediate
 
         { projectOptions with
-            SourceFiles = [| fsPath |]
+            SourceFiles = sourceFiles
             OtherOptions =
                 projectOptions.OtherOptions
                 |> Array.append
@@ -80,6 +89,14 @@ type Type =
                        "--deterministic"
                        "--test:HotReloadDeltas"
                        $"--out:{dllPath}" |] }
+
+    let private prepareProjectOptions
+        (checker: FSharpChecker)
+        (fsPath: string)
+        (dllPath: string)
+        (source: string)
+        =
+        prepareProjectOptionsWithSources checker fsPath dllPath source [| fsPath |]
 
     let private compileProject
         (checker: FSharpChecker)
@@ -966,6 +983,47 @@ type Type =
         with _ -> ()
 
     [<Fact>]
+    let ``EmitDelta in-process compile refreshes output before stale validation`` () =
+        use _env = withEnvironmentVariable "FSHARP_HOTRELOAD_INPROCESS_COMPILE" "1"
+
+        let projectDir =
+            Path.Combine(Path.GetTempPath(), "fcs-hotreload-inprocess-refresh-output", Guid.NewGuid().ToString("N"))
+
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let fsPath = Path.Combine(projectDir, "Library.fs")
+        let dllPath = Path.Combine(projectDir, "Library.dll")
+
+        File.WriteAllText(fsPath, baselineSource)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker fsPath dllPath baselineSource
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        use session = checker.CreateHotReloadSession()
+
+        match session.AddProject(createProjectSnapshot projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        File.WriteAllText(fsPath, updatedSource)
+        checker.NotifyFileChanged(fsPath, projectOptions) |> Async.RunImmediate
+
+        // dotnet-watch skips the external per-edit build when this switch is set. EmitDelta
+        // must perform the in-process compile before it validates the output fingerprint.
+        match session.EmitDelta(createProjectSnapshot projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitDelta failed after in-process compile: %A" error
+        | Ok delta ->
+            Assert.NotEmpty(delta.Metadata)
+            Assert.NotEmpty(delta.IL)
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
     let ``Tracked dependency invalidation keeps subsequent source edit hot-reloadable`` () =
         let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-dependency-invalidation", Guid.NewGuid().ToString("N"))
         Directory.CreateDirectory(projectDir) |> ignore
@@ -1607,6 +1665,156 @@ let view name =
             Assert.True(
                 updatedMethodDisplays |> List.exists (fun methodDisplay -> methodDisplay.Contains("@hotreload")),
                 $"Expected synthesized helper method update for CE local-lambda edit. Updated methods: {updatedMethodDisplayText}")
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``Session-scoped in-process compile keeps unrelated CE closure mappings isolated`` () =
+        let projectDir = Path.Combine(Path.GetTempPath(), "fcs-hotreload-scoped-inprocess-ce", Guid.NewGuid().ToString("N"))
+        let dslDir = Path.Combine(projectDir, "Dsl")
+        Directory.CreateDirectory(dslDir) |> ignore
+
+        let dslPath = Path.Combine(dslDir, "Markup.fs")
+        let workerPath = Path.Combine(projectDir, "Worker.fs")
+        let dllPath = Path.Combine(projectDir, "ScopedInProcessDsl.dll")
+
+        let dslSource =
+            """
+module DslIsolation.Markup
+
+type FragmentBuilder() =
+    member _.Yield(text: string) = text
+    member _.Combine(a: string, b: string) = a + b
+    member _.Delay(f: unit -> string) = f()
+    member _.Zero() = ""
+
+let Fragment () = FragmentBuilder()
+
+let render value =
+    Fragment() {
+        "Value: "
+        string value
+    }
+"""
+
+        let baselineWorker =
+            """
+module DslIsolation.Worker
+
+let describe () = "original"
+"""
+
+        let updatedWorker =
+            """
+module DslIsolation.Worker
+
+let describe () = "updated"
+"""
+
+        File.WriteAllText(dslPath, dslSource)
+        File.WriteAllText(workerPath, baselineWorker)
+
+        let checker = createChecker ()
+
+        let projectOptions =
+            prepareProjectOptionsWithSources checker workerPath dllPath baselineWorker [| dslPath; workerPath |]
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        use session = checker.CreateHotReloadSession()
+
+        match session.AddProject(createProjectSnapshot projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let describeToken = getMethodToken dllPath "Worker" "describe"
+
+        File.WriteAllText(workerPath, updatedWorker)
+        checker.NotifyFileChanged(workerPath, projectOptions) |> Async.RunImmediate
+
+        // This mirrors the dotnet-watch in-process path: compile the updated output in
+        // the same checker without a capture compile, then emit the delta from the live
+        // session. Unrelated CE closures from the DSL source must not be remapped as if
+        // the edited source changed their closure chain.
+        compileProject checker projectOptions false
+
+        match session.EmitDelta(createProjectSnapshot projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitDelta failed for session-scoped in-process CE isolation: %A" error
+        | Ok delta -> Assert.Contains(describeToken, delta.UpdatedMethods)
+
+        try
+            Directory.Delete(projectDir, true)
+        with _ -> ()
+
+    [<Fact>]
+    let ``In-process compile preserves top-level closure names for unrelated module edit`` () =
+        use _env = withEnvironmentVariable "FSHARP_HOTRELOAD_INPROCESS_COMPILE" "1"
+
+        let projectDir =
+            Path.Combine(Path.GetTempPath(), "fcs-hotreload-inprocess-top-level-closures", Guid.NewGuid().ToString("N"))
+
+        Directory.CreateDirectory(projectDir) |> ignore
+
+        let programPath = Path.Combine(projectDir, "Program.fs")
+        let dllPath = Path.Combine(projectDir, "TopLevelClosureProject.dll")
+
+        let baselineProgram =
+            """
+module Program
+
+let handlers : (int -> string) list =
+    [
+        let prefix = "alpha"
+        fun code -> prefix + string code
+
+        let suffix = "omega"
+        fun code -> suffix + string (code + 1)
+    ]
+
+let describe () = "original"
+"""
+
+        let updatedProgram =
+            """
+module Program
+
+let handlers : (int -> string) list =
+    [
+        let prefix = "alpha"
+        fun code -> prefix + string code
+
+        let suffix = "omega"
+        fun code -> suffix + string (code + 1)
+    ]
+
+let describe () = "updated"
+"""
+
+        File.WriteAllText(programPath, baselineProgram)
+
+        let checker = createChecker ()
+        let projectOptions = prepareProjectOptions checker programPath dllPath baselineProgram
+
+        checker.InvalidateAll()
+        compileProject checker projectOptions true
+
+        use session = checker.CreateHotReloadSession()
+
+        match session.AddProject(createProjectSnapshot projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "Failed to start session: %A" error
+        | Ok () -> ()
+
+        let describeToken = getMethodToken dllPath "Program" "describe"
+
+        File.WriteAllText(programPath, updatedProgram)
+        checker.NotifyFileChanged(programPath, projectOptions) |> Async.RunImmediate
+
+        match session.EmitDelta(createProjectSnapshot projectOptions) |> Async.RunImmediate with
+        | Error error -> failwithf "EmitDelta failed for in-process top-level closure edit: %A" error
+        | Ok delta -> Assert.Contains(describeToken, delta.UpdatedMethods)
 
         try
             Directory.Delete(projectDir, true)

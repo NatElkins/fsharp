@@ -21,6 +21,7 @@ open FSharp.Compiler.HotReloadBaseline
 open FSharp.Compiler.HotReloadPdb
 open FSharp.Compiler.IlxDeltaStreams
 open FSharp.Compiler.CodeGen.FSharpDefinitionIndex
+open FSharp.Compiler.GeneratedNames
 open FSharp.Compiler.SynthesizedTypeMaps
 open FSharp.Compiler.Syntax.PrettyNaming
 open FSharp.Compiler.TypedTreeDiff
@@ -3547,35 +3548,52 @@ let emitDeltaWithDebugData (freshDebugPdb: byte[] option) (request: IlxDeltaRequ
             | [||] -> None
             | [| single |] -> Some single
             | matches ->
+                let isBaselineMatchAvailable matchedName =
+                    match newTypeNameByBaseline.TryGetValue matchedName with
+                    | true, existingNewName -> String.Equals(existingNewName, newFullName, StringComparison.Ordinal)
+                    | false, _ -> true
+
                 let exactMatch =
                     matches
-                    |> Array.tryFind (fun (matchedName, _) -> String.Equals(matchedName, newFullName, StringComparison.Ordinal))
+                    |> Array.tryFind (fun (matchedName, _) ->
+                        String.Equals(matchedName, newFullName, StringComparison.Ordinal)
+                        && isBaselineMatchAvailable matchedName)
 
                 match exactMatch with
                 | Some matchResult -> Some matchResult
                 | None ->
-                    let normalizeTypePath (name: string) =
-                        name.Split([| '.'; '+' |], StringSplitOptions.RemoveEmptyEntries)
-                        |> String.concat "."
-
-                    let normalizedTarget = normalizeTypePath newFullName
+                    let normalizedTarget = normalizeTypePathName newFullName
 
                     let normalizedMatches =
                         matches
                         |> Array.filter (fun (matchedName, _) ->
-                            String.Equals(normalizeTypePath matchedName, normalizedTarget, StringComparison.Ordinal))
+                            String.Equals(normalizeTypePathName matchedName, normalizedTarget, StringComparison.Ordinal)
+                            && isBaselineMatchAvailable matchedName)
 
                     match normalizedMatches with
                     | [| normalizedMatch |] -> Some normalizedMatch
                     | _ ->
-                        let matchedNames = matches |> Array.map fst |> String.concat "; "
-                        let allCandidates = candidateNames |> String.concat "; "
+                        let unassignedMatches =
+                            matches
+                            |> Array.filter (fun (matchedName, _) -> isBaselineMatchAvailable matchedName)
 
-                        raise (
-                            HotReloadUnsupportedEditException(
-                                $"Ambiguous synthesized type mapping for '{newFullName}' (candidates=[{allCandidates}], baselineMatches=[{matchedNames}]); full rebuild required."
+                        if IsCompilerGeneratedName typeDef.Name && not (Array.isEmpty unassignedMatches) then
+                            unassignedMatches
+                            |> Array.sortBy (fun (matchedName, _) ->
+                                TryGetHotReloadReplayNameOrdinal matchedName
+                                |> Option.defaultValue Int32.MaxValue,
+                                matchedName)
+                            |> Array.head
+                            |> Some
+                        else
+                            let matchedNames = matches |> Array.map fst |> String.concat "; "
+                            let allCandidates = candidateNames |> String.concat "; "
+
+                            raise (
+                                HotReloadUnsupportedEditException(
+                                    $"Ambiguous synthesized type mapping for '{newFullName}' (candidates=[{allCandidates}], baselineMatches=[{matchedNames}]); full rebuild required."
+                                )
                             )
-                        )
 
         if traceSynthesizedMappings.Value then
             match baselineNameOpt with
@@ -3692,19 +3710,17 @@ let emitDeltaWithDebugData (freshDebugPdb: byte[] option) (request: IlxDeltaRequ
                         addedTypeDefs.Add(enclosing, typeDef, fullName)
                         deltaToken
                 | None when typeDef.Name.Contains "@hotreload" ->
-                    // A legacy (non-generation-suffixed) hot-reload closure name with no
-                    // baseline counterpart: closure-chain CE lowerings (async) number
-                    // their classes `-N` by emission order, so a structural CE change
-                    // shifts every later name off its baseline row. Tokens looked up
-                    // through the baseline mappings would be garbage; fail closed.
+                    // A non-generation-suffixed hot-reload helper with no baseline counterpart can be
+                    // regeneration noise from unchanged code in a full in-process emit. Do not allocate
+                    // it as an added type. If updated IL actually references it, the later token remap
+                    // still fails closed rather than emitting a bogus row.
                     let fullName =
                         (mkRefForNestedILTypeDef ILScopeRef.Local (enclosing, typeDef)).FullName
 
-                    raise (
-                        HotReloadUnsupportedEditException(
-                            $"Computation-expression closure chain changed: synthesized type '{fullName}' has no baseline counterpart; the closure chain cannot be aligned with the baseline. Please rebuild."
-                        )
-                    )
+                    if traceSynthesizedMappings.Value then
+                        printfn "[fsharp-hotreload][synthesized-map] ignoring unmatched helper %s" fullName
+
+                    0
                 | None -> request.Baseline.TokenMappings.TypeDefTokenMap(enclosing, typeDef)
 
         addMapping typeTokenMap newTypeToken baselineTypeToken

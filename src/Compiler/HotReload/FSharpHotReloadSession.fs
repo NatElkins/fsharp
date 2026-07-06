@@ -516,6 +516,7 @@ type FSharpHotReloadSession
     (
         hotReloadService: FSharpHotReloadService,
         parseAndCheckSnapshot: FSharpProjectSnapshot -> string -> Async<FSharpCheckProjectResults>,
+        refreshOutputBeforeEmit: FSharpCheckProjectResults -> string option -> Async<unit>,
         tryGetOutputPath: FSharpProjectSnapshot -> string option,
         // Registers a successfully baselined project (resolved output path + project key) in
         // the owning checker's live-session registry, which FSharpChecker.Compile consults to
@@ -645,6 +646,7 @@ type FSharpHotReloadSession
                     |]
 
             let projectKey = projectKeyOfSnapshot projectSnapshot
+            let resolvedOutputPath = resolveOutputPath projectKey projectSnapshot
 
             let currentTrackedInputs = computeTrackedInputs projectSnapshot
 
@@ -654,11 +656,18 @@ type FSharpHotReloadSession
                     | true, committed -> committed <> currentTrackedInputs
                     | false, _ -> false)
 
+            let parseCheckAndMaybeRefreshOutput () =
+                async {
+                    let! projectResults = parseAndCheckSnapshot projectSnapshot opName
+                    do! refreshOutputBeforeEmit projectResults resolvedOutputPath
+                    return projectResults
+                }
+
             let! result =
                 hotReloadService.EmitHotReloadDelta
                     projectKey
-                    (fun () -> parseAndCheckSnapshot projectSnapshot opName)
-                    (resolveOutputPath projectKey projectSnapshot)
+                    parseCheckAndMaybeRefreshOutput
+                    resolvedOutputPath
                     trackedInputsChanged
 
             match result with

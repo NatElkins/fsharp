@@ -1,6 +1,8 @@
 module internal FSharp.Compiler.HotReloadState
 
 open System
+open System.Collections.Generic
+open System.IO
 open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.EditAndContinue
 open FSharp.Compiler.HotReloadBaseline
@@ -421,6 +423,82 @@ let setCurrentEmissionContext (context: HotReloadEmissionContext option) =
 
 let tryGetCurrentEmissionContext () =
     lock emissionContextLock (fun () -> currentEmissionContext)
+
+let private replaceCurrentEmissionContext context =
+    lock emissionContextLock (fun () ->
+        let previous = currentEmissionContext
+        currentEmissionContext <- context
+        previous)
+
+/// Runs synchronous work while the fsc emit hook observes the supplied emission context.
+let withCurrentEmissionContext context action =
+    let previous = replaceCurrentEmissionContext (Some context)
+
+    try
+        action ()
+    finally
+        lock emissionContextLock (fun () -> currentEmissionContext <- previous)
+
+/// Runs asynchronous work while the fsc emit hook observes the supplied emission context.
+let withCurrentEmissionContextAsync context work =
+    async {
+        let previous = replaceCurrentEmissionContext (Some context)
+
+        try
+            return! work
+        finally
+            lock emissionContextLock (fun () -> currentEmissionContext <- previous)
+    }
+
+/// Tracks the session-owned projects that can service an in-process compile by output path.
+/// The owning checker keeps one registry and removes a session's entries when it is disposed.
+type HotReloadEmissionTargetRegistry() =
+    let targets = ResizeArray<string * HotReloadSessionStore * HotReloadProjectKey>()
+    let gate = obj ()
+
+    let normalizeOutputPath (path: string) =
+        try
+            Path.GetFullPath(path)
+        with _ ->
+            path
+
+    let outputPathComparison =
+        if Path.DirectorySeparatorChar = '\\' then
+            StringComparison.OrdinalIgnoreCase
+        else
+            StringComparison.Ordinal
+
+    member _.Register(store: HotReloadSessionStore, outputPath: string, projectKey: HotReloadProjectKey) =
+        let normalized = normalizeOutputPath outputPath
+
+        lock gate (fun () ->
+            // A recapture of the same project in the same session replaces its entry.
+            targets.RemoveAll(fun (_, existingStore, existingKey) ->
+                obj.ReferenceEquals(existingStore, store) && existingKey = projectKey)
+            |> ignore
+
+            // Most recent first: if two live sessions track the same output, the newest
+            // baseline is the one this checker should use for the next in-process compile.
+            targets.Insert(0, (normalized, store, projectKey)))
+
+    member _.UnregisterStore(store: HotReloadSessionStore) =
+        lock gate (fun () ->
+            targets.RemoveAll(fun (_, existingStore, _) -> obj.ReferenceEquals(existingStore, store))
+            |> ignore)
+
+    member _.TryResolve(outputPath: string option) =
+        match outputPath with
+        | None -> None
+        | Some outputPath ->
+            let target = normalizeOutputPath outputPath
+
+            lock gate (fun () ->
+                targets
+                |> Seq.tryPick (fun (registeredPath, store, projectKey) ->
+                    if String.Equals(registeredPath, target, outputPathComparison) then
+                        Some { Store = store; ProjectKey = projectKey }
+                    else
+                        None))
 
 let private activeSessionStore = HotReloadSessionStore()
 

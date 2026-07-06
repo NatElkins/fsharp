@@ -28,20 +28,6 @@ type FSharpSynthesizedTypeMaps() =
 
     let computeName basicName index = makeHotReloadName basicName index
 
-    let tryGetHotReloadOrdinal (basicName: string) (name: string) =
-        let hotReloadPrefix = basicName + "@hotreload"
-
-        if name.Equals(hotReloadPrefix, StringComparison.Ordinal) then
-            Some 0
-        elif name.StartsWith(hotReloadPrefix + "-", StringComparison.Ordinal) then
-            let suffix = name.Substring(hotReloadPrefix.Length + 1)
-
-            match Int32.TryParse suffix with
-            | true, ordinal when ordinal > 0 -> Some ordinal
-            | _ -> None
-        else
-            None
-
     let canonicalizeSnapshotNames basicName (names: string[]) =
         // Occurrence-keyed closure names ({base}@hotreload#g{N}_o{chain})
         // are managed by the closure name allocator's assigned-name table, never by
@@ -54,7 +40,7 @@ type FSharpSynthesizedTypeMaps() =
 
         let parsed =
             names
-            |> Array.mapi (fun index name -> index, name, tryGetHotReloadOrdinal basicName name)
+            |> Array.mapi (fun index name -> index, name, TryGetHotReloadReplayNameOrdinal name)
 
         if parsed |> Array.forall (fun (_, _, ordinalOpt) -> ordinalOpt.IsSome) then
             // IL metadata can enumerate synthesized helpers in a different order than allocation.

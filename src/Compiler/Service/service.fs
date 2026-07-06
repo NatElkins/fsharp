@@ -113,6 +113,11 @@ module CompileHelpers =
 
         diagnostics.ToArray(), result
 
+[<RequireQualifiedAccess>]
+type private CheckedProjectCompileMode =
+    | BaselineLike
+    | HotReloadSessionRefresh of FSharp.Compiler.HotReloadState.HotReloadEmissionContext
+
 [<Sealed; AutoSerializable(false)>]
 // There is typically only one instance of this type in an IDE process.
 type FSharpChecker
@@ -527,68 +532,7 @@ type FSharpChecker
     // entities are unaffected, owning private stores and reconstructing baselines from disk.
     do FSharp.Compiler.HotReloadState.clearSessionState ()
 
-    // Projects tracked by LIVE session entities created via CreateHotReloadSession, keyed by
-    // the resolved output path each AddProject baselined (most recent first). Compile consults
-    // this to resolve the scoped emission context — which session, and which project inside
-    // it, a given in-process compile serves. Disposing a session removes its entries.
-    let liveHotReloadEmissionTargets =
-        ResizeArray<string * FSharp.Compiler.HotReloadState.HotReloadSessionStore * FSharp.Compiler.HotReloadState.HotReloadProjectKey>()
-
-    let liveHotReloadEmissionTargetsGate = obj ()
-
-    let normalizeOutputPathForEmissionTargets (path: string) =
-        try
-            Path.GetFullPath(path)
-        with _ ->
-            path
-
-    let outputPathComparison =
-        if Path.DirectorySeparatorChar = '\\' then
-            StringComparison.OrdinalIgnoreCase
-        else
-            StringComparison.Ordinal
-
-    let registerHotReloadEmissionTarget
-        (store: FSharp.Compiler.HotReloadState.HotReloadSessionStore)
-        (outputPath: string)
-        (projectKey: FSharp.Compiler.HotReloadState.HotReloadProjectKey)
-        =
-        let normalized = normalizeOutputPathForEmissionTargets outputPath
-
-        lock liveHotReloadEmissionTargetsGate (fun () ->
-            // A recapture of the same project in the same session replaces its entry.
-            liveHotReloadEmissionTargets.RemoveAll(fun (_, existingStore, existingKey) ->
-                obj.ReferenceEquals(existingStore, store) && existingKey = projectKey)
-            |> ignore
-
-            liveHotReloadEmissionTargets.Insert(0, (normalized, store, projectKey)))
-
-    let unregisterHotReloadEmissionTargets (store: FSharp.Compiler.HotReloadState.HotReloadSessionStore) =
-        lock liveHotReloadEmissionTargetsGate (fun () ->
-            liveHotReloadEmissionTargets.RemoveAll(fun (_, existingStore, _) -> obj.ReferenceEquals(existingStore, store))
-            |> ignore)
-
-    // Resolves the session entity (and tracked project) an in-process compile belongs to by
-    // the compile's output path. The most recently baselined project wins when several live
-    // sessions track the same output.
-    let tryResolveHotReloadEmissionContext (outputPath: string option) =
-        match outputPath with
-        | None -> None
-        | Some outputPath ->
-            let target = normalizeOutputPathForEmissionTargets outputPath
-
-            lock liveHotReloadEmissionTargetsGate (fun () ->
-                liveHotReloadEmissionTargets
-                |> Seq.tryPick (fun (registeredPath, store, projectKey) ->
-                    if String.Equals(registeredPath, target, outputPathComparison) then
-                        Some(
-                            {
-                                FSharp.Compiler.HotReloadState.HotReloadEmissionContext.Store = store
-                                FSharp.Compiler.HotReloadState.HotReloadEmissionContext.ProjectKey = projectKey
-                            }
-                        )
-                    else
-                        None))
+    let hotReloadEmissionTargets = FSharp.Compiler.HotReloadState.HotReloadEmissionTargetRegistry()
 
     static member getParallelReferenceResolutionFromEnvironment() =
         getParallelReferenceResolutionFromEnvironment ()
@@ -680,12 +624,26 @@ type FSharpChecker
         let sessionService = createHotReloadService sessionStore
         sessionService.SetSessionCapabilities(FSharpChecker.ParseHotReloadCapabilities capabilities)
 
+        let refreshOutputBeforeEmit projectResults outputPath =
+            async {
+                match outputPath with
+                | Some outputPath when isEnvVarTruthy "FSHARP_HOTRELOAD_INPROCESS_COMPILE" ->
+                    // dotnet-watch can skip the external per-edit build on this path.
+                    // Refresh the obj output here so stale-output validation and the
+                    // delta reader both observe the edited module.
+                    let! _ = this.CompileFromCheckedProjectForHotReloadSession(projectResults, outputPath)
+                    return ()
+                | _ ->
+                    return ()
+            }
+
         new FSharpHotReloadSession(
             sessionService,
             (fun projectSnapshot opName -> this.ParseAndCheckProject(projectSnapshot, userOpName = opName)),
+            refreshOutputBeforeEmit,
             tryGetOutputPathFromProjectSnapshot,
-            (fun outputPath projectKey -> registerHotReloadEmissionTarget sessionStore outputPath projectKey),
-            (fun () -> unregisterHotReloadEmissionTargets sessionStore)
+            (fun outputPath projectKey -> hotReloadEmissionTargets.Register(sessionStore, outputPath, projectKey)),
+            (fun () -> hotReloadEmissionTargets.UnregisterStore sessionStore)
         )
 
     member _.HotReloadCapabilities =
@@ -795,7 +753,7 @@ type FSharpChecker
             if hasTestArgument "HotReloadDeltas" argv then
                 None
             else
-                tryResolveHotReloadEmissionContext (tryGetOutputPathFromCommandLineOptions "" argv)
+                hotReloadEmissionTargets.TryResolve(tryGetOutputPathFromCommandLineOptions "" argv)
 
         let ensureHotReloadSessionHookArgument (argv: string[]) =
             // Keep synthesized-name replay active for checker-owned hot reload sessions even when
@@ -813,16 +771,16 @@ type FSharpChecker
 
         async {
             let ctok = CompilationThreadToken()
+            let compile =
+                async {
+                    return CompileHelpers.compileFromArgs (ctok, argv, legacyReferenceResolver, None, None)
+                }
 
             match emissionContext with
             | Some context ->
-                FSharp.Compiler.HotReloadState.setCurrentEmissionContext (Some context)
-
-                try
-                    return CompileHelpers.compileFromArgs (ctok, argv, legacyReferenceResolver, None, None)
-                finally
-                    FSharp.Compiler.HotReloadState.setCurrentEmissionContext None
-            | None -> return CompileHelpers.compileFromArgs (ctok, argv, legacyReferenceResolver, None, None)
+                return! FSharp.Compiler.HotReloadState.withCurrentEmissionContextAsync context compile
+            | None ->
+                return! compile
         }
 
     /// This function is called when the entire environment is known to have changed for reasons not encoded in the ProjectOptions of any project/compilation.
@@ -1135,7 +1093,9 @@ type FSharpChecker
     /// Compile a DLL from cached typecheck results, skipping parse/typecheck/optimization.
     /// For dev-loop use only. Requires keepAssemblyContents=true.
     /// Returns the output file path on success.
-    member internal _.CompileFromCheckedProject(results: FSharpCheckProjectResults, outfile: string) =
+    member private _.CompileFromCheckedProjectCore
+        (results: FSharpCheckProjectResults, outfile: string, compileMode: CheckedProjectCompileMode)
+        =
         async {
             let tcConfig, tcGlobals, tcImports, unfinalizedCcu, ccuSig, topAttrsOpt, _ilAssemRef, typedImplFilesOpt =
                 results.CompilationData
@@ -1147,13 +1107,17 @@ type FSharpChecker
             // shared CompilerGlobalState can carry closure-name state from a prior in-process hot-reload
             // emit; clear it so this full-module emit is baseline-consistent and the delta emitter does
             // its own @<line>->stable bridging.
-            tcGlobals.CompilerGlobalState
-            |> Option.iter (fun cgs ->
-                FSharp.Compiler.ClosureNameAllocationState.clearClosureNameState (cgs :> obj)
-                FSharp.Compiler.CompilerGeneratedNameMapState.clearCompilerGeneratedNameMap (cgs :> obj)
-                // Reset occurrence counters so closure names (name@line-N) match a fresh-process
-                // build instead of drifting as the reused CompilerGlobalState accumulates across edits.
-                cgs.ResetGeneratedNameCounters())
+            match compileMode with
+            | CheckedProjectCompileMode.BaselineLike ->
+                tcGlobals.CompilerGlobalState
+                |> Option.iter (fun cgs ->
+                    FSharp.Compiler.ClosureNameAllocationState.clearClosureNameState (cgs :> obj)
+                    FSharp.Compiler.CompilerGeneratedNameMapState.clearCompilerGeneratedNameMap (cgs :> obj)
+                    // Reset occurrence counters so closure names (name@line-N) match a fresh-process
+                    // build instead of drifting as the reused CompilerGlobalState accumulates across edits.
+                    cgs.ResetGeneratedNameCounters())
+            | CheckedProjectCompileMode.HotReloadSessionRefresh _ ->
+                ()
 
             // The CCU from TransparentCompiler has unfinalized Contents (empty ModuleOrNamespaceType).
             // Finalize it using ccuSig, matching what CheckClosedInputSetFinish does.
@@ -1225,7 +1189,7 @@ type FSharpChecker
             // Dev-loop optimization: use minimal passes only (no extra loops, no detuple,
             // no TLR, no cross-assembly opt). This DLL is for local testing, not shipping.
             // OptimizeImplFile + LowerLocalMutables + LowerCalls are mandatory for correct IlxGen.
-            let optimizedImpls, optDataResources =
+            let optimizedImpls, optimizedImplsForCodegenHook, optDataResources =
                 let minimalSettings =
                     { tcConfig.optSettings with
                         jitOptUser = Some false
@@ -1254,21 +1218,50 @@ type FSharpChecker
                                     implFile
                                 )
 
-                            let file = LowerLocalMutables.TransformImplFile tcGlobals importMap file
-                            let file = LowerCalls.LowerImplFile tcGlobals file
+                            let preLoweredFile = file
+                            let loweredFile = LowerLocalMutables.TransformImplFile tcGlobals importMap preLoweredFile
+                            let loweredFile = LowerCalls.LowerImplFile tcGlobals loweredFile
 
-                            {
-                                ImplFile = file
-                                OptimizeDuringCodeGen = optDuringCodeGen
-                            },
+                            ({
+                                 ImplFile = preLoweredFile
+                                 OptimizeDuringCodeGen = optDuringCodeGen
+                             },
+                             {
+                                 ImplFile = loweredFile
+                                 OptimizeDuringCodeGen = optDuringCodeGen
+                             }),
                             (env', hidingInfo'))
                         (optEnv0, SignatureHidingInfo.Empty)
                     |> fst
+
+                let preLoweredImpls =
+                    impls
+                    |> List.map fst
                     |> CheckedAssemblyAfterOptimization
 
-                impls, []
+                let loweredImpls =
+                    impls
+                    |> List.map snd
+                    |> CheckedAssemblyAfterOptimization
+
+                loweredImpls, preLoweredImpls, []
 
             ReportTime tcConfig "CompileFromCheckedProject: TAST -> IL"
+
+            match compileMode with
+            | CheckedProjectCompileMode.HotReloadSessionRefresh emissionContext ->
+                let compilerEmitHook =
+                    FSharp.Compiler.CompilerEmitHookBootstrap.resolveCompilerEmitHookForCompile tcConfig
+
+                let prepareForCodeGeneration () =
+                    // The cached compile bypasses fsc.fs, so invoke the same hook preparation here:
+                    // it installs session-scoped closure and synthesized-name replay before IlxGen.
+                    compilerEmitHook.PrepareForCodeGeneration(false, tcGlobals, optimizedImplsForCodegenHook)
+
+                FSharp.Compiler.HotReloadState.withCurrentEmissionContext emissionContext prepareForCodeGeneration
+            | CheckedProjectCompileMode.BaselineLike ->
+                ()
+
             let ilxGenerator = CreateIlxAssemblyGenerator(tcConfig, tcImports, tcGlobals, tcVal, generatedCcu)
 
             let codegenResults =
@@ -1325,8 +1318,11 @@ type FSharpChecker
                 // Strip native resources — default.win32manifest may not exist on all platforms.
                 { m with NativeResources = [] }
 
-            // Hand the in-memory module to the hot-reload session so it skips the disk re-parse.
-            inMemoryEmitCache[outfile] <- ilxMainModule
+            if isEnvVarTruthy "FSHARP_HOTRELOAD_INPROCESS_CACHE_IL" then
+                // The cache avoids a disk parse, but the raw in-memory module is not yet shape-identical
+                // to the written obj assembly for all symbol-matching paths. Keep it opt-in until that
+                // representation mismatch is closed.
+                inMemoryEmitCache[outfile] <- ilxMainModule
 
             let normalizeAssemblyRefs (aref: ILAssemblyRef) =
                 tcImports.NormalizeAssemblyRef(ctok, aref)
@@ -1363,6 +1359,27 @@ type FSharpChecker
 
             return outfile
         }
+
+    /// Compile a DLL from cached typecheck results, skipping parse/typecheck/optimization.
+    /// For dev-loop use only. Requires keepAssemblyContents=true.
+    /// Returns the output file path on success.
+    member internal this.CompileFromCheckedProject(results: FSharpCheckProjectResults, outfile: string) =
+        this.CompileFromCheckedProjectCore(results, outfile, CheckedProjectCompileMode.BaselineLike)
+
+    member private this.CompileFromCheckedProjectForHotReloadSession(results: FSharpCheckProjectResults, outfile: string) =
+        match hotReloadEmissionTargets.TryResolve(Some outfile) with
+        | Some emissionContext ->
+            this.CompileFromCheckedProjectCore(
+                results,
+                outfile,
+                CheckedProjectCompileMode.HotReloadSessionRefresh emissionContext
+            )
+        | None ->
+            raise (
+                InvalidOperationException(
+                    $"CompileFromCheckedProjectForHotReloadSession could not find a live hot reload session for output '{outfile}'."
+                )
+            )
 
     /// Tokenize a single line, returning token information and a tokenization state represented by an integer
     member _.TokenizeLine(line: string, state: FSharpTokenizerLexState) =
