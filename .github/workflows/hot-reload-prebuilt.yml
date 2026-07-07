@@ -206,6 +206,6 @@ jobs:
                 export PATH="$PWD/dotnet:$PATH"   # Windows: add the dotnet folder to PATH
                 dotnet watch run                  # in an F# project that opts in
 
-            See docs/hot-reload-quickstart.md (step 4 onward) for the opt-in flag and what to try editing.
+            See [docs/hot-reload-quickstart.md](https://github.com/NatElkins/fsharp/blob/hot-reload-v2/docs/hot-reload-quickstart.md) (step 4 onward) for the opt-in flag and what to try editing.
 
             built-from: ${{ needs.check.outputs.combo }}
