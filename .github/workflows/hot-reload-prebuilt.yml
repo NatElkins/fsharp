@@ -119,13 +119,15 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         working-directory: fsharp
-        run: ./build.sh -c Debug
+        # Arcade enables UpdateXlfOnBuild for developer builds. This is a CI build, and the
+        # cross-targeting dispatch can otherwise ask an inner FSharp.Core build for a target it does not have.
+        run: ./build.sh -c Debug --ci
 
       - name: Build F# compiler (Windows)
         if: runner.os == 'Windows'
         shell: cmd
         working-directory: fsharp
-        run: build.cmd -c Debug
+        run: build.cmd -c Debug -ci
 
       - name: Prune F# artifacts to save disk (keep only the compiler service)
         shell: bash
