@@ -119,17 +119,15 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         working-directory: fsharp
-        # Arcade enables UpdateXlfOnBuild for developer builds. This is a CI build, and the
-        # cross-targeting dispatch can otherwise ask an inner FSharp.Core build for a target it does not have.
-        # CI mode requires a binary log unless it is explicitly opted out, so keep the repository's
-        # normal diagnostic log for this release build.
-        run: ./build.sh -c Debug --ci --binaryLog
+        # The release uses checked-in localization files. Regenerating them can dispatch UpdateXlf
+        # to an inner FSharp.Core target where the Xliff package was not restored.
+        run: ./build.sh -c Debug /p:UpdateXlfOnBuild=false
 
       - name: Build F# compiler (Windows)
         if: runner.os == 'Windows'
         shell: cmd
         working-directory: fsharp
-        run: build.cmd -c Debug -ci
+        run: build.cmd -c Debug
 
       - name: Prune F# artifacts to save disk (keep only the compiler service)
         shell: bash
