@@ -115,6 +115,15 @@ jobs:
             fi
           done
 
+      - name: Install modern bash (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        # Arcade's eng/common/tools.sh expands the empty logger_switch array under
+        # set -u ("${logger_switch[@]}"), which Apple's /bin/bash 3.2 rejects as an
+        # unbound variable. Every repo script resolves bash through /usr/bin/env, so
+        # a Homebrew bash 5 on PATH fixes tools.sh and every other downstream script.
+        run: brew list bash >/dev/null 2>&1 || brew install bash
+
       - name: Build F# compiler (unix)
         if: runner.os != 'Windows'
         shell: bash
