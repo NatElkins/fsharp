@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>FSharp.ExpressionEvaluator</AssemblyName>
+    <RootNamespace>Microsoft.VisualStudio.FSharp.ExpressionEvaluator</RootNamespace>
+    <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
+    <!-- FS0057: the FCS debugger API is marked Experimental on purpose. -->
+    <NoWarn>$(NoWarn);FS0057</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="FSharpExpressionCompiler.fs" />
+    <VsdConfigXmlFiles Include="FSharp.ExpressionEvaluator.vsdconfigxml" />
+    <None Include="FSharp.ExpressionEvaluator.vsdconfigxml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(FSharpSourcesRoot)\FSharp.Core\FSharp.Core.fsproj" />
+    <ProjectReference Include="$(FSharpSourcesRoot)\Compiler\FSharp.Compiler.Service.fsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.VisualStudio.Debugger.Engine-implementation" PrivateAssets="all" ExcludeAssets="runtime;contentFiles;build;analyzers;native" />
+    <PackageReference Include="Microsoft.VSSDK.Debugger.VSDConfigTool" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- The VSIX pulls the compiled .vsdconfig through this output group; the debugger discovers the
+       component from it (see the DebuggerEngineExtension asset in Source.extension.vsixmanifest). -->
+  <Target Name="VsdConfigOutputGroup" Outputs="@(VsdConfigOutputGroupOutput)" DependsOnTargets="AddVsdbgConfigFileToOutputGroup" Condition="'@(VsdConfigXmlFiles)' != ''">
+    <ItemGroup>
+      <VsdConfigOutputGroupOutput Include="$(OutDir)$(AssemblyName).vsdconfig" />
+    </ItemGroup>
+  </Target>
+
+</Project>
