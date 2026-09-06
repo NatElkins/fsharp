@@ -51,6 +51,9 @@
          ComponentModelHost would otherwise stay at 17.x; that 17.x/18.x split makes S/IComponentModel ambiguous
          (CS0433). Pin to the SDK 18.9.496 version so those types resolve to a single assembly. -->
     <PackageVersion Include="Microsoft.VisualStudio.ComponentModelHost" Version="18.9.453" />
+    <!-- Concord (debug engine) contracts for the F# expression evaluator; versions follow dotnet/roslyn eng/Packages.props. -->
+    <PackageVersion Include="Microsoft.VisualStudio.Debugger.Engine-implementation" Version="18.0.1082202-preview" />
+    <PackageVersion Include="Microsoft.VSSDK.Debugger.VSDConfigTool" Version="17.13.1100801-preview" />
     <PackageVersion Include="Microsoft.VisualStudio.Designer.Interfaces" Version="18.9.438" />
     <PackageVersion Include="Microsoft.VisualStudio.Editor" Version="$(VisualStudioEditorPackagesVersion)" />
     <PackageVersion Include="Microsoft.VisualStudio.Extensibility.Build" Version="17.13.39620" />

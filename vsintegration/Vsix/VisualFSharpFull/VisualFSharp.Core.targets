@@ -195,6 +195,14 @@
       <Private>True</Private>
     </ProjectReference>
 
+    <!-- Concord expression compiler for F# frames; VsdConfigOutputGroup carries the .vsdconfig the debugger discovers. -->
+    <ProjectReference Include="$(FSharpSourcesRoot)\..\vsintegration\src\FSharp.ExpressionEvaluator\FSharp.ExpressionEvaluator.fsproj">
+      <Name>FSharp.ExpressionEvaluator</Name>
+      <IncludeOutputGroupsInVSIX>BuiltProjectOutputGroup%3bVsdConfigOutputGroup%3b</IncludeOutputGroupsInVSIX>
+      <IncludeOutputGroupsInVSIXLocalOnly>DebugSymbolsProjectOutputGroup%3b</IncludeOutputGroupsInVSIXLocalOnly>
+      <Private>True</Private>
+    </ProjectReference>
+
     <ProjectReference Include="$(FSharpSourcesRoot)\..\vsintegration\ItemTemplates\AppConfig\AppConfig.csproj">
       <Project>{6ba13aa4-c25f-480f-856b-8e8000299a72}</Project>
       <Name>AppConfig</Name>
