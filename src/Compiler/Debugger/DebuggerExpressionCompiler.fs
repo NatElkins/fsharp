@@ -2,16 +2,35 @@
 
 namespace FSharp.Compiler.Debugger
 
+#nowarn "57" // FSharpChecker.Create's transparent-compiler switch is experimental by design
+
 open System
 open System.Collections.Generic
-open System.Globalization
 open System.IO
+open System.Text
 open Internal.Utilities
+open Internal.Utilities.Library
+open FSharp.Compiler
 open FSharp.Compiler.AbstractIL.IL
 open FSharp.Compiler.AbstractIL.ILBinaryReader
 open FSharp.Compiler.AbstractIL.ILBinaryWriter
 open FSharp.Compiler.AbstractIL.ILPdbWriter
-open FSharp.Compiler.AbstractIL.Morphs
+open FSharp.Compiler.CheckExpressionsOps
+open FSharp.Compiler.CodeAnalysis
+open FSharp.Compiler.CodeAnalysis.ProjectSnapshot
+open FSharp.Compiler.CompilerConfig
+open FSharp.Compiler.CompilerImports
+open FSharp.Compiler.CreateILModule
+open FSharp.Compiler.Diagnostics
+open FSharp.Compiler.Import
+open FSharp.Compiler.IlxGen
+open FSharp.Compiler.OptimizeInputs
+open FSharp.Compiler.Syntax
+open FSharp.Compiler.TcGlobals
+open FSharp.Compiler.Text
+open FSharp.Compiler.Text.Range
+open FSharp.Compiler.TypedTree
+open FSharp.Compiler.TypedTreeOps
 
 [<Experimental("This FCS API is experimental and subject to change.")>]
 type FSharpDebuggerLocal = { Name: string; Slot: int }
@@ -51,165 +70,339 @@ type FSharpDebuggerCompiledQuery =
         HasSideEffects: bool
     }
 
-/// The frame method as read from the debuggee's module, with every type re-scoped so that a
-/// separate assembly can reference it.
-type internal FrameShape =
+/// Checking state shared by every query against one frame module: the reference set the
+/// checker keeps warm, and the globals and import map that print IL types as F# source.
+type internal CheckSession =
     {
-        /// `this` first for instance methods, then the declared parameters.
-        Arguments: ILParameter list
-        /// The frame method's local signature, in slot order.
-        Locals: ILLocal list
+        References: string list
+        /// Assembly names of the references; query assemblies ignore access checks to all of them.
+        AssemblyNames: string list
+        TargetProfile: string
+        Globals: TcGlobals
+        ImportMap: ImportMap
     }
 
-module internal DebuggerIL =
+/// Frame data resolved once per method and locals set: the shape, the variables the checker
+/// accepts as typed parameters (with their type text), and the `open`s that survived probing.
+type internal FrameContext =
+    {
+        Shape: FrameShape
+        Variables: FrameVariable[]
+        TypeTexts: string[]
+        Opens: string list
+    }
 
-    let readerOptions =
-        {
-            pdbDirPath = None
-            reduceMemoryUsage = ReduceMemoryFlag.Yes
-            metadataOnly = MetadataOnlyFlag.No
-            tryGetMetadataSnapshot = fun _ -> None
-        }
+module internal DebuggerCheck =
 
-    let queryTypeName = "<>x"
+    let queryModuleName = "<>x"
+    let queryMethodName = "<>m0"
 
-    let rec private typeDefsWithEnclosing (enclosing: string list) (tdefs: ILTypeDefs) =
-        seq {
-            for tdef in tdefs.AsArray() do
-                yield struct (enclosing, tdef)
-                yield! typeDefsWithEnclosing (enclosing @ [ tdef.Name ]) tdef.NestedTypes
-        }
+    let private ident (name: string) =
+        PrettyNaming.NormalizeIdentifierBackticks name
 
-    /// Finds the method with the given metadata token together with the names of the types
-    /// enclosing its declaring type.
-    let tryFindMethod (modul: ILModuleDef) (token: int) =
-        let rowId = token &&& 0x00FFFFFF
-        let mutable found = ValueNone
-        use types = (typeDefsWithEnclosing [] modul.TypeDefs).GetEnumerator()
+    let snapshot (projectName: string) (references: string list) (targetProfile: string) (source: string) : FSharpProjectSnapshot =
+        let output = projectName + ".dll"
+        let projectFile = projectName + ".fsproj"
 
-        while found.IsNone && types.MoveNext() do
-            let struct (enclosing, tdef) = types.Current
+        let sourceFiles =
+            [ FSharpFileSnapshot.CreateFromString(projectName + ".fs", source) ]
 
-            for mdef in tdef.Methods.AsArray() do
-                if found.IsNone && mdef.MetadataIndex = rowId then
-                    found <- ValueSome(struct (enclosing, tdef, mdef))
+        let referencesOnDisk =
+            references
+            |> List.map (fun path ->
+                {
+                    Path = path
+                    LastModified = File.GetLastWriteTimeUtc path
+                })
 
-        found
+        let otherOptions =
+            [
+                "--noframework"
+                "--optimize-"
+                "--debug-"
+                "--nointerfacedata"
+                "--nooptimizationdata"
+                "--target:library"
+                $"--targetprofile:{targetProfile}"
+                "-o:" + output
+            ]
 
-    /// Types the debuggee module defines read back as `ILScopeRef.Local`; the query assembly
-    /// must reference them through the module's own assembly instead.
-    let rescopeType (asmRef: ILAssemblyRef) (ty: ILType) =
-        let rescopeRef scope =
-            match scope with
-            | ILScopeRef.Local
-            | ILScopeRef.Module _ -> ILScopeRef.Assembly asmRef
-            | other -> other
+        FSharpProjectSnapshot.Create(
+            projectFileName = projectFile,
+            outputFileName = Some output,
+            projectId = None,
+            sourceFiles = sourceFiles,
+            referencesOnDisk = referencesOnDisk,
+            otherOptions = otherOptions,
+            referencedProjects = [],
+            isIncompleteTypeCheckEnvironment = false,
+            useScriptResolutionRules = false,
+            loadTime = DateTime.UtcNow,
+            unresolvedReferences = None,
+            originalLoadReferences = [],
+            stamp = None
+        )
 
-        morphILTypeRefsInILType (morphILScopeRefsInILTypeRef rescopeRef) ty
+    let errors (results: FSharpCheckProjectResults) =
+        results.Diagnostics
+        |> Array.filter (fun d -> d.Severity = FSharpDiagnosticSeverity.Error)
 
-    let frameShape (asmRef: ILAssemblyRef) (enclosing: string list) (tdef: ILTypeDef) (mdef: ILMethodDef) =
-        if not (List.isEmpty tdef.GenericParams) || not (List.isEmpty mdef.GenericParams) then
-            Error "The F# expression evaluator does not support generic methods or methods of generic types yet."
-        else
-            let scope = ILScopeRef.Assembly asmRef
+    let errorText (diagnostics: FSharpDiagnostic[]) =
+        String.Join("; ", diagnostics |> Array.map (fun d -> d.Message) |> Array.distinct)
 
-            let thisArgs =
-                if mdef.IsStatic then
-                    []
-                else
-                    let tref =
-                        match enclosing with
-                        | [] -> mkILTyRef (scope, tdef.Name)
-                        | _ -> mkILNestedTyRef (scope, enclosing, tdef.Name)
+    /// Checks an empty module against the reference set so the checker caches its imports, and
+    /// captures the globals and import map that later print IL types as F# source.
+    let warmUp (checker: FSharpChecker) (references: string list) (assemblyNames: string list) (targetProfile: string) =
+        let warmupName = ident "<>warmup"
 
-                    let thisTy =
-                        if tdef.IsStructOrEnum then
-                            ILType.Byref(mkILNonGenericValueTy tref)
-                        else
-                            mkILNonGenericBoxedTy tref
+        let results =
+            checker.ParseAndCheckProject(snapshot "<>warmup" references targetProfile $"module {warmupName}")
+            |> Async.RunSynchronously
 
-                    [ mkILParamNamed ("this", thisTy) ]
-
-            let declaredArgs =
-                mdef.Parameters
-                |> List.mapi (fun i (p: ILParameter) ->
-                    let name =
-                        match p.Name with
-                        | Some n -> n
-                        | None -> $"arg{i}"
-
-                    mkILParamNamed (name, rescopeType asmRef p.Type))
-
-            let locals =
-                match mdef.Body with
-                | MethodBody.IL body ->
-                    body.Value.Locals
-                    |> List.map (fun (l: ILLocal) ->
-                        { l with
-                            Type = rescopeType asmRef l.Type
-                        })
-                | _ -> []
+        match errors results with
+        | [||] ->
+            let _, tcGlobals, tcImports, _, _, _, _, _ = results.CompilationData
 
             Ok
                 {
-                    Arguments = thisArgs @ declaredArgs
-                    Locals = locals
+                    References = references
+                    AssemblyNames = assemblyNames
+                    TargetProfile = targetProfile
+                    Globals = tcGlobals
+                    ImportMap = tcImports.GetImportMap()
+                }
+        | diagnostics -> Error $"The debuggee's references could not be loaded: {errorText diagnostics}"
+
+    /// The F# source spelling of an IL type, or ValueNone when the type cannot appear in source
+    /// (managed pointers, type parameters, `unit` arguments, types the importer rejects).
+    let typeText (session: CheckSession) (ty: ILType) =
+        match ty with
+        | ILType.Byref _
+        | ILType.Ptr _
+        | ILType.FunctionPointer _
+        | ILType.TypeVar _
+        | ILType.Modified _
+        | ILType.Void -> ValueNone
+        | _ when ty.IsNominal && ty.TypeRef.FullName = "Microsoft.FSharp.Core.Unit" -> ValueNone
+        | _ when not (CanImportILType session.ImportMap range0 ty) -> ValueNone
+        | _ ->
+            let denv =
+                { DisplayEnv.Empty session.Globals with
+                    shortTypeNames = false
+                    escapeKeywordNames = true
+                    includeStaticParametersInTypeNames = true
                 }
 
-    let mkCode (instrs: ILInstr[]) : ILCode =
-        {
-            Labels = Dictionary<ILCodeLabel, int>()
-            Instrs = instrs
-            Exceptions = []
-            Locals = []
+            try
+                ValueSome(NicePrint.stringOfTy denv (ImportILType session.ImportMap range0 [] ty))
+            with _ ->
+                ValueNone
+
+    let private appendOpens (sb: StringBuilder) (opens: string list) =
+        for path in opens do
+            sb.AppendLine($"open {path}") |> ignore
+
+    /// One typed `let` per candidate variable: a check error on a line rejects that variable or `open`.
+    let probeSource (opens: string list) (typeTexts: string[]) =
+        let sb = StringBuilder()
+        let probeName = ident "<>probe"
+        sb.AppendLine($"module {probeName}") |> ignore
+        appendOpens sb opens
+
+        typeTexts
+        |> Array.iteri (fun i text ->
+            let probeVariable = ident $"<>p{i}"
+
+            sb.AppendLine($"let {probeVariable} : {text} = Unchecked.defaultof<_>")
+            |> ignore)
+
+        sb.ToString()
+
+    /// `let <>m0 (v0: T0) ... (vn: Tn) = expression`, one parameter per usable frame variable.
+    let expressionSource (opens: string list) (variables: (string * string) list) (expression: string) =
+        let sb = StringBuilder()
+        let moduleName = ident queryModuleName
+        let methodName = ident queryMethodName
+        sb.AppendLine($"module {moduleName}") |> ignore
+        appendOpens sb opens
+
+        let parameters =
+            match variables with
+            | [] -> "()"
+            | _ ->
+                variables
+                |> List.map (fun (name, text) ->
+                    let parameterName = ident name
+                    $"({parameterName}: {text})")
+                |> String.concat " "
+
+        sb.AppendLine($"let {methodName} {parameters} =") |> ignore
+
+        for line in expression.Split('\n') do
+            sb.Append("    ").AppendLine(line.TrimEnd('\r')) |> ignore
+
+        sb.ToString()
+
+    /// Lowers checked results to an IL module the way the hot reload in-process compile does,
+    /// with minimal optimization so parameters survive as plain arguments.
+    let compileToModule (results: FSharpCheckProjectResults) (outfile: string) =
+        let tcConfig, tcGlobals, tcImports, unfinalizedCcu, ccuSig, topAttrsOpt, _, typedImplFilesOpt =
+            results.CompilationData
+
+        let ccuContents =
+            Construct.NewCcuContents ILScopeRef.Local range0 unfinalizedCcu.AssemblyName ccuSig
+
+        let generatedCcu = unfinalizedCcu.CloneWithFinalizedContents(ccuContents)
+
+        let topAttrs =
+            match topAttrsOpt with
+            | Some attrs -> attrs
+            | None -> invalidOp "The checked query has no assembly attributes."
+
+        let typedImplFiles =
+            match typedImplFilesOpt with
+            | Some files -> files
+            | None -> invalidOp "The checker was created without keepAssemblyContents."
+
+        generatedCcu.Contents.SetAttribs(generatedCcu.Contents.Attribs @ topAttrs.assemblyAttrs)
+        let exportRemapping = MakeExportRemapping generatedCcu generatedCcu.Contents
+
+        let sigDataAttributes, sigDataResources =
+            EncodeSignatureData(tcConfig, tcGlobals, exportRemapping, generatedCcu, outfile, false)
+
+        let tcVal = LightweightTcValForUsingInBuildMethodCall tcGlobals
+        let importMap = tcImports.GetImportMap()
+        let optEnv0 = GetInitialOptimizationEnv(tcImports, tcGlobals)
+
+        let settings =
+            { tcConfig.optSettings with
+                jitOptUser = Some false
+                localOptUser = Some false
+                crossAssemblyOptimizationUser = Some false
+                lambdaInlineThreshold = 0
+                abstractBigTargets = false
+                reportingPhase = false
+            }
+
+        let optimizedImpls =
+            typedImplFiles
+            |> List.mapFold
+                (fun (env, hidingInfo) implFile ->
+                    let (env', file, _, hidingInfo'), optimizeDuringCodeGen =
+                        Optimizer.OptimizeImplFile(
+                            settings,
+                            generatedCcu,
+                            tcGlobals,
+                            tcVal,
+                            importMap,
+                            env,
+                            false,
+                            tcConfig.emitTailcalls,
+                            hidingInfo,
+                            implFile
+                        )
+
+                    let file = LowerLocalMutables.TransformImplFile tcGlobals importMap file
+                    let file = LowerCalls.LowerImplFile tcGlobals file
+
+                    {
+                        ImplFile = file
+                        OptimizeDuringCodeGen = optimizeDuringCodeGen
+                    },
+                    (env', hidingInfo'))
+                (optEnv0, SignatureHidingInfo.Empty)
+            |> fst
+            |> CheckedAssemblyAfterOptimization
+
+        let ilxGenerator =
+            CreateIlxAssemblyGenerator(tcConfig, tcImports, tcGlobals, tcVal, generatedCcu)
+
+        let codegenResults =
+            GenerateIlxCode(IlWriteBackend, false, tcConfig, topAttrs, optimizedImpls, generatedCcu.AssemblyName, ilxGenerator)
+
+        let topAttrs =
+            { topAttrs with
+                assemblyAttrs = codegenResults.topAssemblyAttrs
+            }
+
+        let metadataVersion =
+            match tcConfig.metadataVersion with
+            | Some v -> v
+            | None -> ""
+
+        let ilxMainModule =
+            MainModuleBuilder.CreateMainModule(
+                CompilationThreadToken(),
+                tcConfig,
+                tcGlobals,
+                tcImports,
+                None,
+                generatedCcu.AssemblyName,
+                outfile,
+                topAttrs,
+                sigDataAttributes,
+                sigDataResources,
+                [],
+                codegenResults,
+                Some(ILVersionInfo(0us, 0us, 0us, 0us)),
+                metadataVersion,
+                mkILSecurityDecls codegenResults.permissionSets
+            )
+
+        { ilxMainModule with
+            NativeResources = []
+        },
+        tcConfig,
+        tcGlobals,
+        tcImports
+
+    let tryFindQueryMethod (modul: ILModuleDef) =
+        modul.TypeDefs.AsList()
+        |> List.tryFind (fun td -> td.Name = queryModuleName)
+        |> Option.bind (fun td -> td.Methods.AsList() |> List.tryFind (fun m -> m.Name = queryMethodName))
+
+    let replaceQueryMethod (modul: ILModuleDef) (replacement: ILMethodDef) =
+        let typeDefs =
+            modul.TypeDefs.AsList()
+            |> List.map (fun td ->
+                if td.Name = queryModuleName then
+                    td.With(
+                        methods =
+                            mkILMethods (
+                                td.Methods.AsList()
+                                |> List.map (fun m -> if m.Name = queryMethodName then replacement else m)
+                            )
+                    )
+                else
+                    td)
+
+        { modul with
+            TypeDefs = mkILTypeDefs typeDefs
         }
 
-    /// A static method whose parameters and local signature mirror the frame, so the debugger
-    /// can execute it in place of the frame method.
-    let mkQueryMethod (name: string) (shape: FrameShape) (returnTy: ILType) (instrs: ILInstr[]) =
-        let body = mkMethodBody (false, shape.Locals, 8, mkCode instrs, None, None)
-        mkILNonGenericStaticMethod (name, ILMemberAccess.Public, shape.Arguments, mkILReturn returnTy, body)
+    let writeModule
+        (tcConfig: TcConfig)
+        (tcGlobals: TcGlobals)
+        (tcImports: TcImports)
+        (accessTo: string list)
+        (outfile: string)
+        (modul: ILModuleDef)
+        =
+        let ctok = CompilationThreadToken()
+        let modul = DebuggerFrame.withIgnoredAccessChecks tcGlobals.ilg accessTo modul
 
-    /// Byref arguments and struct `this` are managed pointers; read the value they point to.
-    let derefIfByref (ty: ILType) =
-        match ty with
-        | ILType.Byref elemTy -> elemTy, [ I_ldobj(ILAlignment.Aligned, ILVolatility.Nonvolatile, elemTy) ]
-        | _ -> ty, []
-
-    let argumentAccessor (shape: FrameShape) (index: int) (name: string) =
-        let ty, deref = derefIfByref shape.Arguments[index].Type
-        mkQueryMethod name shape ty (Array.ofList (I_ldarg(uint16 index) :: deref @ [ I_ret ]))
-
-    let localAccessor (shape: FrameShape) (slot: int) (name: string) =
-        let ty, deref = derefIfByref shape.Locals[slot].Type
-        mkQueryMethod name shape ty (Array.ofList (I_ldloc(uint16 slot) :: deref @ [ I_ret ]))
-
-    let writeQueryAssembly (ilg: ILGlobals) (metadataVersion: string) (assemblyName: string) (methods: ILMethodDef list) =
-        let queryType =
-            mkILSimpleClass
-                ilg
-                (queryTypeName,
-                 ILTypeDefAccess.Public,
-                 mkILMethods methods,
-                 emptyILFields,
-                 mkILTypeDefs [],
-                 emptyILProperties,
-                 emptyILEvents,
-                 emptyILCustomAttrs,
-                 ILTypeInit.BeforeField)
-
-        let typeDefs =
-            mkILTypeDefs [ mkILTypeDefForGlobalFunctions ilg (emptyILMethods, emptyILFields); queryType ]
-
-        let fileName = assemblyName + ".dll"
-
-        let modul =
-            mkILSimpleModule assemblyName fileName true (4, 0) true typeDefs None None 0 (mkILExportedTypes []) metadataVersion
+        let normalizeAssemblyRefs (aref: ILAssemblyRef) =
+            match tcImports.TryFindDllInfo(ctok, rangeStartup, aref.Name, lookupOnly = false) with
+            | Some dllInfo ->
+                match dllInfo.ILScopeRef with
+                | ILScopeRef.Assembly normalized -> normalized
+                | _ -> aref
+            | None -> aref
 
         let writerOptions: options =
             {
-                ilg = ilg
-                outfile = fileName
+                ilg = tcGlobals.ilg
+                outfile = outfile
                 pdbfile = None
                 portablePDB = false
                 embeddedPDB = false
@@ -217,7 +410,7 @@ module internal DebuggerIL =
                 embedSourceList = []
                 allGivenSources = []
                 sourceLink = ""
-                checksumAlgorithm = HashAlgorithm.Sha256
+                checksumAlgorithm = tcConfig.checksumAlgorithm
                 signer = None
                 emitTailcalls = false
                 deterministic = true
@@ -225,30 +418,62 @@ module internal DebuggerIL =
                 referenceAssemblyOnly = false
                 referenceAssemblyAttribOpt = None
                 referenceAssemblySignatureHash = None
-                pathMap = PathMap.empty
+                pathMap = tcConfig.pathMap
                 moduleCustomDebugInfoRows = []
                 methodCustomDebugInfoRows = Map.empty
             }
 
-        let bytes, _pdb = WriteILBinaryInMemory(writerOptions, modul, id)
+        let bytes, _pdb = WriteILBinaryInMemory(writerOptions, modul, normalizeAssemblyRefs)
         bytes
+
+    let isBool (ty: ILType) =
+        ty.IsNominal && ty.TypeRef.FullName = "System.Boolean"
 
 [<Experimental("This FCS API is experimental and subject to change."); Sealed>]
 type FSharpDebuggerExpressionCompiler(runtimeModulePath: string, referencePaths: seq<string>) =
 
     let referencePaths = List.ofSeq referencePaths
     let readers = Dictionary<string, ILModuleReader>(StringComparer.OrdinalIgnoreCase)
+
+    let sessions =
+        Dictionary<string, Result<CheckSession, string>>(StringComparer.OrdinalIgnoreCase)
+
+    let contexts = Dictionary<string, FrameContext>(StringComparer.Ordinal)
     let mutable queryCount = 0
 
-    let moduleOf (path: string) =
+    let checker =
+        lazy (FSharpChecker.Create(keepAssemblyContents = true, useTransparentCompiler = true))
+
+    /// Loaded module paths by simple assembly name, first occurrence wins.
+    let pathsByName =
+        lazy
+            (let map = Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+
+             for path in referencePaths do
+                 let name = Path.GetFileNameWithoutExtension path
+
+                 if not (map.ContainsKey name) then
+                     map[name] <- path
+
+             map)
+
+    let moduleReader (path: string) =
         match readers.TryGetValue path with
-        | true, reader -> reader.ILModuleDef
+        | true, reader -> reader
         | _ ->
-            let reader = OpenILModuleReader path DebuggerIL.readerOptions
+            let reader = OpenILModuleReader path DebuggerFrame.readerOptions
             readers[path] <- reader
-            reader.ILModuleDef
+            reader
+
+    let moduleOf (path: string) = (moduleReader path).ILModuleDef
 
     let runtimeModule = lazy (moduleOf runtimeModulePath)
+
+    let targetProfile =
+        if String.Equals(Path.GetFileNameWithoutExtension runtimeModulePath, "mscorlib", StringComparison.OrdinalIgnoreCase) then
+            "mscorlib"
+        else
+            "netcore"
 
     let ilg =
         lazy
@@ -256,10 +481,9 @@ type FSharpDebuggerExpressionCompiler(runtimeModulePath: string, referencePaths:
                 ILScopeRef.Assembly(mkRefToILAssembly runtimeModule.Value.ManifestOfAssembly)
 
              let fsharpCore =
-                 referencePaths
-                 |> List.tryFind (fun p -> String.Equals(Path.GetFileName p, "FSharp.Core.dll", StringComparison.OrdinalIgnoreCase))
-                 |> Option.map (fun p -> ILScopeRef.Assembly(mkRefToILAssembly (moduleOf p).ManifestOfAssembly))
-                 |> Option.defaultValue primary
+                 match pathsByName.Value.TryGetValue "FSharp.Core" with
+                 | true, path -> ILScopeRef.Assembly(mkRefToILAssembly (moduleOf path).ManifestOfAssembly)
+                 | _ -> primary
 
              mkILGlobals (primary, [], fsharpCore))
 
@@ -267,76 +491,214 @@ type FSharpDebuggerExpressionCompiler(runtimeModulePath: string, referencePaths:
         queryCount <- queryCount + 1
         $"FSharpDebuggerQuery{queryCount}"
 
-    let frameContext (frame: FSharpDebuggerFrame) =
+    /// The frame module, the core library, FSharp.Core and everything they reference transitively,
+    /// resolved against the loaded modules by simple name. Unresolvable references are skipped.
+    let referenceClosure (modulePath: string) =
+        let byName = pathsByName.Value
+        let visited = HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        let ordered = ResizeArray<string>()
+        let pending = Queue<string>()
+
+        let enqueue (path: string) =
+            if visited.Add path then
+                pending.Enqueue path
+
+        enqueue modulePath
+        enqueue runtimeModulePath
+
+        for root in [ "FSharp.Core"; "System.Runtime"; "netstandard" ] do
+            match byName.TryGetValue root with
+            | true, path -> enqueue path
+            | _ -> ()
+
+        while pending.Count > 0 do
+            let path = pending.Dequeue()
+            ordered.Add path
+
+            for aref in (moduleReader path).ILAssemblyRefs do
+                match byName.TryGetValue aref.Name with
+                | true, referenced -> enqueue referenced
+                | _ -> ()
+
+        List.ofSeq ordered
+
+    let sessionFor (modulePath: string) =
+        match sessions.TryGetValue modulePath with
+        | true, session -> session
+        | _ ->
+            let references = referenceClosure modulePath
+
+            let assemblyNames =
+                references |> List.map (fun path -> (moduleOf path).ManifestOfAssembly.Name)
+
+            let session =
+                DebuggerCheck.warmUp checker.Value references assemblyNames targetProfile
+
+            sessions[modulePath] <- session
+            session
+
+    let frameShape (frame: FSharpDebuggerFrame) =
         let modul = moduleOf frame.ModulePath
 
-        match DebuggerIL.tryFindMethod modul frame.MethodToken with
+        match DebuggerFrame.tryFindMethod modul frame.MethodToken with
         | ValueNone -> Error $"Method 0x%08X{frame.MethodToken} was not found in '{frame.ModulePath}'."
         | ValueSome(struct (enclosing, tdef, mdef)) ->
-            DebuggerIL.frameShape (mkRefToILAssembly modul.ManifestOfAssembly) enclosing tdef mdef
+            DebuggerFrame.frameShape (mkRefToILAssembly modul.ManifestOfAssembly) enclosing tdef mdef
+
+    let localsInScope (frame: FSharpDebuggerFrame) =
+        frame.LocalsInScope |> List.map (fun l -> l.Name, l.Slot)
+
+    /// Resolves and caches what the checker can see of a frame: probes every candidate variable
+    /// and `open` once, keeping only those the checker accepts.
+    let frameContext (frame: FSharpDebuggerFrame) =
+        let key =
+            String.Join(
+                "|",
+                frame.ModulePath,
+                string frame.MethodToken,
+                String.Join(",", frame.LocalsInScope |> List.map (fun l -> $"{l.Name}:{l.Slot}"))
+            )
+
+        match contexts.TryGetValue key with
+        | true, context -> Ok context
+        | _ ->
+            frameShape frame
+            |> Result.bind (fun shape ->
+                sessionFor frame.ModulePath
+                |> Result.map (fun session ->
+                    let typed =
+                        DebuggerFrame.frameVariables shape (localsInScope frame)
+                        |> List.choose (fun variable ->
+                            match DebuggerCheck.typeText session variable.Type with
+                            | ValueSome text -> Some(variable, text)
+                            | ValueNone -> None)
+
+                    let opens = DebuggerFrame.openPaths shape
+
+                    let probe =
+                        checker.Value.ParseAndCheckProject(
+                            DebuggerCheck.snapshot
+                                "<>probe"
+                                session.References
+                                session.TargetProfile
+                                (DebuggerCheck.probeSource opens (typed |> List.map snd |> Array.ofList))
+                        )
+                        |> Async.RunSynchronously
+
+                    let rejectedLines =
+                        HashSet<int>(DebuggerCheck.errors probe |> Array.map (fun d -> d.StartLine))
+
+                    let firstOpenLine = 2
+                    let firstVariableLine = firstOpenLine + List.length opens
+
+                    let keepAt firstLine items =
+                        items
+                        |> List.mapi (fun i item -> firstLine + i, item)
+                        |> List.filter (fun (line, _) -> not (rejectedLines.Contains line))
+                        |> List.map snd
+
+                    let usable = keepAt firstVariableLine typed
+
+                    let context =
+                        {
+                            Shape = shape
+                            Variables = usable |> List.map fst |> Array.ofList
+                            TypeTexts = usable |> List.map snd |> Array.ofList
+                            Opens = keepAt firstOpenLine opens
+                        }
+
+                    contexts[key] <- context
+                    context))
 
     member _.CompileLocalsQuery(frame: FSharpDebuggerFrame, argumentsOnly: bool) =
-        frameContext frame
+        frameShape frame
         |> Result.map (fun shape ->
-            let accessors = ResizeArray<ILMethodDef>()
-            let entries = ResizeArray<FSharpDebuggerLocalEntry>()
+            let variables =
+                DebuggerFrame.frameVariables shape (localsInScope frame)
+                |> List.filter (fun variable ->
+                    match variable.Storage with
+                    | VariableStorage.Argument _ -> true
+                    | VariableStorage.LocalSlot _
+                    | VariableStorage.ThisField _ -> not argumentsOnly)
 
-            let add name isArgument (mkAccessor: string -> ILMethodDef) =
-                let methodName = $"<>m{accessors.Count}"
-                accessors.Add(mkAccessor methodName)
+            let accessors, entries =
+                variables
+                |> List.mapi (fun i variable ->
+                    let methodName = $"<>m{i}"
 
-                entries.Add
+                    DebuggerFrame.variableAccessor shape variable methodName,
                     {
-                        Name = name
+                        Name = variable.Name
                         MethodName = methodName
-                        IsArgument = isArgument
-                    }
-
-            shape.Arguments
-            |> List.iteri (fun i arg ->
-                let name =
-                    match arg.Name with
-                    | Some n -> n
-                    | None -> $"arg{i}"
-
-                add name true (DebuggerIL.argumentAccessor shape i))
-
-            if not argumentsOnly then
-                for local in frame.LocalsInScope do
-                    if local.Slot >= 0 && local.Slot < shape.Locals.Length then
-                        add local.Name false (DebuggerIL.localAccessor shape local.Slot)
+                        IsArgument =
+                            match variable.Storage with
+                            | VariableStorage.Argument _ -> true
+                            | _ -> false
+                    })
+                |> List.unzip
 
             let bytes =
-                DebuggerIL.writeQueryAssembly ilg.Value runtimeModule.Value.MetadataVersion (nextAssemblyName ()) (List.ofSeq accessors)
+                DebuggerFrame.writeQueryAssembly
+                    ilg.Value
+                    runtimeModule.Value.MetadataVersion
+                    (nextAssemblyName ())
+                    [ shape.AssemblyRef.Name ]
+                    accessors
 
             {
                 Assembly = bytes
-                TypeName = DebuggerIL.queryTypeName
-                Locals = List.ofSeq entries
+                TypeName = DebuggerFrame.queryTypeName
+                Locals = entries
             })
 
     member _.CompileExpression(frame: FSharpDebuggerFrame, expression: string) =
         frameContext frame
-        |> Result.bind (fun shape ->
-            match Int32.TryParse(expression.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture) with
-            | true, value ->
-                let methodName = "<>m0"
+        |> Result.bind (fun context ->
+            match sessions[frame.ModulePath] with
+            | Error message -> Error message
+            | Ok session ->
+                let projectName = nextAssemblyName ()
+                let outfile = projectName + ".dll"
 
-                let query =
-                    DebuggerIL.mkQueryMethod methodName shape ilg.Value.typ_Int32 [| AI_ldc(DT_I4, ILConst.I4 value); I_ret |]
+                let variables =
+                    Array.zip context.Variables context.TypeTexts
+                    |> Array.map (fun (variable, text) -> variable.Name, text)
+                    |> List.ofArray
 
-                let bytes =
-                    DebuggerIL.writeQueryAssembly ilg.Value runtimeModule.Value.MetadataVersion (nextAssemblyName ()) [ query ]
+                let results =
+                    checker.Value.ParseAndCheckProject(
+                        DebuggerCheck.snapshot
+                            projectName
+                            session.References
+                            session.TargetProfile
+                            (DebuggerCheck.expressionSource context.Opens variables expression)
+                    )
+                    |> Async.RunSynchronously
 
-                Ok
-                    {
-                        Assembly = bytes
-                        TypeName = DebuggerIL.queryTypeName
-                        MethodName = methodName
-                        ResultIsBool = false
-                        HasSideEffects = false
-                    }
-            | _ -> Error "The F# expression evaluator prototype evaluates integer literals only so far.")
+                match DebuggerCheck.errors results with
+                | [||] ->
+                    let modul, tcConfig, tcGlobals, tcImports =
+                        DebuggerCheck.compileToModule results outfile
+
+                    match DebuggerCheck.tryFindQueryMethod modul with
+                    | None -> Error "The query method was not emitted."
+                    | Some mdef when not (List.isEmpty mdef.GenericParams) ->
+                        Error "The expression's type is not fully determined; add a type annotation."
+                    | Some mdef ->
+                        let rewritten =
+                            DebuggerFrame.rewriteQueryMethod context.Shape context.Variables mdef
+
+                        let modul = DebuggerCheck.replaceQueryMethod modul rewritten
+
+                        Ok
+                            {
+                                Assembly = DebuggerCheck.writeModule tcConfig tcGlobals tcImports session.AssemblyNames outfile modul
+                                TypeName = DebuggerCheck.queryModuleName
+                                MethodName = DebuggerCheck.queryMethodName
+                                ResultIsBool = DebuggerCheck.isBool mdef.Return.Type
+                                HasSideEffects = false
+                            }
+                | diagnostics -> Error(DebuggerCheck.errorText diagnostics))
 
     interface IDisposable with
         member _.Dispose() =

@@ -126,39 +126,73 @@ let target (a: int) (s: string) =
             let accessor = queryMethod query.Assembly query.TypeName query.Locals[0].MethodName
             Assert.Same(holder, accessor.Invoke(null, [| holder; box 3 |]))
 
-    [<Fact>]
-    let ``Integer literal compiles to a frame-shaped method returning the value`` () =
-        let path = compileSample ()
-        use compiler = new FSharpDebuggerExpressionCompiler(runtimeModulePath, referencePaths path)
+    let private targetFrame (path: string) =
+        {
+            ModulePath = path
+            MethodToken = methodToken path "Sample" "target"
+            ILOffset = 0
+            LocalsInScope = [ { Name = "x"; Slot = 0 }; { Name = "y"; Slot = 1 } ]
+        }
 
-        let frame =
-            {
-                ModulePath = path
-                MethodToken = methodToken path "Sample" "target"
-                ILOffset = 0
-                LocalsInScope = []
-            }
-
-        match compiler.CompileExpression(frame, " 42 ") with
+    let private evaluate (compiler: FSharpDebuggerExpressionCompiler) frame (frameArgs: obj[]) (expression: string) =
+        match compiler.CompileExpression(frame, expression) with
         | Error message -> failwith message
-        | Ok query ->
-            Assert.False query.ResultIsBool
-            Assert.False query.HasSideEffects
-            Assert.Equal(box 42, (queryMethod query.Assembly query.TypeName query.MethodName).Invoke(null, [| box 1; box "" |]))
+        | Ok query -> query, (queryMethod query.Assembly query.TypeName query.MethodName).Invoke(null, frameArgs)
 
     [<Fact>]
-    let ``Expressions beyond the prototype report the limitation instead of failing`` () =
+    let ``Expressions over arguments compile to a frame-shaped method and evaluate`` () =
         let path = compileSample ()
+        use compiler = new FSharpDebuggerExpressionCompiler(runtimeModulePath, referencePaths path)
+        let frame = targetFrame path
+        let frameArgs = [| box 41; box "hi" |]
+
+        let query, value = evaluate compiler frame frameArgs "a + 1"
+        Assert.False query.ResultIsBool
+        Assert.Equal(box 42, value)
+
+        let _, value = evaluate compiler frame frameArgs "s.Length * 2"
+        Assert.Equal(box 4, value)
+
+        let _, value = evaluate compiler frame frameArgs "[ a; a + 1 ] |> List.map (fun v -> v * 2) |> List.sum"
+        Assert.Equal(box 166, value)
+
+    [<Fact>]
+    let ``Boolean expressions are flagged as breakpoint conditions`` () =
+        let path = compileSample ()
+        use compiler = new FSharpDebuggerExpressionCompiler(runtimeModulePath, referencePaths path)
+
+        let query, value = evaluate compiler (targetFrame path) [| box 41; box "hi" |] "s = \"hi\" && a > 40"
+        Assert.True query.ResultIsBool
+        Assert.Equal(box true, value)
+
+    [<Fact>]
+    let ``Type errors are reported with the checker's message`` () =
+        let path = compileSample ()
+        use compiler = new FSharpDebuggerExpressionCompiler(runtimeModulePath, referencePaths path)
+
+        match compiler.CompileExpression(targetFrame path, "a + \"oops\"") with
+        | Ok _ -> failwith "Expected a type error."
+        | Error message -> Assert.Contains("string", message)
+
+    [<Fact>]
+    let ``Fields of this are visible by name and methods of this are callable`` () =
+        let path = compileSample ()
+        let sample = Assembly.LoadFrom path
         use compiler = new FSharpDebuggerExpressionCompiler(runtimeModulePath, referencePaths path)
 
         let frame =
             {
                 ModulePath = path
-                MethodToken = methodToken path "Sample" "target"
+                MethodToken = methodToken path "Holder" "Add"
                 ILOffset = 0
-                LocalsInScope = []
+                LocalsInScope = [ { Name = "total"; Slot = 0 } ]
             }
 
-        match compiler.CompileExpression(frame, "a + 1") with
-        | Ok _ -> failwith "Expected the prototype limitation to be reported."
-        | Error message -> Assert.Contains("integer literals", message)
+        let holder = Activator.CreateInstance(sample.GetType("Sample+Holder"), [| box 5 |])
+        let frameArgs = [| holder; box 3 |]
+
+        let _, value = evaluate compiler frame frameArgs "this.Add(10)"
+        Assert.Equal(box 30, value)
+
+        let _, value = evaluate compiler frame frameArgs "seed + delta"
+        Assert.Equal(box 8, value)

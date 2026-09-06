@@ -631,6 +631,7 @@
     <Compile Include="HotReload\FSharpHotReloadSession.fs" />
     <Compile Include="Service\service.fsi" />
     <Compile Include="Service\service.fs" />
+    <Compile Include="Debugger\DebuggerFrame.fs" />
     <Compile Include="Debugger\DebuggerExpressionCompiler.fsi" />
     <Compile Include="Debugger\DebuggerExpressionCompiler.fs" />
     <Compile Include="Service\FSharpWorkspaceState.fs" />
