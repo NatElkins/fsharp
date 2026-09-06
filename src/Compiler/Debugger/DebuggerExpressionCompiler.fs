@@ -450,10 +450,11 @@ type FSharpDebuggerExpressionCompiler(runtimeModulePath: string, referencePaths:
             (let map = Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 
              for path in referencePaths do
-                 let name = Path.GetFileNameWithoutExtension path
-
-                 if not (map.ContainsKey name) then
-                     map[name] <- path
+                 match Path.GetFileNameWithoutExtension path with
+                 | null -> ()
+                 | name ->
+                     if not (map.ContainsKey name) then
+                         map[name] <- path
 
              map)
 

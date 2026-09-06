@@ -88,8 +88,8 @@ let private targetFrame (path: string) =
 
 let private evaluate (compiler: FSharpDebuggerExpressionCompiler) frame (frameArgs: obj[]) (expression: string) =
     match compiler.CompileExpression(frame, expression) with
-    | Error message -> failwith message
-    | Ok query -> query, (queryMethod query.Assembly query.TypeName query.MethodName).Invoke(null, frameArgs)
+    | Result.Error message -> failwith message
+    | Result.Ok query -> query, (queryMethod query.Assembly query.TypeName query.MethodName).Invoke(null, frameArgs)
 
 [<Fact>]
 let ``Locals query exposes arguments then locals, and accessors read the frame values`` () =
@@ -98,8 +98,8 @@ let ``Locals query exposes arguments then locals, and accessors read the frame v
     let frame = targetFrame path
 
     match compiler.CompileLocalsQuery(frame, false) with
-    | Error message -> failwith message
-    | Ok query ->
+    | Result.Error message -> failwith message
+    | Result.Ok query ->
         Assert.Equal<string list>([ "a"; "s"; "x"; "y" ], query.Locals |> List.map (fun l -> l.Name))
         Assert.Equal<bool list>([ true; true; false; false ], query.Locals |> List.map (fun l -> l.IsArgument))
 
@@ -122,8 +122,8 @@ let ``Locals query of an instance frame reports this, arguments and the fields o
         }
 
     match compiler.CompileLocalsQuery(frame, false) with
-    | Error message -> failwith message
-    | Ok query ->
+    | Result.Error message -> failwith message
+    | Result.Ok query ->
         Assert.Equal<string list>([ "this"; "delta"; "total"; "seed" ], query.Locals |> List.map (fun l -> l.Name))
 
         let holder = Activator.CreateInstance(sample.GetType("Sample+Holder"), [| box 5 |])
@@ -164,8 +164,8 @@ let ``Type errors are reported with the checker's message`` () =
     use compiler = new FSharpDebuggerExpressionCompiler(runtimeModulePath, referencePaths path)
 
     match compiler.CompileExpression(targetFrame path, "a + \"oops\"") with
-    | Ok _ -> failwith "Expected a type error."
-    | Error message -> Assert.Contains("string", message)
+    | Result.Ok _ -> failwith "Expected a type error."
+    | Result.Error message -> Assert.Contains("string", message)
 
 [<Fact>]
 let ``Fields of this are visible by name and methods of this are callable`` () =
